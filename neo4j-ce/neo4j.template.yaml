@@ -203,7 +203,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
   Neo4jSubnet1:
     Type: AWS::EC2::Subnet
@@ -220,7 +220,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
       VpcId: !Ref Neo4jVPC
 
   Neo4jRouteTable:
@@ -232,7 +232,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
       VpcId: !Ref Neo4jVPC
 
   Neo4jRoute:
@@ -259,7 +259,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
   Neo4jInternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -285,7 +285,7 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-eip"
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
   # ---------------------------------------------------------------------------
   # Storage — Persistent Data Volume
@@ -313,7 +313,7 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-data"
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
   # ---------------------------------------------------------------------------
   # Compute — Auto Scaling Group and Launch Template
@@ -355,7 +355,7 @@ Resources:
           Value: !Ref 'AWS::StackName'
           PropagateAtLaunch: true
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
           PropagateAtLaunch: true
 
   Neo4jLaunchTemplate:
@@ -772,7 +772,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
   # ---------------------------------------------------------------------------
   # Security — Security Group
@@ -802,7 +802,7 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          Value: "pc:w4wy9u4d8teae0gu2lkwuv7w"
 
 # =============================================================================
 # Outputs
