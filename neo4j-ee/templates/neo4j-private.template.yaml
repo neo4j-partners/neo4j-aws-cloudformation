@@ -214,6 +214,18 @@ Parameters:
     AllowedPattern: (^$)|(^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$)
     ConstraintDescription: Must be blank or a valid DNS name.
 
+  BoltTlsScheme:
+    Description: >-
+      Bolt URL scheme published in /neo4j-ee/<stack>/bolt-url and the
+      Neo4jBoltUrl output. Set to neo4j+s when CertificateArn references a
+      real ACM cert against a real DNS name (production). Default neo4j+ssc
+      tolerates the self-signed cert auto-imported by deploy.py in the test
+      path. Scoped to Private and ExistingVpc; the Public template derives
+      its scheme from UsePublicTLS instead.
+    Type: String
+    AllowedValues: ['neo4j+s', 'neo4j+ssc']
+    Default: 'neo4j+ssc'
+
   AllowedCIDR:
     Description: >-
       CIDR allowed to reach Neo4j ports 7473 (HTTPS) and 7687 (Bolt); defaults
@@ -2090,6 +2102,22 @@ Resources:
       Value: !Ref Neo4jPasswordSecret
       Description: Secrets Manager ARN for the Neo4j admin password (used by in-VPC Lambda clients).
 
+  Neo4jConfigBoltUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/bolt-url'
+      Type: String
+      Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
+      Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. In-VPC apps use this directly; no scheme derivation required.
+
+  Neo4jConfigHttpsUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/https-url'
+      Type: String
+      Value: !Sub 'https://${AdvertisedDNS}:7473'
+      Description: Browser (HTTPS) URL. Host matches the ACM cert SAN; consumers without private DNS must map AdvertisedDNS to the NLB themselves.
+
   Neo4jConfigExternalSgIdParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -2225,6 +2253,12 @@ Outputs:
   Neo4jInternalDNS:
     Description: Internal NLB DNS name (not internet-reachable; use SSM port-forwarding to connect)
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+  Neo4jBoltUrl:
+    Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+  Neo4jHttpsUrl:
+    Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
   Neo4jPrivateDnsHostedZoneId:
     Condition: CreatePrivateDns
     Description: Route 53 private hosted zone ID containing AdvertisedDNS.
@@ -2279,10 +2313,10 @@ Outputs:
   Neo4jConfigParameterPrefix:
     Description: >-
       SSM Parameter Store path prefix for non-secret stack configuration.
-      Entries: vpc-id, nlb-dns, region, stack-name, private-subnet-1-id,
-      private-subnet-2-id, password-secret-arn, external-sg-id, vpc-endpoint-sg-id.
-      In-VPC apps read from here instead of the operator's local
-      .deploy/<stack>.txt file.
+      Entries: vpc-id, nlb-dns, advertised-dns, bolt-url, https-url, region,
+      stack-name, private-subnet-1-id, private-subnet-2-id, password-secret-arn,
+      external-sg-id, vpc-endpoint-sg-id. In-VPC apps read from here instead of
+      the operator's local .deploy/<stack>.txt file.
     Value: !Sub '/neo4j-ee/${AWS::StackName}/'
   Username:
     Description: 'The username is neo4j.'

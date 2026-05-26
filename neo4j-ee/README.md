@@ -14,9 +14,14 @@ CloudFormation templates and operator tooling for the Neo4j Enterprise Edition A
 
 ---
 
-## Sample Application
+## Sample Applications
 
-[`sample-private-app/`](sample-private-app/README.md) is a worked example of connecting an application workload to a Private-mode cluster. It covers the platform contract the EE stack publishes, the security group wiring required to reach the VPC interface endpoints, two Python 3.13 Lambdas behind IAM-authenticated Function URLs, and a resilience test that stops and restarts a follower via SSM.
+Two samples cover the two consumer paths. Pick the one that matches the topology you deployed.
+
+| Sample | Use when | What it shows |
+|---|---|---|
+| [`sample-public-app/`](sample-public-app/README.md) | Connecting from a laptop to a **Public** stack | The off-VPC discovery flow: seven-key public SSM contract, password retrieval from Secrets Manager, topology-aware Bolt URI selection (`bolt://` / `neo4j://` / `neo4j+s://`), and the routing-table view on three-node clusters. `uv`-managed Python script. |
+| [`sample-private-app/`](sample-private-app/README.md) | Connecting from inside the VPC to a **Private** or **ExistingVpc** stack | The in-VPC application flow: SSM and VPC-endpoint security group wiring, two Python 3.13 Lambdas behind IAM-authenticated Function URLs, and a resilience test that stops and restarts a follower via SSM. |
 
 ---
 
@@ -143,5 +148,7 @@ python build.py --verify
 | `marketplace/test-ami.sh` | SSM-based AMI verification; no SSH key required |
 | `scripts/create-test-vpc.py` | Creates a minimal test VPC for ExistingVpc template testing |
 | `scripts/teardown-test-vpc.py` | Deletes a test VPC created by `create-test-vpc.py` |
+| `sample-public-app/` | Off-VPC sample app connecting to a Public cluster |
 | `sample-private-app/` | Sample Lambda app connecting to a private cluster |
+| `scripts/certificate.py` | Request a DNS-validated ACM cert (or import a self-signed one) and record it under `.deploy/` |
 | `.deploy/` | Deployment output files: one per stack (gitignored) |

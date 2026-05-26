@@ -290,6 +290,7 @@ _PRIVATE_SPEC = TemplateSpec(
     parameter_partials=(
         "parameters-common.yaml",
         "parameters-tls.yaml",
+        "parameters-bolt-tls-scheme.yaml",
         "parameters-private.yaml",
     ),
     rule_partials=("rules-common.yaml", "rules-tls-required.yaml"),
@@ -324,7 +325,7 @@ _PUBLIC_SPEC = TemplateSpec(
         "ebs-volumes.yaml",
         "asg-public.yaml",
         "networking-public.yaml",
-        "password-secret.yaml",
+        "stack-config-public.yaml",
         "observability.yaml",
     ),
     userdata_resource_partial="asg-public.yaml",
@@ -338,6 +339,7 @@ _EXISTING_VPC_SPEC = TemplateSpec(
     parameter_partials=(
         "parameters-common.yaml",
         "parameters-tls.yaml",
+        "parameters-bolt-tls-scheme.yaml",
         "parameters-existing-vpc.yaml",
     ),
     rule_partials=("rules-common.yaml", "rules-existing-vpc.yaml", "rules-tls-required.yaml"),

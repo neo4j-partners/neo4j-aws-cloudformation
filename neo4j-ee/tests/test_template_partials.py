@@ -1468,6 +1468,203 @@ class RenderedTemplateContractTests(unittest.TestCase):
                 self.assertIn("CreationPolicy:", template)
                 self.assertIn("ResourceSignal:", template)
 
+    def _ssm_keys_to_logical(self, template_name: str) -> tuple[dict, dict]:
+        resources = self.docs[template_name]["Resources"]
+        ssm = {
+            logical: res
+            for logical, res in resources.items()
+            if res.get("Type") == "AWS::SSM::Parameter"
+        }
+        keys_to_logical: dict[str, str] = {}
+        for logical, res in ssm.items():
+            name_node = res["Properties"]["Name"]
+            self.assertEqual(
+                set(name_node), {"Fn::Sub"}, f"{logical} Name is not !Sub"
+            )
+            sub_value = name_node["Fn::Sub"]
+            prefix = "/neo4j-ee/${AWS::StackName}/"
+            self.assertTrue(
+                sub_value.startswith(prefix),
+                f"{logical} path {sub_value!r} not under {prefix}",
+            )
+            key = sub_value[len(prefix):]
+            self.assertNotIn(key, keys_to_logical, f"duplicate key {key!r}")
+            keys_to_logical[key] = logical
+        return ssm, keys_to_logical
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_public_template_publishes_exact_ssm_contract(self) -> None:
+        expected_keys = {
+            "nlb-dns",
+            "password-secret-arn",
+            "advertised-dns",
+            "bolt-url",
+            "https-url",
+            "number-of-servers",
+            "region",
+            "stack-name",
+        }
+        ssm, keys_to_logical = self._ssm_keys_to_logical("public")
+        self.assertEqual(set(keys_to_logical), expected_keys)
+
+        advertised = ssm[keys_to_logical["advertised-dns"]]
+        self.assertEqual(advertised.get("Condition"), "UsePublicTLS")
+        for key in expected_keys - {"advertised-dns"}:
+            self.assertNotIn(
+                "Condition",
+                ssm[keys_to_logical[key]],
+                f"{key} must be unconditional",
+            )
+
+        # bolt-url / https-url branch on UsePublicTLS (and CreateCluster for
+        # the plain-TCP Bolt path). The producer owns the scheme decision so
+        # consumers never have to derive it.
+        bolt_url = ssm[keys_to_logical["bolt-url"]]["Properties"]["Value"]
+        self.assertEqual(set(bolt_url), {"Fn::If"})
+        self.assertEqual(bolt_url["Fn::If"][0], "UsePublicTLS")
+        bolt_url_no_tls = bolt_url["Fn::If"][2]
+        self.assertEqual(set(bolt_url_no_tls), {"Fn::If"})
+        self.assertEqual(bolt_url_no_tls["Fn::If"][0], "CreateCluster")
+
+        https_url = ssm[keys_to_logical["https-url"]]["Properties"]["Value"]
+        self.assertEqual(set(https_url), {"Fn::If"})
+        self.assertEqual(https_url["Fn::If"][0], "UsePublicTLS")
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_private_template_publishes_exact_ssm_contract(self) -> None:
+        expected_keys = {
+            "vpc-id",
+            "nlb-dns",
+            "advertised-dns",
+            "bolt-url",
+            "https-url",
+            "private-dns-hosted-zone-id",
+            "private-dns-record",
+            "region",
+            "stack-name",
+            "private-subnet-1-id",
+            "private-route-table-1-id",
+            "private-subnet-2-id",
+            "password-secret-arn",
+            "external-sg-id",
+            "vpc-endpoint-sg-id",
+        }
+        ssm, keys_to_logical = self._ssm_keys_to_logical("private")
+        self.assertEqual(set(keys_to_logical), expected_keys)
+
+        # Private/ExistingVpc enforce AdvertisedDNS non-empty via
+        # rules-tls-required.yaml, so bolt-url and https-url use it
+        # unconditionally with the operator/deploy.py-supplied scheme.
+        bolt_url = ssm[keys_to_logical["bolt-url"]]["Properties"]["Value"]
+        self.assertEqual(
+            bolt_url, {"Fn::Sub": "${BoltTlsScheme}://${AdvertisedDNS}:7687"}
+        )
+        https_url = ssm[keys_to_logical["https-url"]]["Properties"]["Value"]
+        self.assertEqual(
+            https_url, {"Fn::Sub": "https://${AdvertisedDNS}:7473"}
+        )
+
+        # Private DNS keys are conditional; bolt-url and https-url are not.
+        for key in ("bolt-url", "https-url"):
+            self.assertNotIn(
+                "Condition",
+                ssm[keys_to_logical[key]],
+                f"{key} must be unconditional",
+            )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_existing_vpc_template_publishes_exact_ssm_contract(self) -> None:
+        expected_keys = {
+            "vpc-id",
+            "nlb-dns",
+            "advertised-dns",
+            "bolt-url",
+            "https-url",
+            "private-dns-hosted-zone-id",
+            "private-dns-record",
+            "region",
+            "stack-name",
+            "private-subnet-1-id",
+            "private-route-table-1-id",
+            "private-subnet-2-id",
+            "password-secret-arn",
+            "external-sg-id",
+            "vpc-endpoint-sg-id",
+        }
+        ssm, keys_to_logical = self._ssm_keys_to_logical("existing_vpc")
+        self.assertEqual(set(keys_to_logical), expected_keys)
+
+        bolt_url = ssm[keys_to_logical["bolt-url"]]["Properties"]["Value"]
+        self.assertEqual(
+            bolt_url, {"Fn::Sub": "${BoltTlsScheme}://${AdvertisedDNS}:7687"}
+        )
+        https_url = ssm[keys_to_logical["https-url"]]["Properties"]["Value"]
+        self.assertEqual(
+            https_url, {"Fn::Sub": "https://${AdvertisedDNS}:7473"}
+        )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_bolt_tls_scheme_parameter_scoped_to_private_templates(self) -> None:
+        # BoltTlsScheme lives in parameters-bolt-tls-scheme.yaml, wired only
+        # into the Private and ExistingVpc specs. Public derives its scheme
+        # from UsePublicTLS and must not carry the parameter, both to avoid
+        # cfn-lint W2001 noise and to keep the Public template's user-facing
+        # parameter list focused on inputs Public actually consumes.
+        for template_name in ("private", "existing_vpc"):
+            with self.subTest(template=template_name):
+                params = self.docs[template_name].get("Parameters", {})
+                self.assertIn("BoltTlsScheme", params)
+                param = params["BoltTlsScheme"]
+                self.assertEqual(param["Type"], "String")
+                self.assertEqual(
+                    sorted(param["AllowedValues"]),
+                    ["neo4j+s", "neo4j+ssc"],
+                )
+                self.assertEqual(param["Default"], "neo4j+ssc")
+        public_params = self.docs["public"].get("Parameters", {})
+        self.assertNotIn("BoltTlsScheme", public_params)
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_bolt_and_https_url_outputs_present_in_all_templates(self) -> None:
+        for template_name in ("private", "public", "existing_vpc"):
+            with self.subTest(template=template_name):
+                outputs = self.docs[template_name].get("Outputs", {})
+                self.assertIn("Neo4jBoltUrl", outputs)
+                self.assertIn("Neo4jHttpsUrl", outputs)
+                # Old Public-only names must not survive the rename.
+                self.assertNotIn("Neo4jURI", outputs)
+                self.assertNotIn("Neo4jBrowserURL", outputs)
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_private_contracts_do_not_publish_public_only_ssm_keys(self) -> None:
+        # The proposal deliberately scopes `number-of-servers` to the public
+        # SSM contract only — it is the discriminator off-VPC consumers use to
+        # detect a Public stack. Lock that decision so the key can't drift
+        # into the private or existing-vpc contracts without an explicit
+        # test update.
+        public_only_keys = {"number-of-servers"}
+        prefix = "/neo4j-ee/${AWS::StackName}/"
+        for template_name in ("private", "existing_vpc"):
+            with self.subTest(template=template_name):
+                resources = self.docs[template_name]["Resources"]
+                keys_published = set()
+                for res in resources.values():
+                    if res.get("Type") != "AWS::SSM::Parameter":
+                        continue
+                    name_node = res["Properties"]["Name"]
+                    if set(name_node) != {"Fn::Sub"}:
+                        continue
+                    sub_value = name_node["Fn::Sub"]
+                    if sub_value.startswith(prefix):
+                        keys_published.add(sub_value[len(prefix):])
+                leaked = keys_published & public_only_keys
+                self.assertEqual(
+                    leaked,
+                    set(),
+                    f"{template_name} must not publish public-only SSM "
+                    f"keys; found {sorted(leaked)}",
+                )
+
 
 # Actions permitted on Resource: "*" in an instance role: read-only verbs
 # (AWS does not support resource-level scoping on Describe/List/Get), plus a
@@ -1889,9 +2086,20 @@ class NlbAndRoutingTests(unittest.TestCase):
                     self.assertEqual(
                         outputs[key].get("Condition"), "CreatePrivateDns"
                     )
-        pub = self.docs["public"]["Outputs"]
-        self.assertEqual(pub["Neo4jBrowserURL"]["Value"]["Fn::If"][0], "UsePublicTLS")
-        self.assertEqual(pub["Neo4jURI"]["Value"]["Fn::If"][0], "UsePublicTLS")
+        # Outputs delegate to the SSM parameter so the URL expression lives in
+        # exactly one place per template; the SSM contract tests pin the
+        # expression itself.
+        for name in ("private", "existing_vpc", "public"):
+            with self.subTest(template=name):
+                outputs = self.docs[name]["Outputs"]
+                self.assertEqual(
+                    outputs["Neo4jBoltUrl"]["Value"],
+                    {"Fn::GetAtt": "Neo4jConfigBoltUrlParameter.Value"},
+                )
+                self.assertEqual(
+                    outputs["Neo4jHttpsUrl"]["Value"],
+                    {"Fn::GetAtt": "Neo4jConfigHttpsUrlParameter.Value"},
+                )
 
     def test_nlb_scheme_matches_template_exposure(self) -> None:
         expected = {

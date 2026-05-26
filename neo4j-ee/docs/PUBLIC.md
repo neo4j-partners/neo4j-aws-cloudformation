@@ -20,6 +20,7 @@
   - [Prerequisites](#prerequisites)
   - [Access](#access)
   - [Retrieve the Password](#retrieve-the-password)
+  - [Verify with the sample app](#verify-with-the-sample-app)
   - [Observability Checks](#observability-checks)
 - [Architecture](#architecture)
   - [Network Topology](#network-topology)
@@ -29,7 +30,9 @@
   - [EBS Persistence](#ebs-persistence)
   - [Two-Layer Security Group Design](#two-layer-security-group-design)
 - [Local Deployment and Testing](#local-deployment-and-testing)
+  - [Basic Testing](#basic-testing)
   - [Build](#build)
+  - [Certificates](#certificates)
   - [Deploy](#deploy)
   - [Functional and Cluster Tests](#functional-and-cluster-tests)
   - [Tear Down](#tear-down)
@@ -109,6 +112,18 @@ aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`Neo4jPasswordRetrieveCommand`].OutputValue' \
   --output text | bash
 ```
+
+### Verify with the sample app
+
+`sample-public-app/` is a `uv`-managed Python script that reads the public SSM contract, fetches the password, opens a Bolt driver against the NLB, runs a small demo, and prints a JSON result. Use it to confirm the stack is reachable and the routing table looks right.
+
+```bash
+cd sample-public-app
+uv run sample-public-app                       # most recent EE deploy
+uv run sample-public-app <stack-name>          # specific stack
+```
+
+The full workflow, the seven-key SSM contract it consumes, the URI selection rules (`bolt://` vs `neo4j://` vs `neo4j+s://`), and the JSON shape it returns are documented in [`sample-public-app/README.md`](../sample-public-app/README.md).
 
 ### Observability Checks
 
@@ -200,6 +215,17 @@ This pattern works for any marketplace deployment without knowing the VPC CIDR a
 
 ## Local Deployment and Testing
 
+### Basic Testing
+
+The simplest possible deploy: a 3-node cluster on the default `t3.medium` instance with plain TCP on both Browser (7474) and Bolt (7687). No certificate, no DNS, no TLS flags.
+
+```bash
+cd neo4j-ee
+./deploy.py --mode Public --region us-east-1
+```
+
+`deploy.py` restricts `AllowedCIDR` to `<your-public-ip>/32` automatically. The NLB DNS, password secret ARN, and a ready-to-run password retrieval command are written to `.deploy/<stack-name>.txt`. Clients connect with `neo4j://<NLB DNS>:7687` and Browser at `http://<NLB DNS>:7474`.
+
 ### Build
 
 Regenerate the output template after editing any file in `templates/src/`:
@@ -210,6 +236,68 @@ python build.py
 ```
 
 Commit both the edited partial and the regenerated `neo4j-public.template.yaml`.
+
+### Certificates
+
+Public stacks default to plain TCP on Bolt. To terminate TLS at the NLB, create an ACM certificate first and pass its ARN to `deploy.py`. The `scripts/certificate.py` helper covers both flows and writes `.deploy/cert-<dns>.json` with the resulting ARN.
+
+**Self-signed certificate (testing only)**
+
+Generates an X.509 certificate with `openssl` and imports it into ACM. No domain ownership or DNS validation required. Clients must connect with `neo4j+ssc://` so the driver skips certificate validation.
+
+```bash
+./scripts/certificate.py --region us-east-1 --dns neo4j.test.local --selfsign
+```
+
+**DNS-validated certificate with an existing domain**
+
+Requests a public ACM certificate validated by DNS. The `--dns` value can be any subdomain you control. For example, `neo4j-demo.example.com` works if `example.com` is in a Route 53 hosted zone on the same account.
+
+```bash
+# Route 53 zone on this account: auto-create the validation CNAME and poll until issued
+./scripts/certificate.py --region us-east-1 --dns neo4j-demo.example.com --auto-route53
+
+# DNS hosted elsewhere: print the CNAME, add it to your provider, then poll until issued
+./scripts/certificate.py --region us-east-1 --dns neo4j-demo.example.com
+
+# Print the CNAME and exit; rerun without --no-wait to poll for issuance
+./scripts/certificate.py --region us-east-1 --dns neo4j-demo.example.com --no-wait
+```
+
+If the registered domain has no public hosted zone yet, create one and point the registrar at its NS records before requesting the certificate; `worklog/hosted-zone.md` walks through that bootstrap end-to-end.
+
+Pass the resulting ARN to `deploy.py` to enable TLS:
+
+```bash
+./deploy.py --mode Public --region us-east-1 \
+  --number-of-servers 3 --enable-public-tls \
+  --cert-arn <arn> --advertised-dns neo4j-demo.example.com
+```
+
+After the stack reaches `CREATE_COMPLETE`, look up the NLB DNS in `.deploy/<stack-name>.txt` (the `Neo4jInternalDNS` line) and UPSERT a CNAME from `--advertised-dns` to the NLB so the cert SAN matches what clients resolve. The advertised name must resolve to the NLB before any client opens a `neo4j+s://` connection.
+
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id <zone-id> \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "neo4j-demo.example.com",
+        "Type": "CNAME",
+        "TTL": 60,
+        "ResourceRecords": [{"Value": "<NLB DNS from .deploy/<stack>.txt>"}]
+      }
+    }]
+  }'
+
+# Verify it resolves to the NLB (typically a few seconds in Route 53):
+dig +short neo4j-demo.example.com @8.8.8.8
+```
+
+Clients then connect with `neo4j+s://neo4j-demo.example.com:7687`. The driver validates the server cert against the system CA bundle on the first attempt; `neo4j+ssc://` is not required and indicates the cert chain or SAN is wrong if used as a fallback.
+
+On teardown, remove the advertised-dns CNAME with a matching `DELETE` change-batch so the record does not linger pointing at a non-existent NLB. The ACM certificate is reusable across deploys and stays in place.
 
 ### Deploy
 

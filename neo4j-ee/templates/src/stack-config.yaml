@@ -104,6 +104,22 @@
       Value: !Ref Neo4jPasswordSecret
       Description: Secrets Manager ARN for the Neo4j admin password (used by in-VPC Lambda clients).
 
+  Neo4jConfigBoltUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/bolt-url'
+      Type: String
+      Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
+      Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. In-VPC apps use this directly; no scheme derivation required.
+
+  Neo4jConfigHttpsUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/https-url'
+      Type: String
+      Value: !Sub 'https://${AdvertisedDNS}:7473'
+      Description: Browser (HTTPS) URL. Host matches the ACM cert SAN; consumers without private DNS must map AdvertisedDNS to the NLB themselves.
+
   Neo4jConfigExternalSgIdParameter:
     Type: AWS::SSM::Parameter
     Properties:

@@ -25,7 +25,7 @@ def nlb_dns_from_outputs(cfn, stack_name: str) -> str:
     if outputs.get("Neo4jInternalDNS"):
         return outputs["Neo4jInternalDNS"]
 
-    for key in ("Neo4jURI", "Neo4jBrowserURL"):
+    for key in ("Neo4jBoltUrl", "Neo4jHttpsUrl"):
         value = outputs.get(key, "")
         if not value:
             continue
@@ -35,7 +35,7 @@ def nlb_dns_from_outputs(cfn, stack_name: str) -> str:
 
     sys.exit(
         "ERROR: Could not resolve the NLB DNS name from stack outputs. "
-        "Expected Neo4jInternalDNS, Neo4jURI, or Neo4jBrowserURL."
+        "Expected Neo4jInternalDNS, Neo4jBoltUrl, or Neo4jHttpsUrl."
     )
 
 

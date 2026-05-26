@@ -19,11 +19,12 @@ import urllib.error
 import urllib.request
 
 import boto3
+from botocore.exceptions import ClientError
 
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR / "src"))
-sys.path.insert(0, str(SCRIPT_DIR))
-import certificate  # noqa: E402  (sibling uv-script; we call _import_self_signed)
+sys.path.insert(0, str(SCRIPT_DIR / "scripts"))
+import certificate  # noqa: E402  (uv-script under scripts/; we call _import_self_signed)
 from neo4j_ee.amis import resolve_ami  # noqa: E402
 from neo4j_ee.cloudformation import (  # noqa: E402
     create_stack_and_wait,
@@ -89,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cert-arn", metavar="ACM_ARN", default="",
                    help="Existing ACM certificate ARN for the NLB TLS listeners. "
                         "If omitted for Private/ExistingVpc (and not Public), a "
-                        "self-signed cert is auto-imported via certificate.py.")
+                        "self-signed cert is auto-imported via scripts/certificate.py.")
     p.add_argument("--advertised-dns", metavar="DNS_NAME", default="",
                    help="DNS name placed in the cert SAN, the Neo4j advertised "
                         "addresses, and (when --create-private-dns) the Route 53 "
@@ -378,6 +379,8 @@ def build_cfn_parameters(
             {"ParameterKey": "AdvertisedDNS", "ParameterValue": tls.advertised_dns},
             {"ParameterKey": "CreatePrivateDns",
              "ParameterValue": "true" if tls.create_private_dns else "false"},
+            {"ParameterKey": "BoltTlsScheme",
+             "ParameterValue": "neo4j+ssc" if tls.needs_self_signed_import else "neo4j+s"},
         ]
         if tls.private_dns_zone:
             params.append({"ParameterKey": "PrivateDnsZoneName",
@@ -556,6 +559,24 @@ def main() -> None:
         )
     except ValueError as e:
         sys.exit(f"ERROR: {e}")
+
+    # When the operator supplied --cert-arn, verify the cert covers
+    # AdvertisedDNS before stack creation. The published Neo4jBoltUrl uses
+    # AdvertisedDNS as the host; a mismatched cert breaks every client.
+    if tls.cert_arn and tls.advertised_dns:
+        try:
+            certificate._verify_cert_matches_dns(
+                boto3.client("acm", region_name=region),
+                tls.cert_arn,
+                tls.advertised_dns,
+            )
+        except ValueError as e:
+            sys.exit(f"ERROR: {e}")
+        except ClientError as e:
+            sys.exit(
+                f"ERROR: ACM describe_certificate failed for {tls.cert_arn} "
+                f"in region {region}: {e}"
+            )
 
     # For the default test path (Private/ExistingVpc, no --cert-arn) import a
     # self-signed cert into ACM with SAN=AdvertisedDNS so tooling connects with

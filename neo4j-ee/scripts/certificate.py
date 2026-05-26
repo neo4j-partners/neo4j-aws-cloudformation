@@ -4,23 +4,29 @@
 # dependencies = ["boto3"]
 # ///
 
-"""Request and issue an ACM certificate for Neo4j private stack deployment.
+"""Request and issue an ACM certificate for Neo4j stack deployment.
 
 Typical usage:
 
-    # Auto-create the Route 53 validation record and wait for issuance:
-    ./certificate.py --region us-east-1 --domain-name neo4j.test.internal.example.com --auto-route53
+    # Real DNS-validated cert, auto-create the Route 53 validation record:
+    ./scripts/certificate.py --region us-east-1 --dns neo4j.example.com --auto-route53
 
-    # Print the validation CNAME, add it manually, and poll for issuance:
-    ./certificate.py --region us-east-1 --domain-name neo4j.test.internal.example.com
+    # Real DNS-validated cert, print the CNAME and poll for issuance:
+    ./scripts/certificate.py --region us-east-1 --dns neo4j.example.com
 
     # Print the CNAME only; add to DNS and rerun later:
-    ./certificate.py --region us-east-1 --domain-name neo4j.test.internal.example.com --no-wait
+    ./scripts/certificate.py --region us-east-1 --dns neo4j.example.com --no-wait
 
-The cert ARN is printed at the end in a ready-to-paste form for deploy.py.
+    # Self-signed cert imported into ACM (for testing; clients use neo4j+ssc://):
+    ./scripts/certificate.py --region us-east-1 --dns neo4j.test.local --selfsign
+
+On success the script writes a record to ``neo4j-ee/.deploy/cert-<sanitized-dns>.json``
+with ``{cert_arn, domain_name, region, self_signed}`` and prints a ready-to-paste
+deploy.py command.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -31,12 +37,18 @@ import time
 import boto3
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEPLOY_DIR = SCRIPT_DIR.parent / ".deploy"
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description=(
-            "Request an ACM certificate for Neo4j private stack deployment. "
-            "Prints the DNS validation CNAME and waits for issuance, then prints "
-            "the --cert-arn and --advertised-dns values to pass to deploy.py."
+            "Request an ACM certificate for Neo4j stack deployment. "
+            "Without --selfsign, requests a DNS-validated public cert and prints the "
+            "CNAME (or auto-creates it in Route 53 with --auto-route53). With "
+            "--selfsign, generates and imports a self-signed cert for testing. "
+            "Writes the result to neo4j-ee/.deploy/cert-<dns>.json."
         ),
     )
     p.add_argument(
@@ -46,16 +58,16 @@ def parse_args():
         help="AWS region. Must match the region you will pass to deploy.py.",
     )
     p.add_argument(
-        "--domain-name",
+        "--dns",
         required=True,
         metavar="DNS_NAME",
         help=(
             "DNS name for the certificate SAN. Any subdomain you control works — "
             "for example neo4j-test.example.com if example.com is in Route 53. "
             "This becomes the --advertised-dns value for deploy.py; clients connect "
-            "to neo4j+s://<domain-name>:7687. Note: this script creates the ACM "
-            "validation CNAME only. You still need to create a Route 53 alias or "
-            "CNAME pointing this name to the NLB after the stack deploys."
+            "to neo4j+s://<dns>:7687 (or neo4j+ssc:// for --selfsign). "
+            "After the stack deploys, you must still create a Route 53 alias or "
+            "CNAME pointing this name to the NLB."
         ),
     )
     p.add_argument(
@@ -64,8 +76,8 @@ def parse_args():
         help=(
             "Automatically create the DNS validation CNAME in Route 53. "
             "Looks up the hosted zone whose name is the longest matching suffix of "
-            "--domain-name. Requires route53:ListHostedZones and "
-            "route53:ChangeResourceRecordSets."
+            "--dns. Requires route53:ListHostedZones and "
+            "route53:ChangeResourceRecordSets. Ignored with --selfsign."
         ),
     )
     p.add_argument(
@@ -74,11 +86,11 @@ def parse_args():
         help=(
             "Print the validation CNAME and exit without waiting for issuance. "
             "Add the CNAME to your DNS provider, then rerun (without --no-wait) "
-            "to poll for completion."
+            "to poll for completion. Ignored with --selfsign."
         ),
     )
     p.add_argument(
-        "--self-signed",
+        "--selfsign",
         action="store_true",
         help=(
             "Generate a self-signed certificate and import it into ACM. "
@@ -114,6 +126,41 @@ def _import_self_signed(acm, domain_name: str) -> str:
 
     resp = acm.import_certificate(Certificate=cert_pem, PrivateKey=key_pem)
     return resp["CertificateArn"]
+
+
+def _dns_matches_cert_name(dns_name: str, pattern: str) -> bool:
+    """Match dns_name against a cert CN/SAN, supporting one leading wildcard label."""
+    dns_name = dns_name.lower()
+    pattern = pattern.lower()
+    if pattern == dns_name:
+        return True
+    if pattern.startswith("*."):
+        suffix = pattern[1:]
+        return dns_name.endswith(suffix) and dns_name.count(".") == pattern.count(".")
+    return False
+
+
+def _verify_cert_matches_dns(acm, cert_arn: str, dns_name: str) -> None:
+    """Verify the ACM cert's CN or SubjectAlternativeNames include dns_name.
+
+    Defense-in-depth check before stack creation: the published Neo4jBoltUrl
+    uses AdvertisedDNS as the host. A cert whose CN/SAN does not cover that
+    host produces a TLS validation failure on every client connection, exactly
+    the footgun the published bolt URL is meant to remove.
+    """
+    resp = acm.describe_certificate(CertificateArn=cert_arn)
+    cert = resp.get("Certificate", {})
+    sans = cert.get("SubjectAlternativeNames") or []
+    candidates = [n for n in [cert.get("DomainName", ""), *sans] if n]
+    if any(_dns_matches_cert_name(dns_name, c) for c in candidates):
+        return
+    raise ValueError(
+        f"ACM certificate {cert_arn} CN/SANs {candidates} do not cover "
+        f"AdvertisedDNS={dns_name!r}. The published Neo4jBoltUrl uses "
+        f"AdvertisedDNS as the host, so every client connection would fail "
+        f"TLS validation. Pass --advertised-dns that matches the cert, or "
+        f"supply a cert whose SAN covers the advertised DNS name."
+    )
 
 
 def _find_existing_cert(acm, domain_name):
@@ -208,31 +255,42 @@ def _wait_for_issuance(acm, cert_arn, timeout=900):
     )
 
 
+def _sanitized_dns(domain_name: str) -> str:
+    return domain_name.replace(".", "-")
+
+
+def _write_deploy_record(domain_name: str, region: str, cert_arn: str, self_signed: bool) -> Path:
+    DEPLOY_DIR.mkdir(exist_ok=True)
+    path = DEPLOY_DIR / f"cert-{_sanitized_dns(domain_name)}.json"
+    payload = {
+        "cert_arn": cert_arn,
+        "domain_name": domain_name,
+        "region": region,
+        "self_signed": self_signed,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
 def main():
     os.environ.setdefault("AWS_PROFILE", "default")
     args = parse_args()
 
     acm = boto3.client("acm", region_name=args.region)
-    domain_name = args.domain_name
+    domain_name = args.dns
 
-    if args.self_signed:
+    if args.selfsign:
         print(f"Generating self-signed certificate for {domain_name} in {args.region}...")
         cert_arn = _import_self_signed(acm, domain_name)
         print(f"  Certificate ARN: {cert_arn}")
+        record_path = _write_deploy_record(domain_name, args.region, cert_arn, self_signed=True)
+        print(f"  Wrote {record_path}")
         print()
         print("WARNING: self-signed cert — clients must use neo4j+ssc:// not neo4j+s://")
         print()
         print("To deploy:")
         print(
             f"  ./deploy.py --cert-arn {cert_arn} --advertised-dns {domain_name}"
-        )
-        print()
-        print(
-            "To also create a Route 53 private hosted zone for this name, add "
-            "(optional):"
-        )
-        print(
-            "  --create-private-dns --private-dns-zone <zone-name>"
         )
         return
 
@@ -243,6 +301,8 @@ def main():
         if status == "ISSUED":
             print(f"Certificate for {domain_name} already exists and is ISSUED.")
             print(f"  Certificate ARN: {existing_arn}")
+            record_path = _write_deploy_record(domain_name, args.region, existing_arn, self_signed=False)
+            print(f"  Wrote {record_path}")
             print()
             print("To deploy:")
             print(
@@ -294,7 +354,7 @@ def main():
             print("Add the CNAME above to your DNS provider, then rerun to poll for issuance:")
         else:
             print("Rerun to poll for issuance:")
-        print(f"  ./certificate.py --region {args.region} --domain-name {domain_name}")
+        print(f"  ./scripts/certificate.py --region {args.region} --dns {domain_name}")
         return
 
     if not args.auto_route53:
@@ -308,9 +368,12 @@ def main():
     print()
     _wait_for_issuance(acm, cert_arn)
 
+    record_path = _write_deploy_record(domain_name, args.region, cert_arn, self_signed=False)
+
     print()
     print("Certificate ready.")
     print(f"  Certificate ARN: {cert_arn}")
+    print(f"  Wrote {record_path}")
     print()
     print("To deploy:")
     print(f"  ./deploy.py --cert-arn {cert_arn} --advertised-dns {domain_name}")

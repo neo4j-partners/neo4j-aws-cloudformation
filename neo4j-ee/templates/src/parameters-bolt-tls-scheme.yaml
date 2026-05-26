@@ -1,0 +1,11 @@
+  BoltTlsScheme:
+    Description: >-
+      Bolt URL scheme published in /neo4j-ee/<stack>/bolt-url and the
+      Neo4jBoltUrl output. Set to neo4j+s when CertificateArn references a
+      real ACM cert against a real DNS name (production). Default neo4j+ssc
+      tolerates the self-signed cert auto-imported by deploy.py in the test
+      path. Scoped to Private and ExistingVpc; the Public template derives
+      its scheme from UsePublicTLS instead.
+    Type: String
+    AllowedValues: ['neo4j+s', 'neo4j+ssc']
+    Default: 'neo4j+ssc'

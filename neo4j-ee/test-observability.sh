@@ -88,7 +88,7 @@ STACK_NAME=$(read_field "${OUTPUTS_FILE}" "StackName")
 REGION=$(read_field "${OUTPUTS_FILE}" "Region")
 LOG_GROUP=$(read_field "${OUTPUTS_FILE}" "Neo4jAppLogGroupName")
 ALERT_TOPIC_ARN=$(read_field "${OUTPUTS_FILE}" "Neo4jAlertTopicArn")
-BROWSER_URL=$(read_field "${OUTPUTS_FILE}" "Neo4jBrowserURL")
+BROWSER_URL=$(read_field "${OUTPUTS_FILE}" "Neo4jHttpsUrl")
 PASSWORD=$(read_field "${OUTPUTS_FILE}" "Password")
 NUMBER_OF_SERVERS=$(read_field "${OUTPUTS_FILE}" "NumberOfServers")
 

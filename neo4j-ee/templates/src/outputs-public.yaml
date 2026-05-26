@@ -1,34 +1,12 @@
   Neo4jInternalDNS:
     Description: NLB DNS name (canonical host across all EE templates)
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
-  Neo4jBrowserURL:
-    Description: URL for Neo4j Browser.
-    Value: !If
-      - UsePublicTLS
-      - !Join
-        - ''
-        - - 'https://'
-          - !Ref AdvertisedDNS
-          - ':7473'
-      - !Join
-        - ''
-        - - 'http://'
-          - !GetAtt Neo4jNetworkLoadBalancer.DNSName
-          - ':7474'
-  Neo4jURI:
-    Description: Neo4j Bolt URI.
-    Value: !If
-      - UsePublicTLS
-      - !Join
-        - ''
-        - - 'neo4j+s://'
-          - !Ref AdvertisedDNS
-          - ':7687'
-      - !Join
-        - ''
-        - - 'neo4j://'
-          - !GetAtt Neo4jNetworkLoadBalancer.DNSName
-          - ':7687'
+  Neo4jHttpsUrl:
+    Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
+    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
+  Neo4jBoltUrl:
+    Description: Bolt connection URL with the scheme matching the deployed TLS and cluster mode.
+    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
   Neo4jDataVolumeIds:
     Description: >-
       Comma-separated list of persistent data volume IDs. Retained across

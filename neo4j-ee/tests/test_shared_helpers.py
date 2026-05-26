@@ -133,7 +133,7 @@ class CloudFormationHelperTests(unittest.TestCase):
 
     def test_nlb_dns_falls_back_to_uri_hostname(self) -> None:
         cfn = FakeCloudFormation(
-            outputs={"Neo4jURI": "neo4j://lb.example.com:7687"}
+            outputs={"Neo4jBoltUrl": "neo4j://lb.example.com:7687"}
         )
 
         self.assertEqual(nlb_dns_from_outputs(cfn, "demo"), "lb.example.com")

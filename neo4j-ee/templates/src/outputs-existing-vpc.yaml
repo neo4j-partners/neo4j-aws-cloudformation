@@ -6,6 +6,12 @@
   Neo4jInternalDNS:
     Description: Internal NLB DNS name (not internet-reachable; use SSM port-forwarding to connect)
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+  Neo4jBoltUrl:
+    Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+  Neo4jHttpsUrl:
+    Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
   Neo4jPrivateDnsHostedZoneId:
     Condition: CreatePrivateDns
     Description: Route 53 private hosted zone ID containing AdvertisedDNS.
@@ -60,10 +66,10 @@
   Neo4jConfigParameterPrefix:
     Description: >-
       SSM Parameter Store path prefix for non-secret stack configuration.
-      Entries: vpc-id, nlb-dns, region, stack-name, private-subnet-1-id,
-      private-subnet-2-id, password-secret-arn, external-sg-id, vpc-endpoint-sg-id.
-      In-VPC apps read from here instead of the operator's local
-      .deploy/<stack>.txt file.
+      Entries: vpc-id, nlb-dns, advertised-dns, bolt-url, https-url, region,
+      stack-name, private-subnet-1-id, private-subnet-2-id, password-secret-arn,
+      external-sg-id, vpc-endpoint-sg-id. In-VPC apps read from here instead of
+      the operator's local .deploy/<stack>.txt file.
     Value: !Sub '/neo4j-ee/${AWS::StackName}/'
   Username:
     Description: 'The username is neo4j.'

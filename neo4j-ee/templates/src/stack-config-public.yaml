@@ -1,0 +1,91 @@
+  Neo4jPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'neo4j/${AWS::StackName}/password'
+      Description: !Sub 'Neo4j admin password for stack ${AWS::StackName}'
+      SecretString: !Ref Password
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jConfigNlbDnsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/nlb-dns'
+      Type: String
+      Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Public NLB DNS name. Off-VPC clients connect to this host on 7687 (Bolt) and 7474/7473 (Browser).
+
+  Neo4jConfigPasswordSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/password-secret-arn'
+      Type: String
+      Value: !Ref Neo4jPasswordSecret
+      Description: Secrets Manager ARN for the Neo4j admin password. Off-VPC clients fetch the password from this secret.
+
+  Neo4jConfigAdvertisedDnsParameter:
+    Type: AWS::SSM::Parameter
+    Condition: UsePublicTLS
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/advertised-dns'
+      Type: String
+      Value: !Ref AdvertisedDNS
+      Description: Advertised DNS name that resolves to the public NLB and matches the ACM cert SAN. Published only when public TLS is enabled; clients connect via neo4j+s://<advertised-dns>:7687.
+
+  Neo4jConfigBoltUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/bolt-url'
+      Type: String
+      Value: !If
+        - UsePublicTLS
+        - !Sub 'neo4j+s://${AdvertisedDNS}:7687'
+        - !If
+          - CreateCluster
+          - !Sub
+            - 'neo4j://${NlbDns}:7687'
+            - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+          - !Sub
+            - 'bolt://${NlbDns}:7687'
+            - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Bolt connection URL with the scheme matching the deployed TLS and cluster mode. Clients use this directly; no scheme derivation required.
+
+  Neo4jConfigHttpsUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/https-url'
+      Type: String
+      Value: !If
+        - UsePublicTLS
+        - !Sub 'https://${AdvertisedDNS}:7473'
+        - !Sub
+          - 'http://${NlbDns}:7474'
+          - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
+
+  Neo4jConfigNumberOfServersParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/number-of-servers'
+      Type: String
+      Value: !Ref NumberOfServers
+      Description: Number of Neo4j servers in the cluster (1 for single-node, 3 for cluster). Determines whether clients use the bolt:// or neo4j:// scheme when TLS is off.
+
+  Neo4jConfigRegionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/region'
+      Type: String
+      Value: !Ref 'AWS::Region'
+      Description: AWS region for the Neo4j EE stack.
+
+  Neo4jConfigStackNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/stack-name'
+      Type: String
+      Value: !Ref 'AWS::StackName'
+      Description: CloudFormation stack name.
