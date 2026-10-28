@@ -49,6 +49,16 @@ Metadata:
           default: "Monitoring"
         Parameters:
           - AlertEmail
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -96,6 +106,20 @@ Metadata:
         default: Private DNS Zone Name
       PrivateDnsHostedZoneId:
         default: Private DNS Hosted Zone ID
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group
 
 Parameters:
   ImageId:
@@ -318,6 +342,76 @@ Parameters:
       alias record. Leave blank to let this stack create a private hosted zone
       named PrivateDnsZoneName.
 
+  OidcIssuerUri:
+    Description: >-
+      Optional. Issuer URL of an OpenID Connect identity provider, for example
+      https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
+      the provider's discovery document at <issuer>/.well-known/openid-configuration.
+      When set, users can sign in with an ID token from this provider. Password
+      login always stays enabled. Leave blank for password login only.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%/-]*)?$'
+    ConstraintDescription: Must be blank or an https URL with no query string.
+  OidcClientId:
+    Description: >-
+      Client ID that Neo4j accepts as the ID token audience. Use a
+      comma-separated list to accept tokens issued to several clients. Required
+      when OidcIssuerUri is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+(,[A-Za-z0-9._:/-]+)*$'
+    ConstraintDescription: >-
+      Must be blank or a comma-separated list of client IDs with no spaces.
+  OidcBrowserClientId:
+    Description: >-
+      Client ID that Neo4j Browser and Bloom use for interactive sign-in. Must
+      be one of the IDs in OidcClientId, and the identity provider must allow
+      the Browser address as a redirect URL for it. Leave blank to use the
+      first ID in OidcClientId.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+$'
+    ConstraintDescription: Must be blank or a single client ID.
+  OidcPrincipalClaim:
+    Description: >-
+      ID token claim that becomes the Neo4j username, for example email or
+      cognito:username. Leave blank to use the Neo4j default, sub.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcGroupsClaim:
+    Description: >-
+      ID token claim that lists the user's groups, for example cognito:groups
+      or groups. This is a claim name, not a JSONPath. Required when
+      OidcAdminGroup or OidcReaderGroup is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcAdminGroup:
+    Description: >-
+      Identity provider group whose members get the Neo4j admin role. Leave
+      blank to map no group to admin.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.
+  OidcReaderGroup:
+    Description: >-
+      Identity provider group whose members get the built-in Neo4j reader role.
+      Signed-in users with no mapped group get only the PUBLIC role and see an
+      empty graph. Leave blank to map no group to reader.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.
+
 Rules:
   BloomLicenseRequiredWhenInstalled:
     Assertions:
@@ -370,6 +464,24 @@ Rules:
           is the certificate SAN and the advertised Bolt/HTTPS host. This Rule
           fires during CloudFormation stack create and update parameter
           validation.
+  OidcClientIdRequiredWithIssuer:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref OidcIssuerUri, '']
+          - !Not [!Equals [!Ref OidcClientId, '']]
+        AssertDescription: >-
+          OidcClientId must be provided when OidcIssuerUri is set. Neo4j
+          rejects every ID token whose audience it cannot check.
+  OidcGroupsClaimRequiredWithGroupMapping:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref OidcAdminGroup, '']
+            - !Equals [!Ref OidcReaderGroup, '']
+          - !Not [!Equals [!Ref OidcGroupsClaim, '']]
+        AssertDescription: >-
+          OidcGroupsClaim must be provided when OidcAdminGroup or
+          OidcReaderGroup is set. Neo4j reads group membership from that claim.
 
 Conditions:
   CreateCluster: !Not
@@ -961,6 +1073,16 @@ Resources:
                 unset password
                 isFirstBoot=false
 
+                # The optional OIDC values arrive base64-encoded so that no parameter value
+                # can run as shell code in the UserData assignments. Blank decodes to blank.
+                oidcIssuerUri=$(printf '%s' "${oidcIssuerUriB64:-}" | base64 -d)
+                oidcClientId=$(printf '%s' "${oidcClientIdB64:-}" | base64 -d)
+                oidcBrowserClientId=$(printf '%s' "${oidcBrowserClientIdB64:-}" | base64 -d)
+                oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
+                oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
+                oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
+                oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+
                 set_neo4j_conf() {
                   local key="$1"
                   local value="$2"
@@ -1287,6 +1409,68 @@ Resources:
                   set_neo4j_conf dbms.ssl.policy.https.public_certificate public.crt
                   set_neo4j_conf dbms.ssl.policy.https.client_auth NONE
                 }
+                configure_oidc() {
+                  local issuerUri="$1"
+                  local clientIds="$2"
+                  local browserClientId="$3"
+                  local principalClaim="$4"
+                  local groupsClaim="$5"
+                  local adminGroup="$6"
+                  local readerGroup="$7"
+                  local provider="dbms.security.oidc.sso"
+                  local mappings=()
+
+                  if [[ -z "${issuerUri}" ]]; then
+                    echo "OIDC disabled (no OidcIssuerUri); password login only."
+                    return 0
+                  fi
+                  [[ -n "${clientIds}" ]] || fail "OidcIssuerUri is set but OidcClientId is empty."
+                  if [[ -z "${browserClientId}" ]]; then
+                    browserClientId="${clientIds%%,*}"
+                  fi
+                  # Browser and Bloom present an ID token issued to this client, so it must
+                  # pass the audience check.
+                  if [[ ",${clientIds}," != *",${browserClientId},"* ]]; then
+                    fail "OidcBrowserClientId is not one of the IDs in OidcClientId."
+                  fi
+                  if [[ -n "${adminGroup}" ]]; then
+                    mappings+=("\"${adminGroup}\"=admin")
+                  fi
+                  if [[ -n "${readerGroup}" ]]; then
+                    mappings+=("\"${readerGroup}\"=reader")
+                  fi
+                  if (( ${#mappings[@]} > 0 )) && [[ -z "${groupsClaim}" ]]; then
+                    fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
+                  fi
+
+                  # native stays in both lists so password login (operator tooling and
+                  # service accounts) keeps working next to single sign-on.
+                  set_neo4j_conf dbms.security.authentication_providers "oidc-sso,native"
+                  set_neo4j_conf dbms.security.authorization_providers "oidc-sso,native"
+                  set_neo4j_conf "${provider}.display_name" "SSO"
+                  set_neo4j_conf "${provider}.auth_flow" pkce
+                  set_neo4j_conf "${provider}.well_known_discovery_uri" \
+                    "${issuerUri%/}/.well-known/openid-configuration"
+                  set_neo4j_conf "${provider}.audience" "${clientIds}"
+                  set_neo4j_conf "${provider}.params" \
+                    "client_id=${browserClientId};response_type=code;scope=openid profile email"
+                  # Validate the ID token: some providers (Cognito) put no aud claim in the
+                  # access token, so the audience check can only pass on the ID token.
+                  set_neo4j_conf "${provider}.config" \
+                    "token_type_principal=id_token;token_type_authentication=id_token"
+                  if [[ -n "${principalClaim}" ]]; then
+                    set_neo4j_conf "${provider}.claims.username" "${principalClaim}"
+                  fi
+                  if [[ -n "${groupsClaim}" ]]; then
+                    set_neo4j_conf "${provider}.claims.groups" "${groupsClaim}"
+                  fi
+                  if (( ${#mappings[@]} > 0 )); then
+                    local joined
+                    joined=$(IFS=';'; echo "${mappings[*]}")
+                    set_neo4j_conf "${provider}.authorization.group_to_role_mapping" "${joined}"
+                  fi
+                  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s))."
+                }
                 install_cloudwatch_agent() {
                   local stackName="$1"
                   local config_path="${CW_AGENT_CONFIG:-/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json}"
@@ -1344,6 +1528,8 @@ Resources:
                 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
                 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
                 remove_jdwp_default
+                configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
+                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
                 assert_security_invariant
                 start_neo4j "${initialPassword}" "${isFirstBoot}"
             /opt/neo4j/conf/neo4j-base.conf:
@@ -1421,6 +1607,27 @@ Resources:
               - "advertisedDNS="
               - Ref: AdvertisedDNS
               - "\n"
+              - "oidcIssuerUriB64="
+              - Fn::Base64: {Ref: OidcIssuerUri}
+              - "\n"
+              - "oidcClientIdB64="
+              - Fn::Base64: {Ref: OidcClientId}
+              - "\n"
+              - "oidcBrowserClientIdB64="
+              - Fn::Base64: {Ref: OidcBrowserClientId}
+              - "\n"
+              - "oidcPrincipalClaimB64="
+              - Fn::Base64: {Ref: OidcPrincipalClaim}
+              - "\n"
+              - "oidcGroupsClaimB64="
+              - Fn::Base64: {Ref: OidcGroupsClaim}
+              - "\n"
+              - "oidcAdminGroupB64="
+              - Fn::Base64: {Ref: OidcAdminGroup}
+              - "\n"
+              - "oidcReaderGroupB64="
+              - Fn::Base64: {Ref: OidcReaderGroup}
+              - "\n"
               - |
                 _token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
                 _instance_id=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/instance-id)
@@ -1461,6 +1668,8 @@ Resources:
                 export stackName region nodeCount loadBalancerDNSName advertisedDNS
                 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
                 export password _stack_id _instance_id _az
+                export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
+                export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
 
                 /opt/neo4j/bin/neo4j-bootstrap.sh
 

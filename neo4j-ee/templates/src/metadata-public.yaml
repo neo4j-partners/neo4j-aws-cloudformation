@@ -30,6 +30,16 @@
         Parameters:
           - AllowedCIDR
           - AlertEmail
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -61,3 +71,17 @@
         default: ACM Certificate ARN
       AdvertisedDNS:
         default: Advertised DNS Name
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group

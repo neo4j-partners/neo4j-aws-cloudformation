@@ -37,6 +37,8 @@ cfn-init --stack "$stackName" --resource Neo4jLaunchTemplate --region "$region"
 export stackName region nodeCount loadBalancerDNSName advertisedDNS
 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
 export password _stack_id _instance_id _az
+export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
+export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
 
 /opt/neo4j/bin/neo4j-bootstrap.sh
 

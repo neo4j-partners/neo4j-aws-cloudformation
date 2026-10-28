@@ -132,6 +132,25 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument("--alert-email", metavar="EMAIL")
+    p.add_argument("--oidc-issuer-uri", metavar="URL", default="",
+                   help="OIDC issuer URL (sets OidcIssuerUri). Enables single "
+                        "sign-on next to password login. Default: off.")
+    p.add_argument("--oidc-client-id", metavar="IDS", default="",
+                   help="Comma-separated client IDs accepted as the ID token "
+                        "audience (sets OidcClientId).")
+    p.add_argument("--oidc-browser-client-id", metavar="ID", default="",
+                   help="Client ID that Browser and Bloom sign in with "
+                        "(sets OidcBrowserClientId). Must be in --oidc-client-id. "
+                        "Default: the first ID in --oidc-client-id.")
+    p.add_argument("--oidc-principal-claim", metavar="CLAIM", default="",
+                   help="ID token claim used as the Neo4j username "
+                        "(sets OidcPrincipalClaim). Default: sub.")
+    p.add_argument("--oidc-groups-claim", metavar="CLAIM", default="",
+                   help="ID token claim that lists groups (sets OidcGroupsClaim).")
+    p.add_argument("--oidc-admin-group", metavar="GROUP", default="",
+                   help="Group mapped to the Neo4j admin role (sets OidcAdminGroup).")
+    p.add_argument("--oidc-reader-group", metavar="GROUP", default="",
+                   help="Group mapped to the Neo4j reader role (sets OidcReaderGroup).")
     p.add_argument("--mode", default="Private", choices=["Public", "Private", "ExistingVpc"])
     p.add_argument("--allowed-cidr", metavar="CIDR")
     p.add_argument("--vpc-id", metavar="VPC_ID")
@@ -307,6 +326,30 @@ class ExistingVpcInputs:
     existing_endpoint_sg_id: str
 
 
+@dataclass(frozen=True)
+class OidcInputs:
+    issuer_uri: str = ""
+    client_id: str = ""
+    browser_client_id: str = ""
+    principal_claim: str = ""
+    groups_claim: str = ""
+    admin_group: str = ""
+    reader_group: str = ""
+
+    def cfn_values(self) -> dict[str, str]:
+        """Non-blank values keyed by template parameter name."""
+        values = {
+            "OidcIssuerUri": self.issuer_uri,
+            "OidcClientId": self.client_id,
+            "OidcBrowserClientId": self.browser_client_id,
+            "OidcPrincipalClaim": self.principal_claim,
+            "OidcGroupsClaim": self.groups_claim,
+            "OidcAdminGroup": self.admin_group,
+            "OidcReaderGroup": self.reader_group,
+        }
+        return {key: value for key, value in values.items() if value}
+
+
 def resolve_tls_plan(
     *,
     mode: str,
@@ -399,6 +442,7 @@ def build_cfn_parameters(
     mode: str,
     existing_vpc: ExistingVpcInputs | None,
     tls: TlsPlan,
+    oidc: OidcInputs | None = None,
 ) -> list[dict[str, str]]:
     """Build the CloudFormation parameter list (pure; no AWS calls).
 
@@ -462,6 +506,11 @@ def build_cfn_parameters(
         if tls.private_dns_hosted_zone_id:
             params.append({"ParameterKey": "PrivateDnsHostedZoneId",
                             "ParameterValue": tls.private_dns_hosted_zone_id})
+    if oidc is not None:
+        params += [
+            {"ParameterKey": key, "ParameterValue": value}
+            for key, value in oidc.cfn_values().items()
+        ]
     return params
 
 
@@ -804,6 +853,8 @@ def main() -> None:
         print(f"  AMI original:   {source_ami_id} (copied from {SOURCE_REGION})")
     if args.alert_email:
         print(f"  Alert email:    {args.alert_email}")
+    if args.oidc_issuer_uri:
+        print(f"  OIDC issuer:    {args.oidc_issuer_uri}")
     print("=============================================")
     print()
 
@@ -832,6 +883,15 @@ def main() -> None:
         if args.mode == "ExistingVpc"
         else None
     )
+    oidc_inputs = OidcInputs(
+        issuer_uri=args.oidc_issuer_uri,
+        client_id=args.oidc_client_id,
+        browser_client_id=args.oidc_browser_client_id,
+        principal_claim=args.oidc_principal_claim,
+        groups_claim=args.oidc_groups_claim,
+        admin_group=args.oidc_admin_group,
+        reader_group=args.oidc_reader_group,
+    )
     cfn_params = build_cfn_parameters(
         password=password,
         number_of_servers=args.number_of_servers,
@@ -848,6 +908,7 @@ def main() -> None:
         mode=args.mode,
         existing_vpc=existing_vpc_inputs,
         tls=tls,
+        oidc=oidc_inputs,
     )
 
     cfn = boto3.client("cloudformation", region_name=region)
@@ -933,6 +994,7 @@ def main() -> None:
     ]
     if args.alert_email:
         extra.append(("AlertEmail", args.alert_email))
+    extra.extend(oidc_inputs.cfn_values().items())
     if args.mode == "ExistingVpc":
         extra.append(("CreateVpcEndpoints", args.create_vpc_endpoints))
         if args.existing_endpoint_sg_id:

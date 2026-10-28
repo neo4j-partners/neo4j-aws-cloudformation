@@ -1,0 +1,18 @@
+  OidcClientIdRequiredWithIssuer:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref OidcIssuerUri, '']
+          - !Not [!Equals [!Ref OidcClientId, '']]
+        AssertDescription: >-
+          OidcClientId must be provided when OidcIssuerUri is set. Neo4j
+          rejects every ID token whose audience it cannot check.
+  OidcGroupsClaimRequiredWithGroupMapping:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref OidcAdminGroup, '']
+            - !Equals [!Ref OidcReaderGroup, '']
+          - !Not [!Equals [!Ref OidcGroupsClaim, '']]
+        AssertDescription: >-
+          OidcGroupsClaim must be provided when OidcAdminGroup or
+          OidcReaderGroup is set. Neo4j reads group membership from that claim.

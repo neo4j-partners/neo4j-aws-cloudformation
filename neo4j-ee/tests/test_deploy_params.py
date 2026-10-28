@@ -272,6 +272,41 @@ class BuildCfnParametersTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deploy.build_cfn_parameters(**self._base_kwargs("ExistingVpc", tls))
 
+    def _private_tls(self) -> deploy.TlsPlan:
+        return deploy.resolve_tls_plan(
+            mode="Private", stack_name="s",
+            cert_arn="arn:user", advertised_dns="neo4j.example.com",
+            enable_public_tls=False, create_private_dns=False,
+            private_dns_zone="", private_dns_hosted_zone_id="",
+        )
+
+    def test_oidc_omitted_by_default(self) -> None:
+        params = _params(
+            deploy.build_cfn_parameters(**self._base_kwargs("Private", self._private_tls()))
+        )
+        self.assertFalse([key for key in params if key.startswith("Oidc")])
+
+    def test_oidc_params_pass_only_set_values(self) -> None:
+        kwargs = self._base_kwargs("Private", self._private_tls())
+        kwargs["oidc"] = deploy.OidcInputs(
+            issuer_uri="https://idp.example.com/pool",
+            client_id="client-a,client-b",
+            browser_client_id="client-b",
+            groups_claim="cognito:groups",
+            admin_group="neo4j-admins",
+        )
+        params = _params(deploy.build_cfn_parameters(**kwargs))
+        self.assertEqual(
+            {key: value for key, value in params.items() if key.startswith("Oidc")},
+            {
+                "OidcIssuerUri": "https://idp.example.com/pool",
+                "OidcClientId": "client-a,client-b",
+                "OidcBrowserClientId": "client-b",
+                "OidcGroupsClaim": "cognito:groups",
+                "OidcAdminGroup": "neo4j-admins",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

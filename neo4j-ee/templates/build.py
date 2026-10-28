@@ -79,6 +79,34 @@ _PREAMBLE_TLS = [
 ]
 
 
+# Present in all three templates. Each OIDC value is base64-encoded by
+# CloudFormation so the shell assignment is always [A-Za-z0-9+/=]*: a group
+# name with quotes, semicolons or spaces can never run as shell code.
+_PREAMBLE_OIDC = [
+    '"oidcIssuerUriB64="',
+    "Fn::Base64: {Ref: OidcIssuerUri}",
+    '"\\n"',
+    '"oidcClientIdB64="',
+    "Fn::Base64: {Ref: OidcClientId}",
+    '"\\n"',
+    '"oidcBrowserClientIdB64="',
+    "Fn::Base64: {Ref: OidcBrowserClientId}",
+    '"\\n"',
+    '"oidcPrincipalClaimB64="',
+    "Fn::Base64: {Ref: OidcPrincipalClaim}",
+    '"\\n"',
+    '"oidcGroupsClaimB64="',
+    "Fn::Base64: {Ref: OidcGroupsClaim}",
+    '"\\n"',
+    '"oidcAdminGroupB64="',
+    "Fn::Base64: {Ref: OidcAdminGroup}",
+    '"\\n"',
+    '"oidcReaderGroupB64="',
+    "Fn::Base64: {Ref: OidcReaderGroup}",
+    '"\\n"',
+]
+
+
 class BuildError(RuntimeError):
     """Raised when template source partials cannot be assembled."""
 
@@ -191,6 +219,7 @@ def _userdata_block(base_indent: int = 8) -> str:
 
     items = _PREAMBLE_COMMON[:]
     items.extend(_PREAMBLE_TLS)
+    items.extend(_PREAMBLE_OIDC)
 
     result = [
         f"{p}UserData:\n",
@@ -292,8 +321,9 @@ _PRIVATE_SPEC = TemplateSpec(
         "parameters-tls.yaml",
         "parameters-bolt-tls-scheme.yaml",
         "parameters-private.yaml",
+        "parameters-oidc.yaml",
     ),
-    rule_partials=("rules-common.yaml", "rules-tls-required.yaml"),
+    rule_partials=("rules-common.yaml", "rules-tls-required.yaml", "rules-oidc.yaml"),
     conditions_partial="conditions-private.yaml",
     resource_partials=(
         "iam.yaml",
@@ -316,8 +346,9 @@ _PUBLIC_SPEC = TemplateSpec(
         "parameters-common.yaml",
         "parameters-tls.yaml",
         "parameters-public.yaml",
+        "parameters-oidc.yaml",
     ),
-    rule_partials=("rules-common.yaml", "rules-public-tls.yaml"),
+    rule_partials=("rules-common.yaml", "rules-public-tls.yaml", "rules-oidc.yaml"),
     conditions_partial="conditions-public.yaml",
     resource_partials=(
         "iam-public.yaml",
@@ -341,8 +372,14 @@ _EXISTING_VPC_SPEC = TemplateSpec(
         "parameters-tls.yaml",
         "parameters-bolt-tls-scheme.yaml",
         "parameters-existing-vpc.yaml",
+        "parameters-oidc.yaml",
     ),
-    rule_partials=("rules-common.yaml", "rules-existing-vpc.yaml", "rules-tls-required.yaml"),
+    rule_partials=(
+        "rules-common.yaml",
+        "rules-existing-vpc.yaml",
+        "rules-tls-required.yaml",
+        "rules-oidc.yaml",
+    ),
     conditions_partial="conditions-existing-vpc.yaml",
     resource_partials=(
         "iam.yaml",

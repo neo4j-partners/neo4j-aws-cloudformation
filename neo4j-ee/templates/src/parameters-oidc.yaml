@@ -1,0 +1,69 @@
+  OidcIssuerUri:
+    Description: >-
+      Optional. Issuer URL of an OpenID Connect identity provider, for example
+      https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
+      the provider's discovery document at <issuer>/.well-known/openid-configuration.
+      When set, users can sign in with an ID token from this provider. Password
+      login always stays enabled. Leave blank for password login only.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%/-]*)?$'
+    ConstraintDescription: Must be blank or an https URL with no query string.
+  OidcClientId:
+    Description: >-
+      Client ID that Neo4j accepts as the ID token audience. Use a
+      comma-separated list to accept tokens issued to several clients. Required
+      when OidcIssuerUri is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+(,[A-Za-z0-9._:/-]+)*$'
+    ConstraintDescription: >-
+      Must be blank or a comma-separated list of client IDs with no spaces.
+  OidcBrowserClientId:
+    Description: >-
+      Client ID that Neo4j Browser and Bloom use for interactive sign-in. Must
+      be one of the IDs in OidcClientId, and the identity provider must allow
+      the Browser address as a redirect URL for it. Leave blank to use the
+      first ID in OidcClientId.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+$'
+    ConstraintDescription: Must be blank or a single client ID.
+  OidcPrincipalClaim:
+    Description: >-
+      ID token claim that becomes the Neo4j username, for example email or
+      cognito:username. Leave blank to use the Neo4j default, sub.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcGroupsClaim:
+    Description: >-
+      ID token claim that lists the user's groups, for example cognito:groups
+      or groups. This is a claim name, not a JSONPath. Required when
+      OidcAdminGroup or OidcReaderGroup is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcAdminGroup:
+    Description: >-
+      Identity provider group whose members get the Neo4j admin role. Leave
+      blank to map no group to admin.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.
+  OidcReaderGroup:
+    Description: >-
+      Identity provider group whose members get the built-in Neo4j reader role.
+      Signed-in users with no mapped group get only the PUBLIC role and see an
+      empty graph. Leave blank to map no group to reader.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.

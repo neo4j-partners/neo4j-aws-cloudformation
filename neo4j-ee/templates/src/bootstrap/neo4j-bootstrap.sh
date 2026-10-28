@@ -26,6 +26,16 @@ initialPassword="${password}"
 unset password
 isFirstBoot=false
 
+# The optional OIDC values arrive base64-encoded so that no parameter value
+# can run as shell code in the UserData assignments. Blank decodes to blank.
+oidcIssuerUri=$(printf '%s' "${oidcIssuerUriB64:-}" | base64 -d)
+oidcClientId=$(printf '%s' "${oidcClientIdB64:-}" | base64 -d)
+oidcBrowserClientId=$(printf '%s' "${oidcBrowserClientIdB64:-}" | base64 -d)
+oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
+oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
+oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
+oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+
 # include partials/set-neo4j-conf.sh
 
 # include partials/attach-data-volume.sh
@@ -39,6 +49,8 @@ isFirstBoot=false
 # include partials/configure-neo4j.sh
 
 # include partials/configure-tls.sh
+
+# include partials/configure-oidc.sh
 
 # include partials/configure-cloudwatch.sh
 
@@ -62,5 +74,7 @@ configure_memory_recommendation
 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
 remove_jdwp_default
+configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
+  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
 assert_security_invariant
 start_neo4j "${initialPassword}" "${isFirstBoot}"

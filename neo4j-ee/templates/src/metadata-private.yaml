@@ -35,6 +35,16 @@
         Parameters:
           - AllowedCIDR
           - AlertEmail
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -70,3 +80,17 @@
         default: Private DNS Zone Name
       PrivateDnsHostedZoneId:
         default: Private DNS Hosted Zone ID
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group
