@@ -47,7 +47,7 @@ An `InvalidAMIID.NotFound` error, an empty `Images` list, or a state other than 
 
 You also need the sign-in settings for your identity provider:
 
-- **Cognito from the Hume repository:** Follow the **Write the Neo4j EE settings** step in the Hume run book, `docs/run-book.md#write-the-neo4j-ee-settings` in the `hume-aws-cloudformation` repository. It writes `stack/.deploy/.env.neo4jee`.
+- **Cognito from the Hume repository:** Follow the **Write the OIDC settings** step in the Hume run book, `docs/run-book.md#write-the-oidc-settings` in the `hume-aws-cloudformation` repository. It writes `stack/.deploy/.env.neo4jee`.
 - **Another identity provider:** Write the same keys by hand. The keys are listed in [Sign-in settings](PRIVATE.md#sign-in-settings). The provider must also allow the three redirect addresses in [Redirect addresses](PRIVATE.md#redirect-addresses).
 
 Run every command below from `neo4j-ee/` unless the step says otherwise.
