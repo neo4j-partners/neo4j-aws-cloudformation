@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["boto3"]
+# dependencies = ["boto3", "python-dotenv"]
 # ///
 
 import argparse
@@ -31,6 +31,7 @@ from neo4j_ee.cloudformation import (  # noqa: E402
     create_stack_and_wait,
     upload_template_to_s3,
 )
+from neo4j_ee.envfile import load_env_file  # noqa: E402
 from neo4j_ee.licenses import resolve_license_secret_arns  # noqa: E402
 from neo4j_ee.outputs import parse_key_value_text  # noqa: E402
 
@@ -63,6 +64,10 @@ TEMPLATE_MAP = {
     "Public":      "templates/neo4j-public.template.yaml",
     "ExistingVpc": "templates/neo4j-private-existing-vpc.template.yaml",
 }
+ENV_FILE = SCRIPT_DIR / ".env"
+# A flag normally reads the variable named after it: --no-bloom is NO_BLOOM.
+# These flags read an older or clearer name instead, keyed by argparse dest.
+ENV_NAME_OVERRIDES = {"expected_account": "EXPECTED_AWS_ACCOUNT"}
 LOCAL_LICENSE_DIR = SCRIPT_DIR / ".licenses"
 LOCAL_LICENSE_FILES = {
     "bloom": LOCAL_LICENSE_DIR / "bloom.license",
@@ -71,9 +76,60 @@ LOCAL_LICENSE_FILES = {
 _REFRESH_TERMINAL_FAIL = {"Failed", "Cancelled", "RollbackSuccessful", "RollbackFailed"}
 
 
+def _env_name(action: argparse.Action) -> str:
+    if action.dest in ENV_NAME_OVERRIDES:
+        return ENV_NAME_OVERRIDES[action.dest]
+    flag = max(action.option_strings, key=len, default=action.dest)
+    return flag.lstrip("-").replace("-", "_").upper()
+
+
+def _env_value(name: str, raw: str, action: argparse.Action) -> Any:
+    """Convert one environment string the way the flag would convert it."""
+    if action.nargs == 0:
+        if raw.lower() not in ("true", "false"):
+            sys.exit(f"ERROR: {name} must be 'true' or 'false', got '{raw}'.")
+        return raw.lower() == "true"
+    value = raw
+    if action.type is not None:
+        try:
+            value = action.type(raw)
+        except (TypeError, ValueError) as exc:
+            sys.exit(f"ERROR: {name}='{raw}' is not valid: {exc}")
+    if action.choices is not None and value not in action.choices:
+        allowed = ", ".join(str(choice) for choice in action.choices)
+        sys.exit(f"ERROR: {name} must be one of {allowed}, got '{raw}'.")
+    return value
+
+
+def apply_env_defaults(parser: argparse.ArgumentParser) -> None:
+    """Let every flag take its default from an environment variable.
+
+    The variable is the flag name in upper case with underscores, so
+    --number-of-servers is NUMBER_OF_SERVERS and --no-bloom is NO_BLOOM. Switch
+    flags take true or false. A flag on the command line still wins. The
+    --no-* switches that turn a setting off have no variable; set the setting
+    it turns off to false instead.
+    """
+    # argparse has no public call that lists the registered actions.
+    for action in parser._actions:
+        is_switch = action.nargs == 0
+        if action.dest == "help" or (is_switch and action.const is not True):
+            continue
+        name = _env_name(action)
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            parser.set_defaults(**{action.dest: _env_value(name, raw, action)})
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Deploy Neo4j Enterprise Edition CloudFormation stack for local testing.",
+        epilog="Every flag can also be set as an environment variable or in "
+               "neo4j-ee/.env. The name is the flag in upper case with "
+               "underscores: --number-of-servers is NUMBER_OF_SERVERS and "
+               "--no-bloom is NO_BLOOM=true. A flag wins over an environment "
+               "variable, and an environment variable wins over .env. "
+               "--expected-account reads EXPECTED_AWS_ACCOUNT.",
     )
     p.add_argument(
         "instance_type", nargs="?", default="t3.medium",
@@ -88,8 +144,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--region", dest="region_override", metavar="REGION")
     p.add_argument(
-        "--expected-account", metavar="ACCOUNT_ID",
-        default=os.environ.get("EXPECTED_AWS_ACCOUNT", ""),
+        "--expected-account", metavar="ACCOUNT_ID", default="",
         help="12-digit AWS account id the credentials must resolve to; the "
              "deploy stops on mismatch. Falls back to EXPECTED_AWS_ACCOUNT; "
              "the flag wins. Unset means no check.",
@@ -197,6 +252,7 @@ def parse_args() -> argparse.Namespace:
              "Populates --vpc-id, --subnet-*, --allowed-cidr, --region, and --existing-endpoint-sg-id "
              "from the file; any of those flags override the file values when provided explicitly.",
     )
+    apply_env_defaults(p)
     return p.parse_args()
 
 
@@ -584,6 +640,9 @@ def write_partial_record(
 def main() -> None:
     # Stack creation takes minutes; flush each line so a redirect or tee shows progress.
     sys.stdout.reconfigure(line_buffering=True)
+    from_env_file = load_env_file(ENV_FILE)
+    if from_env_file:
+        print(f"Loaded {', '.join(from_env_file)} from {ENV_FILE}")
     if not os.environ.get("AWS_PROFILE"):
         print("WARNING: AWS_PROFILE not set, using default", file=sys.stderr)
     os.environ.setdefault("AWS_PROFILE", "default")
