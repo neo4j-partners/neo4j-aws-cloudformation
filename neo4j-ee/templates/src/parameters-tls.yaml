@@ -12,8 +12,9 @@
   AdvertisedDNS:
     Description: >-
       Advertised DNS name that resolves to this NLB. Used as the certificate SAN
-      and as the host placed in server.bolt.advertised_address and
-      server.http.advertised_address. Map this name to the NLB DNS via Route 53
+      and as the host placed in server.https.advertised_address. Bolt advertises
+      it only when the stack's private DNS record resolves it inside the VPC;
+      otherwise Bolt advertises the NLB DNS. Map this name to the NLB DNS via Route 53
       or operator-managed DNS before clients connect. Required for Private and
       ExistingVpc deployments; required for Public only when TLS is enabled.
     Type: String

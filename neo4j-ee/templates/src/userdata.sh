@@ -34,7 +34,7 @@ cfn-init --stack "$stackName" --resource Neo4jLaunchTemplate --region "$region"
 # Hand every runtime value to the bootstrap as named, exported environment
 # variables. The Secrets Manager password travels by env, never on argv, so it
 # is not exposed in the process list or cloud-init logs.
-export stackName region nodeCount loadBalancerDNSName advertisedDNS
+export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
 export password _stack_id _instance_id _az
 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64

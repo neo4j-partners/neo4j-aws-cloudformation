@@ -243,8 +243,8 @@ capable clients while remaining backward compatible with TLS 1.3-only and TLS
 the matching backend policy for the re-encrypt leg automatically.
 `configure_tls` is a
 runtime overlay function (Placement Decision Rule branch 1): it depends on
-`AdvertisedDNS` and the load balancer DNS name and takes both as explicit
-arguments.
+`AdvertisedDNS`, the load balancer DNS name, and whether Bolt may advertise
+`AdvertisedDNS`, and takes all three as explicit arguments.
 
 **The TLS signal is a non-empty `AdvertisedDNS`, never a secret output.**
 Private and ExistingVpc always pass a non-empty `AdvertisedDNS` and TLS is
@@ -266,16 +266,39 @@ the NLB HTTPS health check on `7473` connects without SNI; if it is not the
 cert SAN, Jetty answers the health check with `400 Invalid SNI` and every
 `7473` target goes unhealthy.
 
-**Bolt alone advertises the NLB DNS, not `AdvertisedDNS`.** Bolt is a routed
+**Bolt advertises `AdvertisedDNS` only when the stack's private DNS record
+resolves it in-VPC; otherwise it advertises the NLB DNS.** Bolt is a routed
 protocol: the cluster publishes `server.bolt.advertised_address` in its
 routing table, and every `neo4j://`-style client must resolve it to refresh
-routing. `AdvertisedDNS` is only guaranteed to resolve in-VPC when the stack
-also owns a Route 53 record for it (`CreatePrivateDns=true` or a real external
-DNS name); by default (`CreatePrivateDns=false`) it is a synthetic cert SAN
-with no in-VPC record. The NLB DNS is always resolvable in-VPC, so
-`server.bolt.advertised_address` (only) is the NLB DNS. Bolt TLS has no
-`sniHostCheck`, so the self-signed cert (SAN = `AdvertisedDNS`) is still
-accepted by `neo4j+ssc://` clients, which encrypt without trust verification.
+routing. A driver that sends its dialled address in the routing context gets
+that address echoed back, but a driver that sends none gets the advertised
+address, and a `neo4j+s://` driver then verifies it against the certificate
+SAN. The template hands the decision to the bootstrap as the
+`boltAdvertiseDns` UserData value:
+
+- **Private:** `true` only under `CreatePrivateDnsHostedZone`, that is
+  `CreatePrivateDns=true` with an empty `PrivateDnsHostedZoneId`. Private
+  builds a new VPC, so a caller-supplied zone cannot already be associated
+  with it and its record would not resolve in-VPC.
+- **ExistingVpc:** `CreatePrivateDns`. A caller-supplied zone can already be
+  associated with the caller's VPC. PRIVATE-EXISTING-VPC.md makes that
+  association a caller requirement.
+- **Public:** unset, so `false`. Public has no private DNS.
+
+When `true`, `server.bolt.advertised_address` is `AdvertisedDNS` and stays
+inside the SAN. Otherwise `AdvertisedDNS` may be only a synthetic cert SAN
+with no in-VPC record, so `server.bolt.advertised_address` is the
+always-resolvable NLB DNS. Bolt TLS has no `sniHostCheck`, so the self-signed
+cert (SAN = `AdvertisedDNS`) is still accepted by `neo4j+ssc://` clients,
+which encrypt without trust verification. Because the value is a stack
+parameter baked into each node at boot, a stack update that turns
+`CreatePrivateDns` off deletes the record while running nodes still advertise
+it. The nodes must be replaced after such an update.
+
+Open item: a customer certificate whose `AdvertisedDNS` is served by a record
+outside the stack (a customer-managed CNAME, or Public with
+`UsePublicTLS`) still advertises the NLB DNS for Bolt. A future template
+parameter may opt Bolt into `AdvertisedDNS` for that case.
 
 **Operator tooling uses `neo4j+ssc://`, production clients use `neo4j+s://`.**
 The instance certificate is self-signed and the NLB does not validate it on
@@ -310,7 +333,9 @@ zone the stack creates or in an existing zone passed as
 `PrivateDnsHostedZoneId`. `EvaluateTargetHealth` is `false`: the NLB is the
 only target and there is no failover record, so health-evaluated DNS would
 only add an empty-target-group failure mode during provisioning. Public never
-creates Route 53 private DNS resources.
+creates Route 53 private DNS resources. Which zone holds the record decides
+whether Bolt advertises `AdvertisedDNS`, as described in the Bolt paragraph
+above.
 
 **TLS enforcement is audited post-deploy, not assumed.** Like the cypher IP
 blocklist invariant, TLS is checked at independent layers and the runtime
@@ -443,6 +468,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-12 | Private and ExistingVpc NLB listeners and target groups are `Protocol: TLS` on `7473`/`7687` with the ACM cert and `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`; no plain `7474` in the data path; Public TLS is gated on `UsePublicTLS` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls`, `test_public_listeners_are_tls_conditional` |
 | NFR-13 | The Browser target group uses an L7 health check (`HTTPS` for TLS, `HTTP` for Public plain) against `/` with a `200` matcher; the Bolt target group uses `TCP` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls` |
 | NFR-14 | `openssl` is baked into the AMI and never `dnf`-installed on the boot path (AD-4) | `test_create_ami_bakes_openssl`, `test_configure_tls_does_not_install_packages_at_boot` |
+| NFR-15 | Bolt advertises `AdvertisedDNS` only when `boltAdvertiseDns` is `true`: Private under `CreatePrivateDnsHostedZone`, ExistingVpc under `CreatePrivateDns`, never on Public; otherwise it advertises the NLB DNS (AD-4) | `RenderedTemplateContractTests.test_bolt_advertise_dns_reaches_userdata_on_private_templates_only`, `ShellPartialTests.test_configure_tls_bolt_advertises_advertised_dns_when_resolvable`, `test_configure_tls_generates_certs_and_sets_keys` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

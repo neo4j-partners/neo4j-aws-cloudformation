@@ -78,6 +78,17 @@ _PREAMBLE_TLS = [
     '"\\n"',
 ]
 
+# Private and ExistingVpc only: Public has no private DNS, so boltAdvertiseDns
+# stays unset and configure_tls advertises the NLB DNS for Bolt. The value is
+# true only when AdvertisedDNS has an in-VPC record. Private builds a new VPC,
+# so a caller-supplied zone cannot already be associated with it: only a zone
+# the stack creates counts. ExistingVpc trusts CreatePrivateDns, because the
+# caller's zone can already be associated with the caller's VPC.
+_BOLT_ADVERTISE_DNS_PRIVATE = (
+    "Fn::If: [CreatePrivateDnsHostedZone, 'true', 'false']"
+)
+_BOLT_ADVERTISE_DNS_EXISTING_VPC = "Ref: CreatePrivateDns"
+
 
 # Present in all three templates. Each OIDC value is base64-encoded by
 # CloudFormation so the shell assignment is always [A-Za-z0-9+/=]*: a group
@@ -123,6 +134,7 @@ class TemplateSpec:
     userdata_resource_partial: str
     outputs_partial: str
     rules_blank_between_partials: bool = True
+    bolt_advertise_dns: str = ""
 
 
 def _read(filename: str) -> str:
@@ -206,7 +218,7 @@ def _metadata_block(base_indent: int = 4) -> str:
     return "".join(result)
 
 
-def _userdata_block(base_indent: int = 8) -> str:
+def _userdata_block(spec: TemplateSpec, base_indent: int = 8) -> str:
     """Return the UserData: Fn::Base64: !Join [...] block as YAML text."""
     source_name = "userdata.sh"
     sh_content = _inline_partials(_read(source_name), source_name)
@@ -219,6 +231,8 @@ def _userdata_block(base_indent: int = 8) -> str:
 
     items = _PREAMBLE_COMMON[:]
     items.extend(_PREAMBLE_TLS)
+    if spec.bolt_advertise_dns:
+        items.extend(['"boltAdvertiseDns="', spec.bolt_advertise_dns, '"\\n"'])
     items.extend(_PREAMBLE_OIDC)
 
     result = [
@@ -243,7 +257,7 @@ def _userdata_block(base_indent: int = 8) -> str:
     return "".join(result)
 
 
-def _asg_with_userdata(filename: str) -> str:
+def _asg_with_userdata(filename: str, spec: TemplateSpec) -> str:
     asg_content = _read(filename)
     userdata_placeholder = "        # __USERDATA__\n"
     metadata_placeholder = "    # __INIT_METADATA__\n"
@@ -254,7 +268,7 @@ def _asg_with_userdata(filename: str) -> str:
             f"# __INIT_METADATA__ placeholder not found in src/{filename}"
         )
     asg_content = asg_content.replace(metadata_placeholder, _metadata_block())
-    return asg_content.replace(userdata_placeholder, _userdata_block())
+    return asg_content.replace(userdata_placeholder, _userdata_block(spec))
 
 
 def _append_partials(
@@ -271,7 +285,7 @@ def _append_partials(
 
 def _resource_partial(filename: str, spec: TemplateSpec) -> str:
     if filename == spec.userdata_resource_partial:
-        return _asg_with_userdata(filename)
+        return _asg_with_userdata(filename, spec)
     return _read(filename)
 
 
@@ -336,6 +350,7 @@ _PRIVATE_SPEC = TemplateSpec(
     ),
     userdata_resource_partial="asg.yaml",
     outputs_partial="outputs-private.yaml",
+    bolt_advertise_dns=_BOLT_ADVERTISE_DNS_PRIVATE,
 )
 
 _PUBLIC_SPEC = TemplateSpec(
@@ -393,6 +408,7 @@ _EXISTING_VPC_SPEC = TemplateSpec(
     userdata_resource_partial="asg-existing-vpc.yaml",
     outputs_partial="outputs-existing-vpc.yaml",
     rules_blank_between_partials=False,
+    bolt_advertise_dns=_BOLT_ADVERTISE_DNS_EXISTING_VPC,
 )
 
 _TEMPLATE_SPECS = [

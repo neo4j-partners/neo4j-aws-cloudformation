@@ -23,6 +23,7 @@
   - [Bolt Tunnel](#bolt-tunnel)
   - [Browser Tunnel](#browser-tunnel)
   - [Retrieve the Password](#retrieve-the-password)
+  - [Single Sign-On (OIDC)](#single-sign-on-oidc)
   - [Admin Shell](#admin-shell)
   - [Ad-Hoc Cypher Queries](#ad-hoc-cypher-queries)
   - [Observability](#observability)
@@ -117,20 +118,21 @@ Expected output on a healthy stack:
   Region:  us-east-1
   Bastion: i-0abc123def456789
 
-  [PASS] Stack status = CREATE_COMPLETE
+  [PASS] Stack status = CREATE_COMPLETE or UPDATE_COMPLETE
   [PASS] Bastion SSM PingStatus = Online
   [PASS] neo4j Python driver installed on bastion
   [PASS] cypher-shell installed on bastion
   [PASS] Secret 'neo4j/test-ee-1776575131/password' exists
+  [PASS] TLS params set: CertificateArn, AdvertisedDNS
   [PASS] Contract SSM params: vpc-id, nlb-dns, external-sg-id, password-secret-arn, vpc-endpoint-sg-id
-  [INFO] Operational SSM params: region, stack-name, private-subnet-1-id, private-subnet-2-id
   [PASS] VPC interface endpoints: secretsmanager, logs, ssm, ssmmessages
   [PASS] Endpoint reachable: secretsmanager.us-east-1.amazonaws.com
   [PASS] Endpoint reachable: logs.us-east-1.amazonaws.com
   [PASS] Endpoint reachable: ssm.us-east-1.amazonaws.com
   [PASS] Endpoint reachable: ssmmessages.us-east-1.amazonaws.com
+  [INFO] Operational SSM params: region, stack-name, private-subnet-1-id, private-subnet-2-id
 
-  11 passed, 0 failed
+  12 passed, 0 failed
 ```
 
 If the bastion SSM check fails immediately after a fresh deploy, the bastion UserData may still be running. Wait 2-3 minutes and retry.
@@ -180,9 +182,11 @@ uv run scripts/browser-tunnel.py   # localhost:7473 -> NLB:7473  (blocks; Ctrl-C
 uv run scripts/bolt-tunnel.py      # localhost:7687 -> NLB:7687  (blocks; Ctrl-C to close)
 ```
 
+From `neo4j-ee/`, `./browser-tunnel.sh [stack-name]` and `./bolt-tunnel.sh [stack-name]` run the same two scripts. They set `AWS_PROFILE` to `marketplace` when it is unset.
+
 The certificate SAN is the stack's `AdvertisedDNS`, so add `127.0.0.1 <AdvertisedDNS>` to your laptop's `/etc/hosts`. `browser-tunnel.py` prints the exact line. Then open `https://<AdvertisedDNS>:7473`. The self-signed certificate triggers a browser warning that you must accept. When prompted for a connection URL, enter the Bolt URI printed by `uv run browse.py` or `uv run scripts/bolt-tunnel.py`. For the password, see [Retrieve the Password](#retrieve-the-password).
 
-> **Note:** Connection strings inside Neo4j Browser show the internal NLB DNS hostname. Substitute `localhost` when connecting through the tunnel.
+> **Note:** Connection strings inside Neo4j Browser show the internal NLB DNS hostname, or `AdvertisedDNS` when the stack creates its private hosted zone. Substitute `localhost` when connecting through the tunnel.
 
 > **Note:** Writes through Neo4j Browser go to whichever node the NLB selects, which may not be the leader, producing a `NotALeader` error. Use `uv run admin-shell` for writes.
 
@@ -198,6 +202,73 @@ PASSWORD=$(./scripts/get-password.sh 2>/dev/null)
 The password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON.
 
 Only the Browser Tunnel requires the password locally — you type it into the Neo4j Browser login form. `admin-shell` and `run-cypher` resolve the password on the bastion using the bastion's IAM role; it never appears on your local machine or in CloudTrail.
+
+### Single Sign-On (OIDC)
+
+Neo4j Browser and Bloom can sign users in through an OpenID Connect identity provider. Setting `OidcIssuerUri` turns this on. Password login stays enabled next to it, and operator tools keep using the native `neo4j` password.
+
+The step-by-step procedure, including the Hume integration, is in [oidc-run-book.md](oidc-run-book.md).
+
+#### Sign-In Settings
+
+| Template parameter | `deploy.py` flag | `.env` key | Purpose |
+|---|---|---|---|
+| `OidcIssuerUri` | `--oidc-issuer-uri` | `OIDC_ISSUER_URI` | Turns single sign-on on. Neo4j reads `<issuer>/.well-known/openid-configuration`. |
+| `OidcClientId` | `--oidc-client-id` | `OIDC_CLIENT_ID` | Comma-separated client IDs accepted as the ID token audience. A token from any listed client is accepted. |
+| `OidcBrowserClientId` | `--oidc-browser-client-id` | `OIDC_BROWSER_CLIENT_ID` | The client that Browser and Bloom sign in with. It must be in `OidcClientId`. When it is empty, the first ID in `OidcClientId` is used. |
+| `OidcPrincipalClaim` | `--oidc-principal-claim` | `OIDC_PRINCIPAL_CLAIM` | The ID token claim that becomes the Neo4j username. The default is `sub`. |
+| `OidcGroupsClaim` | `--oidc-groups-claim` | `OIDC_GROUPS_CLAIM` | The ID token claim that lists the user's groups. |
+| `OidcAdminGroup` | `--oidc-admin-group` | `OIDC_ADMIN_GROUP` | The group mapped to the Neo4j `admin` role. |
+| `OidcReaderGroup` | `--oidc-reader-group` | `OIDC_READER_GROUP` | The group mapped to the built-in `reader` role. |
+| `AdvertisedDNS` | `--advertised-dns` | `ADVERTISED_DNS` | The name that Browser, the drivers and the redirect addresses use. |
+| `CreatePrivateDns` | `--create-private-dns` | `CREATE_PRIVATE_DNS` | Creates a Route 53 private record for the advertised name. |
+| `PrivateDnsZoneName` | `--private-dns-zone` | `PRIVATE_DNS_ZONE` | The private hosted zone to create. |
+
+A user in neither group signs in with only the `PUBLIC` role.
+
+Neo4j validates the ID token, not the access token. For Amazon Cognito, set the principal claim to `cognito:username` and the groups claim to `cognito:groups`. The Cognito access token has no `aud` claim, so Neo4j rejects it.
+
+The nodes fetch the provider's signing keys over the internet. A Private stack reaches the internet through the NAT gateway in each private subnet. An ExistingVpc stack must provide that route itself.
+
+#### Redirect Addresses
+
+The identity provider must allow these redirect addresses for the Browser client. Replace `<AdvertisedDNS>` with the stack's advertised name:
+
+```
+https://<AdvertisedDNS>:7473/browser/?idp_id=sso&auth_flow_step=redirect_uri
+https://<AdvertisedDNS>:7473/browser/
+https://<AdvertisedDNS>:7473/bloom/
+```
+
+`sso` is the provider ID the stack configures. Skip the `bloom` address when Bloom is not installed. Amazon Cognito matches each address exactly, including the query string.
+
+#### Changing Sign-In Settings on a Running Stack
+
+A stack update changes the launch template, but running nodes keep their old configuration. The node Auto Scaling groups have no update policy. To apply a change, replace the nodes one at a time:
+
+1. Terminate one node through its Auto Scaling group. Do not lower the desired capacity.
+2. Wait until the replacement is InService and healthy in every NLB target group.
+3. Move to the next node.
+
+Each replacement takes about 8 minutes. The data volume moves to the replacement.
+
+#### Checking a Node
+
+Open a session on a node through SSM and look for the `dbms.security.oidc.sso.*` lines in `/etc/neo4j/neo4j.conf`. At boot, `/var/log/cloud-init-output.log` logs `OIDC enabled` or `OIDC disabled`.
+
+#### Troubleshooting Sign-In
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `DNS_PROBE_POSSIBLE` or "This site can't be reached" | The advertised name is missing from `/etc/hosts`. | Add `127.0.0.1 <AdvertisedDNS>` to `/etc/hosts`. |
+| The page does not load | The Browser tunnel on 7473 is closed. | Restart `./browser-tunnel.sh`. |
+| SSO is disabled in the login form, or the connection fails | The Bolt tunnel on 7687 is closed. | Restart `./bolt-tunnel.sh` and reload the page. |
+| The provider shows `redirect_mismatch` | The redirect address is not registered on the Browser client. | Register the [redirect addresses](#redirect-addresses). Check that `OidcBrowserClientId` names the client that has them. If it still fails, URL-decode `redirect_uri` from the address bar and register it exactly as shown. |
+| A user who should be admin gets only `PUBLIC` | The user is not in the admin group, or the groups claim or group name is wrong. | Check the user's groups in the identity provider and the `OIDC_*` values. |
+| A stack update to sign-in settings has no effect | Running nodes keep their old configuration. | [Replace the nodes one at a time](#changing-sign-in-settings-on-a-running-stack). |
+| A client inside the VPC cannot resolve the advertised name | The private DNS record is missing. | Deploy with `CREATE_PRIVATE_DNS=true` and a `PRIVATE_DNS_ZONE`. |
+| The name does not resolve for about 7 minutes after the record is created | Route 53 holds a negative cache entry. | Wait and retry. |
+| SSM closes a tunnel with "Your session timed out due to inactivity" | The tunnel was idle. | Restart it with the same command. |
 
 ### Admin Shell
 
@@ -294,7 +365,14 @@ server.bolt.advertised_address = <nlb-dns>:7687
 dbms.routing.default_router    = SERVER
 ```
 
-Every routing table entry points back to the NLB. A driver connecting with `neo4j://` receives a routing table containing only the NLB DNS, sends all subsequent requests through it, and lets Neo4j server-side routing handle leader vs. follower direction.
+When the stack creates its own private hosted zone, the Bolt address is `<AdvertisedDNS>:7687` instead. That happens with `CreatePrivateDns=true` and an empty `PrivateDnsHostedZoneId`. The stack then owns a private record that points `AdvertisedDNS` at the NLB, and the certificate covers that name. A `neo4j+s://` driver that sends no address in its routing context still gets a name it can verify.
+
+Every routing table entry points back to the NLB. A driver connecting with `neo4j://` receives a routing table containing only the NLB, sends all subsequent requests through it, and lets Neo4j server-side routing handle leader vs. follower direction.
+
+- **A zone you pass in:** A zone passed in `PrivateDnsHostedZoneId` keeps Bolt on the NLB name. This template creates a new VPC, so that zone cannot already be associated with it. The Existing VPC template treats a passed zone differently. See [PRIVATE-EXISTING-VPC.md](PRIVATE-EXISTING-VPC.md#relationship-to-the-private-template).
+- **Peered VPCs with private DNS:** When Bolt advertises `AdvertisedDNS`, a client in a peered VPC must be able to resolve it. Associate the private hosted zone with that VPC.
+- **Turning private DNS off:** A stack update from `CreatePrivateDns=true` to `false` deletes the DNS record. Running nodes keep advertising `AdvertisedDNS` until they are replaced, so routed clients fail in the meantime. Replace the nodes one at a time right after the update. Each replacement takes about 8 minutes.
+- **Your own DNS record:** A certificate passed with `--cert-arn` and a CNAME you manage outside the stack still leaves Bolt on the NLB name. A future template parameter may let Bolt advertise `AdvertisedDNS` in that case too.
 
 | Access pattern | URI | Notes |
 |---|---|---|
@@ -303,7 +381,7 @@ Every routing table entry points back to the NLB. A driver connecting with `neo4
 | SSM tunnel | `bolt://localhost:7687` | Skips routing table; reliable for operator access |
 | Direct node IP | `bolt://<node-ip>:7687` | Bypasses NLB; single node, no failover |
 
-**`neo4j://` through an SSM tunnel requires a custom resolver.** Via SSM, the driver connects to `localhost:7687`. The server returns a routing table with the NLB DNS. The driver then tries to connect to that address, which resolves to private IPs inside the VPC. Those IPs are not reachable from the operator's laptop. Use `bolt://localhost:7687` for SSM access.
+**`neo4j://` through an SSM tunnel requires a custom resolver.** Via SSM, the driver connects to `localhost:7687`. The server returns a routing table with the NLB DNS, or `AdvertisedDNS` when the stack creates its private hosted zone. The driver then tries to connect to that address, which resolves to private IPs inside the VPC. Those IPs are not reachable from the operator's laptop. Use `bolt://localhost:7687` for SSM access.
 
 ### Operator Bastion: NLB Hairpin
 
@@ -413,7 +491,7 @@ cfn-lint templates/neo4j-private.template.yaml
 ```bash
 cd neo4j-ee/validate-private
 
-uv run preflight <stack-name>                  # 11 checks: stack, bastion, endpoints
+uv run preflight <stack-name>                  # 12 checks: stack, bastion, endpoints
 
 uv run validate-private                        # most recent deployment
 uv run validate-private --stack <stack-name>   # specific deployment

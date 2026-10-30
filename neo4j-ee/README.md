@@ -35,6 +35,10 @@ Once the stack is complete, the guide for your topology covers prerequisites, ac
 - **Private:** [docs/PRIVATE.md — Operator Guide](docs/PRIVATE.md#operator-guide)
 - **Private, Existing VPC:** [docs/PRIVATE-EXISTING-VPC.md — Operator Guide](docs/PRIVATE-EXISTING-VPC.md#operator-guide)
 
+### Single Sign-On
+
+A Private stack can add sign-in through OpenID Connect next to the native password. [docs/oidc-run-book.md](docs/oidc-run-book.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On in PRIVATE.md](docs/PRIVATE.md#single-sign-on-oidc) describes each setting and how to fix sign-in problems.
+
 ---
 
 ## Local Development
@@ -157,6 +161,9 @@ python build.py --verify
 | `templates/build.py` | Assembles the three templates from `templates/src/` partials |
 | `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/`. See [docs/LOCAL-TESTING.md](docs/LOCAL-TESTING.md) |
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, secrets, and deployment file |
+| `browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `browse.py` | Opens the Browser and Bolt tunnels and prints the URL and credentials |
 | `test-observability.sh` | Observability checks: CloudWatch, logs, flow logs, alarm, CloudTrail |
 | `validate-private/` | Operator tooling for Private and ExistingVpc stacks |
 | `marketplace/` | AMI build and test scripts |

@@ -110,9 +110,11 @@ cert; the public stack expects a real CA-trusted cert when TLS is on.
 
 Every cluster member advertises the NLB DNS for Bolt, not a per-node IP.
 That is intentional and is the documented Neo4j pattern for fronting a
-cluster with a single public address. The bootstrap sets
-`server.bolt.advertised_address` to the NLB DNS on every topology, so all
-three cores publish the same Bolt host in the routing table.
+cluster with a single public address. On the Public topology the bootstrap
+sets `server.bolt.advertised_address` to the NLB DNS, so all three cores
+publish the same Bolt host in the routing table. Private stacks can advertise
+`AdvertisedDNS` instead. See
+[NLB Routing in PRIVATE.md](../docs/PRIVATE.md#nlb-routing).
 
 When the driver requests routing information against a three-node stack,
 the table contains three identical NLB entries. The driver deduplicates

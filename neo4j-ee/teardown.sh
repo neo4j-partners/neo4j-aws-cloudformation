@@ -5,11 +5,13 @@
 # name, region, SSM parameter path, and any copied AMI to clean up.
 #
 # Usage:
-#   ./teardown.sh [--delete-volumes] [stack-name]
+#   ./teardown.sh [--delete-volumes] [--expected-account <id>] [stack-name]
 #
 # If stack-name is omitted, uses the most recently modified file in .deploy/.
 # --delete-volumes: after stack deletion, permanently delete the retained EBS
 #   data volumes. Without this flag the volumes are printed but left intact.
+# --expected-account: stop unless the credentials resolve to this 12-digit
+#   account id. Defaults to EXPECTED_AWS_ACCOUNT.
 
 set -euo pipefail
 
@@ -30,7 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY_DIR="${SCRIPT_DIR}/.deploy"
 
 # ---------------------------------------------------------------------------
-# Parse arguments: [--delete-volumes] [stack-name]
+# Parse arguments: [--delete-volumes] [--expected-account <id>] [stack-name]
 # ---------------------------------------------------------------------------
 STACK_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -235,7 +237,7 @@ if [ -z "${OUTPUTS_FILE}" ] || [ ! -f "${OUTPUTS_FILE}" ]; then
   else
     echo "No .txt files in ${DEPLOY_DIR}/" >&2
   fi
-  echo "Usage: $0 [--delete-volumes] [stack-name]" >&2
+  echo "Usage: $0 [--delete-volumes] [--expected-account <id>] [stack-name]" >&2
   exit 1
 fi
 

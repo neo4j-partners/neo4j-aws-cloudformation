@@ -111,6 +111,7 @@ Structurally identical to `neo4j-private.template.yaml`: same operator bastion, 
 
 - **NLB hairpin fix** (non-target bastion + `preserve_client_ip.enabled=false`) — applies identically. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin)
 - **Password security model** (alphanumeric-only `AllowedPattern`, Secrets Manager retrieval at boot, no UserData embedding) — identical. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model)
+- **Bolt advertised address:** This part differs from the Private template. With `CreatePrivateDns=true`, Bolt advertises `AdvertisedDNS` whether the stack creates the hosted zone or you pass one in `PrivateDnsHostedZoneId`. A zone you pass must already be associated with `VpcId`. See [NLB Routing in PRIVATE.md](PRIVATE.md#nlb-routing).
 
 ### VPC Interface Endpoint Design
 
@@ -134,6 +135,7 @@ Structurally identical to `neo4j-private.template.yaml`: same operator bastion, 
 | One subnet per AZ for a 3-node cluster | Each Neo4j node and its bastion are placed in the subnet passed via `PrivateSubnet1/2/3Id` |
 | No duplicate interface endpoints | If `CreateVpcEndpoints=true`, the VPC must not already have `ssm`, `ssmmessages`, `logs`, or `secretsmanager` endpoints; use `CreateVpcEndpoints=false` if it does |
 | Matching CIDR in `AllowedCIDR` | Defaults to `10.0.0.0/16`; pass `--allowed-cidr` if your VPC uses a different range |
+| A hosted zone you pass is associated with the VPC | Applies with `CreatePrivateDns=true` and `PrivateDnsHostedZoneId`. Bolt advertises `AdvertisedDNS`, so the name must resolve inside the VPC. A zone the stack creates is associated for you |
 
 ### Platform Contract
 
@@ -243,7 +245,7 @@ scripts/create-test-vpc.py --region us-east-1
 ./deploy.py --mode ExistingVpc --number-of-servers 3
 STACK=$(ls -t .deploy/test-ee-*.txt | head -1 | xargs basename | sed 's/\.txt$//')
 
-# 3. Preflight (11 checks: stack, bastion, endpoints)
+# 3. Preflight (12 checks: stack, bastion, endpoints)
 cd validate-private
 uv run preflight "$STACK"
 

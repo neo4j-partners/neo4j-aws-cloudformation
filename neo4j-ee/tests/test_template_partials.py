@@ -535,6 +535,37 @@ class ShellPartialTests(unittest.TestCase):
             self.assertIn("-subj /CN=neo4j.example.com", call)
             self.assertIn("subjectAltName=DNS:neo4j.example.com", call)
 
+    def test_configure_tls_bolt_advertises_advertised_dns_when_resolvable(
+        self,
+    ) -> None:
+        # boltAdvertiseDns=true means AdvertisedDNS has an in-VPC record, so
+        # Bolt advertises the cert SAN instead of the NLB DNS. A neo4j+s://
+        # client that sends no routing address then still gets a name the
+        # certificate covers. The default (false) case is covered by
+        # test_configure_tls_generates_certs_and_sets_keys.
+        self.write_stub("chown", 'echo "chown $*" >> "$COMMAND_LOG"\n')
+        self.write_stub("openssl", "exit 0\n")
+        certs = self.tmp / "certs"
+        for proto in ("bolt", "https"):
+            (certs / proto).mkdir(parents=True)
+            (certs / proto / "private.key").write_text("EXISTING")
+            (certs / proto / "public.crt").write_text("EXISTING")
+        set_log = self.tmp / "set-conf.log"
+        result = self.run_shell(
+            f"""
+            set -euo pipefail
+            export NEO4J_CERTS_DIR="{certs}"
+            source "{PARTIALS / 'configure-tls.sh'}"
+            {self.fail_function()}
+            set_neo4j_conf() {{ echo "$1=$2" >> "{set_log}"; }}
+            configure_tls neo4j.example.com lb.example.com true
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = set_log.read_text()
+        self.assertIn("server.bolt.advertised_address=neo4j.example.com:7687", calls)
+        self.assertNotIn("lb.example.com", calls)
+
     def test_configure_tls_reuses_existing_certs(self) -> None:
         self.write_stub("chown", 'echo "chown $*" >> "$COMMAND_LOG"\n')
         self.write_stub("openssl", 'echo "openssl MUST NOT RUN" >&2; exit 9\n')
@@ -1556,7 +1587,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             r'attach_and_mount_data_volume\s+"\$\{region\}"\s+"\$\{_stack_id\}"\s+"\$\{_az\}"\s+"\$\{_instance_id\}"\s+isFirstBoot',
             r'fetch_and_install_license\s+"\$\{bloomLicenseSecretArn\}"\s+/var/lib/neo4j/licenses/neo4j-bloom\.license\s+"Bloom"\s+"\$\{region\}"',
             r'fetch_and_install_license\s+"\$\{gdsLicenseSecretArn\}"\s+/var/lib/neo4j/licenses/neo4j-gds\.license\s+"GDS"\s+"\$\{region\}"',
-            r'configure_tls\s+"\$\{advertisedDNS:-\}"\s+"\$\{loadBalancerDNSName\}"',
+            r'configure_tls\s+"\$\{advertisedDNS:-\}"\s+"\$\{loadBalancerDNSName\}"\s+"\$\{boltAdvertiseDns:-false\}"',
             r'configure_cluster\s+"\$\{nodeCount\}"\s+"\$\{region\}"\s+"\$\{_stack_id\}"',
             r'configure_plugin_settings\s+"\$\{installBloom\}"\s+"\$\{bloomLicenseSecretArn\}"\s+"\$\{installGDS\}"\s+"\$\{gdsLicenseSecretArn\}"',
             r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"',
@@ -1610,6 +1641,36 @@ class RenderedTemplateContractTests(unittest.TestCase):
                     self.assertIn(
                         f"""printf '%s' "${{{env_name}:-}}" | base64 -d""", boot
                     )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_bolt_advertise_dns_reaches_userdata_on_private_templates_only(
+        self,
+    ) -> None:
+        # configure_tls advertises AdvertisedDNS for Bolt only when it has an
+        # in-VPC record. Private builds a new VPC, so only a zone the stack
+        # creates is associated with it. ExistingVpc trusts CreatePrivateDns.
+        # Public has no private DNS, so its UserData must not set the value.
+        expected = {
+            "private": {
+                "Fn::If": ["CreatePrivateDnsHostedZone", "true", "false"]
+            },
+            "existing_vpc": {"Ref": "CreatePrivateDns"},
+        }
+        for name, doc in self.docs.items():
+            with self.subTest(template=name):
+                lt = self._launch_template(doc)
+                parts = lt["Properties"]["LaunchTemplateData"]["UserData"][
+                    "Fn::Base64"
+                ]["Fn::Join"][1]
+                ud = self._userdata_text(doc)
+                self.assertRegex(ud, r"export\b[^\n]*\bboltAdvertiseDns\b")
+                if name == "public":
+                    self.assertNotIn("CreatePrivateDns", doc["Parameters"])
+                    self.assertNotIn("boltAdvertiseDns=", parts)
+                else:
+                    self.assertIn("CreatePrivateDnsHostedZone", doc["Conditions"])
+                    pos = parts.index("boltAdvertiseDns=")
+                    self.assertEqual(parts[pos + 1], expected[name])
 
     def test_templates_preserve_plugin_license_rules(self) -> None:
         for name, template in self.templates.items():

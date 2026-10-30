@@ -14,9 +14,10 @@ fail() {
 
 # Fail closed if any required runtime variable is unset. The value is never
 # echoed, so the Secrets Manager password cannot leak into the log. Optional
-# variables (advertisedDNS, bloomLicenseSecretArn, gdsLicenseSecretArn) are
-# intentionally absent: they are legitimately empty when the corresponding
-# feature is off (advertisedDNS is empty only for Public without TLS).
+# variables (advertisedDNS, boltAdvertiseDns, bloomLicenseSecretArn,
+# gdsLicenseSecretArn) are intentionally absent: they are legitimately empty
+# when the corresponding feature is off (advertisedDNS is empty only for Public
+# without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
 for _required in stackName region nodeCount loadBalancerDNSName \
   installGDS installBloom password _stack_id _instance_id _az; do
   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
@@ -69,7 +70,7 @@ if [[ "${installGDS}" == "true" ]]; then
   fetch_and_install_license "${gdsLicenseSecretArn}" /var/lib/neo4j/licenses/neo4j-gds.license "GDS" "${region}"
 fi
 apply_base_conf
-configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}"
+configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}" "${boltAdvertiseDns:-false}"
 configure_memory_recommendation
 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"

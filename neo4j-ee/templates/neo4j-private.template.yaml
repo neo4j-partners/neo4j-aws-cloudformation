@@ -229,8 +229,9 @@ Parameters:
   AdvertisedDNS:
     Description: >-
       Advertised DNS name that resolves to this NLB. Used as the certificate SAN
-      and as the host placed in server.bolt.advertised_address and
-      server.http.advertised_address. Map this name to the NLB DNS via Route 53
+      and as the host placed in server.https.advertised_address. Bolt advertises
+      it only when the stack's private DNS record resolves it inside the VPC;
+      otherwise Bolt advertises the NLB DNS. Map this name to the NLB DNS via Route 53
       or operator-managed DNS before clients connect. Required for Private and
       ExistingVpc deployments; required for Public only when TLS is enabled.
     Type: String
@@ -967,9 +968,10 @@ Resources:
 
                 # Fail closed if any required runtime variable is unset. The value is never
                 # echoed, so the Secrets Manager password cannot leak into the log. Optional
-                # variables (advertisedDNS, bloomLicenseSecretArn, gdsLicenseSecretArn) are
-                # intentionally absent: they are legitimately empty when the corresponding
-                # feature is off (advertisedDNS is empty only for Public without TLS).
+                # variables (advertisedDNS, boltAdvertiseDns, bloomLicenseSecretArn,
+                # gdsLicenseSecretArn) are intentionally absent: they are legitimately empty
+                # when the corresponding feature is off (advertisedDNS is empty only for Public
+                # without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
                 for _required in stackName region nodeCount loadBalancerDNSName \
                   installGDS installBloom password _stack_id _instance_id _az; do
                   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
@@ -1239,6 +1241,7 @@ Resources:
                 configure_tls() {
                   local advertisedDNS="$1"
                   local loadBalancerDNSName="$2"
+                  local boltAdvertiseDns="${3:-false}"
                   local certsBase="${NEO4J_CERTS_DIR:-/var/lib/neo4j/certificates}"
 
                   # Opt-out path (Public without TLS only — Private/ExistingVpc always pass a
@@ -1293,12 +1296,19 @@ Resources:
                   # unhealthy. Only Bolt is overridden below.
                   set_neo4j_conf server.default_advertised_address "${advertisedDNS}"
                   # Bolt is a routed protocol: the cluster publishes server.bolt.advertised_address
-                  # in its routing table and every neo4j://-style client must resolve it. With
-                  # CreatePrivateDns=false (the default) AdvertisedDNS is only a synthetic cert
-                  # SAN with no in-VPC record, so advertising it for Bolt breaks routed clients.
-                  # The NLB DNS is always resolvable in-VPC and Bolt has no sniHostCheck, so
-                  # Bolt (alone) advertises the NLB DNS.
-                  set_neo4j_conf server.bolt.advertised_address "${loadBalancerDNSName}:7687"
+                  # in its routing table and every neo4j://-style client must resolve it. The
+                  # template sets boltAdvertiseDns=true only when AdvertisedDNS has an in-VPC
+                  # record: on Private when the stack creates the zone, on ExistingVpc when
+                  # CreatePrivateDns=true. Bolt then advertises it, and a neo4j+s:// client that
+                  # sends no routing address still gets a name inside the cert SAN. Otherwise
+                  # AdvertisedDNS may be only a synthetic cert SAN with no in-VPC record, so
+                  # Bolt advertises the always-resolvable NLB DNS instead. Bolt has no
+                  # sniHostCheck, so a non-cert-SAN host is safe there for neo4j+ssc:// clients.
+                  if [[ "${boltAdvertiseDns}" == "true" ]]; then
+                    set_neo4j_conf server.bolt.advertised_address "${advertisedDNS}:7687"
+                  else
+                    set_neo4j_conf server.bolt.advertised_address "${loadBalancerDNSName}:7687"
+                  fi
                   set_neo4j_conf server.http.enabled false
                   set_neo4j_conf server.https.enabled true
                   set_neo4j_conf server.https.listen_address 0.0.0.0:7473
@@ -1429,7 +1439,7 @@ Resources:
                   fetch_and_install_license "${gdsLicenseSecretArn}" /var/lib/neo4j/licenses/neo4j-gds.license "GDS" "${region}"
                 fi
                 apply_base_conf
-                configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}"
+                configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}" "${boltAdvertiseDns:-false}"
                 configure_memory_recommendation
                 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
                 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
@@ -1513,6 +1523,9 @@ Resources:
               - "advertisedDNS="
               - Ref: AdvertisedDNS
               - "\n"
+              - "boltAdvertiseDns="
+              - Fn::If: [CreatePrivateDnsHostedZone, 'true', 'false']
+              - "\n"
               - "oidcIssuerUriB64="
               - Fn::Base64: {Ref: OidcIssuerUri}
               - "\n"
@@ -1571,7 +1584,7 @@ Resources:
                 # Hand every runtime value to the bootstrap as named, exported environment
                 # variables. The Secrets Manager password travels by env, never on argv, so it
                 # is not exposed in the process list or cloud-init logs.
-                export stackName region nodeCount loadBalancerDNSName advertisedDNS
+                export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
                 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
                 export password _stack_id _instance_id _az
                 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64

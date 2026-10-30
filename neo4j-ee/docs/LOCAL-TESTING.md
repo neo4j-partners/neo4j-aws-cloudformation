@@ -6,6 +6,7 @@ This guide covers deploying a test stack from source with `deploy.py`. It applie
 
 - [Prerequisites](#prerequisites)
 - [How deploy.py behaves](#how-deploypy-behaves)
+- [Settings in .env](#settings-in-env)
 - [Choose an AMI](#choose-an-ami)
 - [Deploy](#deploy)
 - [TLS and DNS](#tls-and-dns)
@@ -29,6 +30,27 @@ This guide covers deploying a test stack from source with `deploy.py`. It applie
 - **Password in plain text:** The script prints the full outputs block, including a `Password = ...` line, and writes the same text to the outputs file. The `.deploy/` directory is gitignored, and `teardown.sh` removes the file. The password is also stored in Secrets Manager at `neo4j/<stack-name>/password`. Do not share terminal logs or the outputs file.
 - **Temporary S3 bucket:** The script uploads the template to a temporary bucket and deletes the bucket when it exits.
 - **Failed creates:** Stack creation runs with rollback disabled, and the wait allows 30 minutes. A failed create leaves the stack in `CREATE_FAILED` with its resources still running. See [Tear down](#tear-down).
+
+## Settings in .env
+
+Every `deploy.py` flag can be set in `neo4j-ee/.env` instead of on the command line. The file is gitignored.
+
+```
+MODE=Private
+REGION=us-east-1
+NUMBER_OF_SERVERS=3
+NO_BLOOM=true
+NO_GDS=true
+```
+
+- **Key names:** The key is the flag name in upper case with underscores. `--number-of-servers` is `NUMBER_OF_SERVERS`, and `--no-bloom` is `NO_BLOOM`. `INSTANCE_TYPE` sets the positional instance type.
+- **Switches:** A flag that takes no value, such as `--no-bloom` or `--marketplace`, takes `true` or `false`.
+- **Exceptions:** `--expected-account` reads `EXPECTED_AWS_ACCOUNT`. `--no-create-private-dns` has no key. Set `CREATE_PRIVATE_DNS=false` instead.
+- **Precedence:** A flag wins over an environment variable, and an environment variable wins over `.env`.
+- **Feedback:** When `deploy.py` takes values from `.env`, it prints their names at the start of the run.
+- **Validation:** A value that is not valid for its flag stops the deploy before any AWS call. The message names the key.
+
+`./deploy.py --help` lists every flag. The single sign-on keys are listed in [Sign-In Settings](PRIVATE.md#sign-in-settings).
 
 ## Choose an AMI
 
@@ -64,7 +86,6 @@ AWS_PROFILE=marketplace ./marketplace/create-ami.sh
 - **SSM parameter:** The script writes the AMI id to `/neo4j-ee/test/<stack-name>/ami-id` and passes that path as the stack's `ImageId`. `teardown.sh` deletes the parameter.
 - **Subscription:** The account must be subscribed to the Neo4j Marketplace listing. A successful lookup does not prove the subscription. The instance launch is the real check.
 - **AMI contents:** The repo's templates expect an AMI built by the current `marketplace/create-ami.sh`. That AMI supplies the `neo4j` system user, the Neo4j yum repo and GPG key, `python3.11`, and `amazon-cloudwatch-agent`. A listing AMI built before that change fails at bootstrap, so `deploy.py --marketplace` exits before creating anything when the newest listing AMI was created before 2026-05-15. `--allow-old-marketplace-ami` overrides the check. The date is `MIN_BOOTSTRAP_AMI_DATE` in `src/neo4j_ee/amis.py`, and it needs a bump if `create-ami.sh` changes what the AMI must carry.
-- **Observed on 2026-10-22:** The listing AMI created on 2025-12-17 has none of these. In `us-east-1` that AMI is `ami-0a6984262620899b5`. Nodes failed at the CloudWatch configuration step in `neo4j-bootstrap.sh`, and the stack reached `CREATE_FAILED`. `--marketplace` works again once the listing carries an AMI built from the current script.
 - **Template default:** The `ImageId` default in `templates/src/parameters-common.yaml` is the pinned path `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1`. That path did not exist in `us-east-1` on 2026-10-22. A deploy that relies on the default fails at parameter resolution.
 
 ## Deploy
@@ -152,7 +173,9 @@ To create a Route 53 private record for the advertised name, pass `--create-priv
 - `--private-dns-zone <name>` creates a new private hosted zone.
 - `--private-dns-hosted-zone-id <id>` uses an existing zone.
 
-Setting the zone to `neo4j.local` should make the default advertised name resolve inside the VPC. This has not been tested.
+With private DNS on, each node also advertises that name for Bolt routing instead of the NLB name. On Private this applies only to a zone the stack creates with `--private-dns-zone`. A zone passed with `--private-dns-hosted-zone-id` keeps Bolt on the NLB name.
+
+Setting the zone to `neo4j.local` makes the default advertised name resolve inside the VPC. A new record can take about 7 minutes to resolve, because Route 53 caches the earlier failed lookup.
 
 ## Validate
 
