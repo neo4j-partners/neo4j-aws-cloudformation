@@ -1,0 +1,22 @@
+  PublicTlsRequiresCertificateAndDns:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref EnableTLS, 'false']
+          - !And
+              - !Not [!Equals [!Ref CertificateArn, '']]
+              - !Not [!Equals [!Ref AdvertisedDNS, '']]
+        AssertDescription: >-
+          CertificateArn and AdvertisedDNS are both required when EnableTLS is
+          true. Without both, the NLB listeners and the Neo4j TLS configuration
+          would disagree about whether TLS is on. This Rule fires during
+          CloudFormation stack create and update parameter validation.
+  PublicTlsDnsOnlyWhenEnabled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref EnableTLS, 'true']
+          - !Equals [!Ref AdvertisedDNS, '']
+        AssertDescription: >-
+          AdvertisedDNS must be blank when EnableTLS is false. Neo4j enables TLS
+          whenever AdvertisedDNS is set, while the NLB stays plaintext, so a
+          stray value would leave the cluster unreachable. This Rule fires
+          during CloudFormation stack create and update parameter validation.

@@ -1,17 +1,23 @@
-  BoltCertificateSecretArn:
+  CertificateArn:
+    Description: >-
+      ARN of an ACM certificate for the NLB TLS listeners on ports 7473 (HTTPS)
+      and 7687 (Bolt). The certificate's SAN must match AdvertisedDNS. Both
+      ACM-issued and ACM Private CA certificates are accepted. Required for
+      Private and ExistingVpc deployments; required for Public only when TLS is
+      enabled.
     Type: String
     Default: ''
+    AllowedPattern: (^$)|(^arn:aws[a-zA-Z-]*:acm:[a-z0-9-]+:[0-9]+:certificate/.+$)
+    ConstraintDescription: Must be blank or a valid ACM certificate ARN.
+  AdvertisedDNS:
     Description: >-
-      ARN of a Secrets Manager secret whose SecretString is JSON with
-      "certificate" (PEM) and "private_key" (PEM) fields. When set, Neo4j
-      enables TLS on Bolt port 7687 (server.bolt.tls_level=REQUIRED). Leave
-      blank to run Bolt without TLS (suitable for dev/test inside a private VPC).
-      ACM Private CA-issued certs are accepted here — no separate parameter needed.
-  BoltAdvertisedDNS:
+      Advertised DNS name that resolves to this NLB. Used as the certificate SAN
+      and as the host placed in server.https.advertised_address. Bolt advertises
+      it only when the stack's private DNS record resolves it inside the VPC;
+      otherwise Bolt advertises the NLB DNS. Map this name to the NLB DNS via Route 53
+      or operator-managed DNS before clients connect. Required for Private and
+      ExistingVpc deployments; required for Public only when TLS is enabled.
     Type: String
     Default: ''
-    Description: >-
-      Optional. DNS name placed in server.bolt.advertised_address and used as
-      the cert SAN. Provide a stable alias (e.g. a Route53 CNAME → NLB) when
-      deploying in production so certs do not pin the NLB DNS. When blank, the
-      NLB DNS is used (test-rig default; two-phase deploy required).
+    AllowedPattern: (^$)|(^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$)
+    ConstraintDescription: Must be blank or a valid DNS name.

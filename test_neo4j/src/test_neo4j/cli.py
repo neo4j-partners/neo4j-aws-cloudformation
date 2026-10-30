@@ -23,6 +23,8 @@ log = logging.getLogger(__name__)
 
 # Repo root: test_neo4j/src/test_neo4j/cli.py -> up 3 levels -> test_neo4j/ -> up 1 -> repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "neo4j-ee" / "src"))
+from neo4j_ee.outputs import latest_outputs_file  # noqa: E402
 
 
 def _deploy_dir(edition: str) -> Path:
@@ -49,14 +51,9 @@ def _resolve_outputs_path(
     if stack:
         return deploy_dir / f"{stack}.txt"
 
-    if deploy_dir.is_dir():
-        txt_files = sorted(
-            deploy_dir.glob("*.txt"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if txt_files:
-            return txt_files[0]
+    latest = latest_outputs_file(deploy_dir)
+    if latest:
+        return latest
 
     return deploy_dir / "no-deployment-found.txt"
 
@@ -177,7 +174,7 @@ def _run_ce(args, config, reporter, session, resource_map) -> None:
         cleanup_movies_dataset(config)
 
     if not args.simple:
-        from test_neo4j.infra_checks import run_infra_checks  # noqa: PLC0415
+        from test_neo4j.infra_ce import run_infra_checks  # noqa: PLC0415
 
         run_infra_checks(session, config, reporter, resource_map)
         run_resilience_tests(
@@ -187,14 +184,14 @@ def _run_ce(args, config, reporter, session, resource_map) -> None:
         )
 
     if args.infra_security:
-        from test_neo4j.infra_checks import run_network_security_checks  # noqa: PLC0415
+        from test_neo4j.security_checks import run_network_security_checks  # noqa: PLC0415
 
         run_network_security_checks(session, config, reporter, resource_map)
 
 
 def _run_ee(args, config, reporter, session, resource_map) -> None:
     from test_neo4j.cluster_checks import run_cluster_checks  # noqa: PLC0415
-    from test_neo4j.infra_checks import run_ee_infra_checks  # noqa: PLC0415
+    from test_neo4j.infra_ee import run_ee_infra_checks  # noqa: PLC0415
     from test_neo4j.volume_checks import run_ee_volume_checks  # noqa: PLC0415
 
     run_simple_tests(config, reporter)
@@ -205,18 +202,27 @@ def _run_ee(args, config, reporter, session, resource_map) -> None:
         cleanup_movies_dataset(config)
 
     if not args.simple:
+        from test_neo4j.robust_checks import run_robust_tests_checks  # noqa: PLC0415
+
         run_ee_infra_checks(
             session, config, reporter, resource_map,
             run_security=args.infra_security,
         )
+        amis_exist = run_robust_tests_checks(session, config, reporter, resource_map)
         run_cluster_checks(config, reporter, session, resource_map)
         run_ee_volume_checks(config, reporter, session, resource_map)
-        run_ee_cluster_resilience_tests(
-            config, reporter, session,
-            replacement_timeout=args.timeout,
-            resource_map=resource_map,
-        )
+        if amis_exist:
+            run_ee_cluster_resilience_tests(
+                config, reporter, session,
+                replacement_timeout=args.timeout,
+                resource_map=resource_map,
+            )
+        else:
+            log.error(
+                "Skipping resilience tests: a launch template AMI is missing, "
+                "so the ASG could not replace a terminated node."
+            )
     elif args.infra_security:
-        from test_neo4j.infra_checks import run_network_security_checks  # noqa: PLC0415
+        from test_neo4j.security_checks import run_network_security_checks  # noqa: PLC0415
 
         run_network_security_checks(session, config, reporter, resource_map)

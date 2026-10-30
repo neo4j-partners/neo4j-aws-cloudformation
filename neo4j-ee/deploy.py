@@ -1,29 +1,40 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["boto3", "cryptography"]
+# dependencies = ["boto3", "python-dotenv"]
 # ///
 
 import argparse
 import atexit
-import datetime
-import json
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import random
 import secrets
 import string
+import subprocess
 import sys
 import time
+from typing import Any
+import urllib.error
 import urllib.request
 
 import boto3
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
+from botocore.exceptions import BotoCoreError, ClientError
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = Path(__file__).parent
+sys.path.insert(0, str(SCRIPT_DIR / "src"))
+sys.path.insert(0, str(SCRIPT_DIR / "scripts"))
+import certificate  # noqa: E402  (uv-script under scripts/; we call _import_self_signed)
+from neo4j_ee.amis import resolve_ami  # noqa: E402
+from neo4j_ee.cloudformation import (  # noqa: E402
+    create_stack_and_wait,
+    upload_template_to_s3,
+)
+from neo4j_ee.envfile import load_env_file  # noqa: E402
+from neo4j_ee.licenses import resolve_license_secret_arns  # noqa: E402
+from neo4j_ee.outputs import parse_key_value_text  # noqa: E402
+
 SOURCE_REGION = "us-east-1"
 MARKETPLACE_PRODUCT_CODE = "4t4a9h39qkq4tbo3n9zd51p25"
 SUPPORTED_REGIONS = [
@@ -53,11 +64,72 @@ TEMPLATE_MAP = {
     "Public":      "templates/neo4j-public.template.yaml",
     "ExistingVpc": "templates/neo4j-private-existing-vpc.template.yaml",
 }
+ENV_FILE = SCRIPT_DIR / ".env"
+# A flag normally reads the variable named after it: --no-bloom is NO_BLOOM.
+# These flags read an older or clearer name instead, keyed by argparse dest.
+ENV_NAME_OVERRIDES = {"expected_account": "EXPECTED_AWS_ACCOUNT"}
+LOCAL_LICENSE_DIR = SCRIPT_DIR / ".licenses"
+LOCAL_LICENSE_FILES = {
+    "bloom": LOCAL_LICENSE_DIR / "bloom.license",
+    "gds": LOCAL_LICENSE_DIR / "gds.license",
+}
+_REFRESH_TERMINAL_FAIL = {"Failed", "Cancelled", "RollbackSuccessful", "RollbackFailed"}
 
 
-def parse_args():
+def _env_name(action: argparse.Action) -> str:
+    if action.dest in ENV_NAME_OVERRIDES:
+        return ENV_NAME_OVERRIDES[action.dest]
+    flag = max(action.option_strings, key=len, default=action.dest)
+    return flag.lstrip("-").replace("-", "_").upper()
+
+
+def _env_value(name: str, raw: str, action: argparse.Action) -> Any:
+    """Convert one environment string the way the flag would convert it."""
+    if action.nargs == 0:
+        if raw.lower() not in ("true", "false"):
+            sys.exit(f"ERROR: {name} must be 'true' or 'false', got '{raw}'.")
+        return raw.lower() == "true"
+    value = raw
+    if action.type is not None:
+        try:
+            value = action.type(raw)
+        except (TypeError, ValueError) as exc:
+            sys.exit(f"ERROR: {name}='{raw}' is not valid: {exc}")
+    if action.choices is not None and value not in action.choices:
+        allowed = ", ".join(str(choice) for choice in action.choices)
+        sys.exit(f"ERROR: {name} must be one of {allowed}, got '{raw}'.")
+    return value
+
+
+def apply_env_defaults(parser: argparse.ArgumentParser) -> None:
+    """Let every flag take its default from an environment variable.
+
+    The variable is the flag name in upper case with underscores, so
+    --number-of-servers is NUMBER_OF_SERVERS and --no-bloom is NO_BLOOM. Switch
+    flags take true or false. A flag on the command line still wins. The
+    --no-* switches that turn a setting off have no variable; set the setting
+    it turns off to false instead.
+    """
+    # argparse has no public call that lists the registered actions.
+    for action in parser._actions:
+        is_switch = action.nargs == 0
+        if action.dest == "help" or (is_switch and action.const is not True):
+            continue
+        name = _env_name(action)
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            parser.set_defaults(**{action.dest: _env_value(name, raw, action)})
+
+
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Deploy Neo4j Enterprise Edition CloudFormation stack for local testing.",
+        epilog="Every flag can also be set as an environment variable or in "
+               "neo4j-ee/.env. The name is the flag in upper case with "
+               "underscores: --number-of-servers is NUMBER_OF_SERVERS and "
+               "--no-bloom is NO_BLOOM=true. A flag wins over an environment "
+               "variable, and an environment variable wins over .env. "
+               "--expected-account reads EXPECTED_AWS_ACCOUNT.",
     )
     p.add_argument(
         "instance_type", nargs="?", default="t3.medium",
@@ -71,8 +143,41 @@ def parse_args():
         ),
     )
     p.add_argument("--region", dest="region_override", metavar="REGION")
+    p.add_argument(
+        "--expected-account", metavar="ACCOUNT_ID", default="",
+        help="12-digit AWS account id the credentials must resolve to; the "
+             "deploy stops on mismatch. Falls back to EXPECTED_AWS_ACCOUNT; "
+             "the flag wins. Unset means no check.",
+    )
     p.add_argument("--number-of-servers", type=int, default=3, choices=[1, 3])
     p.add_argument("--marketplace", action="store_true")
+    p.add_argument("--allow-old-marketplace-ami", action="store_true",
+                   help="With --marketplace: deploy even if the listing AMI "
+                        "predates the contents the bootstrap needs.")
+    p.add_argument("--cert-arn", metavar="ACM_ARN", default="",
+                   help="Existing ACM certificate ARN for the NLB TLS listeners. "
+                        "If omitted for Private/ExistingVpc (and not Public), a "
+                        "self-signed cert is auto-imported via scripts/certificate.py.")
+    p.add_argument("--advertised-dns", metavar="DNS_NAME", default="",
+                   help="DNS name placed in the cert SAN, the Neo4j advertised "
+                        "addresses, and (when --create-private-dns) the Route 53 "
+                        "record. Defaults to neo4j-<stack>.neo4j.local for the "
+                        "self-signed test path.")
+    p.add_argument("--enable-public-tls", action="store_true",
+                   help="Public mode only: enable TLS (requires --cert-arn and "
+                        "--advertised-dns). Without it, Public stays plain TCP.")
+    p.add_argument("--create-private-dns", action="store_true", default=None,
+                   help="Private/ExistingVpc: create a Route 53 private DNS "
+                        "record mapping AdvertisedDNS to the NLB.")
+    p.add_argument("--no-create-private-dns", dest="create_private_dns",
+                   action="store_false",
+                   help="Disable the Route 53 private DNS record (the default).")
+    p.add_argument("--private-dns-zone", metavar="ZONE_NAME", default="",
+                   help="Private hosted zone name to create when "
+                        "--create-private-dns is set and no hosted zone ID is given.")
+    p.add_argument("--private-dns-hosted-zone-id", metavar="ZONE_ID", default="",
+                   help="Existing Route 53 private hosted zone ID to receive the "
+                        "AdvertisedDNS alias record.")
     p.add_argument(
         "--marketplace-product-code",
         default=MARKETPLACE_PRODUCT_CODE,
@@ -81,29 +186,64 @@ def parse_args():
             f"the region-local AMI (default: {MARKETPLACE_PRODUCT_CODE})."
         ),
     )
-    p.add_argument("--tls", action="store_true")
     p.add_argument("--alert-email", metavar="EMAIL")
+    p.add_argument("--oidc-issuer-uri", metavar="URL", default="",
+                   help="OIDC issuer URL (sets OidcIssuerUri). Enables single "
+                        "sign-on next to password login. Default: off.")
+    p.add_argument("--oidc-client-id", metavar="IDS", default="",
+                   help="Comma-separated client IDs accepted as the ID token "
+                        "audience (sets OidcClientId).")
+    p.add_argument("--oidc-browser-client-id", metavar="ID", default="",
+                   help="Client ID that Browser and Bloom sign in with "
+                        "(sets OidcBrowserClientId). Must be in --oidc-client-id. "
+                        "Default: the first ID in --oidc-client-id.")
+    p.add_argument("--oidc-principal-claim", metavar="CLAIM", default="",
+                   help="ID token claim used as the Neo4j username "
+                        "(sets OidcPrincipalClaim). Default: sub.")
+    p.add_argument("--oidc-groups-claim", metavar="CLAIM", default="",
+                   help="ID token claim that lists groups (sets OidcGroupsClaim).")
+    p.add_argument("--oidc-admin-group", metavar="GROUP", default="",
+                   help="Group mapped to the Neo4j admin role (sets OidcAdminGroup).")
+    p.add_argument("--oidc-reader-group", metavar="GROUP", default="",
+                   help="Group mapped to the Neo4j reader role (sets OidcReaderGroup).")
     p.add_argument("--mode", default="Private", choices=["Public", "Private", "ExistingVpc"])
     p.add_argument("--allowed-cidr", metavar="CIDR")
     p.add_argument("--vpc-id", metavar="VPC_ID")
     p.add_argument("--subnet-1", metavar="SUBNET_ID")
     p.add_argument("--subnet-2", metavar="SUBNET_ID", default="")
     p.add_argument("--subnet-3", metavar="SUBNET_ID", default="")
-    p.add_argument("--create-vpc-endpoints", default="true", choices=["true", "false"])
+    p.add_argument("--private-route-table-1", metavar="RTB_ID", default="",
+                   help="Route table ID for PrivateSubnet1Id (required for ExistingVpc).")
+    p.add_argument("--create-vpc-endpoints", choices=["true", "false"])
     p.add_argument("--existing-endpoint-sg-id", metavar="SG_ID", default="")
     p.add_argument("--disk-size", type=int, metavar="GB", help="Data volume size in GB (default: 100, min: 100, max: 65536)")
     p.add_argument("--snapshot-id", metavar="SNAPSHOT_ID", help="Snapshot ID to restore Node 1 data volume from (must match --disk-size)")
+    p.add_argument("--no-bloom", action="store_true",
+                   help="Skip the Bloom plugin install (sets InstallBloom=false). Default: install Bloom.")
+    p.add_argument("--no-gds", action="store_true",
+                   help="Skip the GDS plugin install (sets InstallGDS=false). Default: install GDS.")
     p.add_argument(
         "--bloom-license-secret-id", metavar="SECRET",
-        help="Secrets Manager secret name or ARN holding the Bloom licence JWT. "
-             "When set, deploy.py installs the licence on each cluster node "
-             "post-deploy and restarts neo4j so Bloom enters Enterprise mode.",
+        help="Secrets Manager secret name or ARN holding the Bloom licence. "
+             "Resolved to an ARN and passed as BloomLicenseSecretArn; UserData "
+             "fetches and installs the licence on first boot and after instance "
+             "replacement. Required when Bloom is installed (default on); pass "
+             "--no-bloom to skip, or place a licence at .licenses/bloom.license "
+             "to auto-upload it.",
     )
     p.add_argument(
         "--gds-license-secret-id", metavar="SECRET",
         help="Secrets Manager secret name or ARN holding the GDS Enterprise licence. "
-             "When set, deploy.py installs the licence on each cluster node "
-             "post-deploy so GDS enters Enterprise mode (gds.isLicensed() returns true).",
+             "Resolved to an ARN and passed as GdsLicenseSecretArn; UserData "
+             "fetches and installs the licence on first boot and after instance "
+             "replacement. Required when GDS is installed (default on); pass "
+             "--no-gds to skip, or place a licence at .licenses/gds.license "
+             "to auto-upload it.",
+    )
+    p.add_argument(
+        "--no-local-licenses", action="store_true",
+        help="Do not auto-upload neo4j-ee/.licenses/*.license files when "
+             "matching --*-license-secret-id arguments are omitted.",
     )
     p.add_argument(
         "--vpc-file", metavar="PATH",
@@ -112,14 +252,15 @@ def parse_args():
              "Populates --vpc-id, --subnet-*, --allowed-cidr, --region, and --existing-endpoint-sg-id "
              "from the file; any of those flags override the file values when provided explicitly.",
     )
+    apply_env_defaults(p)
     return p.parse_args()
 
 
-def _resolve_vpc_file(explicit: str | None, deploy_dir: str) -> str | None:
+def _resolve_vpc_file(explicit: str | None, deploy_dir: Path) -> str | None:
     if explicit:
         return explicit
     vpc_files = sorted(
-        Path(deploy_dir).glob("vpc-*.txt"),
+        deploy_dir.glob("vpc-*.txt"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -127,282 +268,439 @@ def _resolve_vpc_file(explicit: str | None, deploy_dir: str) -> str | None:
 
 
 def _parse_vpc_file(path: str) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for line in Path(path).read_text().splitlines():
-        if "=" in line:
-            k, _, v = line.partition("=")
-            fields[k.strip()] = v.strip()
-    return fields
+    return parse_key_value_text(Path(path).read_text())
 
 
-def generate_password():
+def get_caller_identity(
+    region: str | None = None, client: Any = None
+) -> dict[str, str]:
+    """Fail fast with a clear message when credentials or the SSO session are bad.
+
+    botocore raises TokenRetrievalError deep into the run otherwise (e.g. at the
+    first cfn call). The profile comes from AWS_PROFILE, set at the top of main.
+    """
+    if client is None:
+        # A fixed fallback region keeps a profile without one from raising
+        # NoRegionError, which would be misreported as an expired session.
+        client = boto3.client("sts", region_name=region or "us-east-1")
+    try:
+        resp = client.get_caller_identity()
+    except (BotoCoreError, ClientError) as exc:
+        profile = os.environ.get("AWS_PROFILE", "default")
+        sys.exit(
+            f"ERROR: could not verify AWS credentials for profile '{profile}' "
+            f"({type(exc).__name__}). If the session expired, run: "
+            f"aws sso login --profile {profile}"
+        )
+    return {"Account": resp["Account"], "Arn": resp["Arn"]}
+
+
+def format_record(
+    output_lines: list[str],
+    extra: list[tuple[str, str]],
+    *,
+    secret_keys: tuple[str, ...] = (),
+    mask: str = "",
+) -> str:
+    """Render the deploy record text; secret_keys values are replaced by mask."""
+    lines = list(output_lines)
+    for key, value in extra:
+        shown = mask if key in secret_keys else value
+        lines.append(f"{key:<20} = {shown}")
+    return "\n".join(lines) + "\n"
+
+
+def write_record_file(path: Path, text: str) -> None:
+    """Write text to path with mode 0600, never exposing it at a wider mode."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        # os.open's mode only applies on creation; fix up a pre-existing file
+        # before any secret is written to it.
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            f.write(text)
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
+def generate_password() -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(16))
 
 
-def detect_public_ip():
+def verify_rendered_templates() -> None:
+    build_script = SCRIPT_DIR / "templates" / "build.py"
+    print("Verifying rendered CloudFormation templates...")
+    try:
+        subprocess.run([sys.executable, str(build_script), "--verify"], check=True)
+    except subprocess.CalledProcessError:
+        sys.exit(
+            "ERROR: rendered templates are out of sync with templates/src/. "
+            "Run neo4j-ee/templates/build.py and retry deploy."
+        )
+
+
+def detect_public_ip() -> str | None:
     try:
         with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=5) as r:
             return r.read().decode().strip()
-    except Exception:
+    except (urllib.error.URLError, OSError):
         return None
 
 
-def generate_tls_cert(nlb_dns):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
-    now = datetime.datetime.now(datetime.timezone.utc)
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "neo4j-bolt")])
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
-        .not_valid_after(now + datetime.timedelta(days=365))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName(nlb_dns)]),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
-    key_pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.TraditionalOpenSSL,
-        serialization.NoEncryption(),
-    ).decode()
-    return cert_pem, key_pem
+@dataclass(frozen=True)
+class TlsPlan:
+    """Resolved TLS/DNS decision for one deploy, derived without AWS calls.
 
-
-def resolve_marketplace_ami(region: str, product_code: str) -> dict:
-    ec2 = boto3.client("ec2", region_name=region)
-    images = ec2.describe_images(
-        Owners=["aws-marketplace"],
-        Filters=[
-            {"Name": "product-code", "Values": [product_code]},
-            {"Name": "state", "Values": ["available"]},
-        ],
-    )["Images"]
-    if not images:
-        sys.exit(
-            "ERROR: Could not find an available AWS Marketplace AMI for "
-            f"product code {product_code!r} in {region}. Confirm the account "
-            "is subscribed to the Marketplace listing and that the product is "
-            "available in the selected region."
-        )
-    return max(images, key=lambda img: img["CreationDate"])
-
-
-def install_licenses(stack_name, region, bloom_secret, gds_secret):
-    """Rolling SSM install of Bloom and/or GDS licence files onto each cluster
-    instance. Skipped if both args are empty. Attaches a stack-role inline
-    policy granting secretsmanager:GetSecretValue on the requested secret
-    ARNs; SSM Run Command on each instance fetches via the role and writes
-    the licence to /var/lib/neo4j/licenses/, then restarts neo4j and waits
-    for target-group health. Verifies via cypher-shell on the first node.
-
-    Assumes the install-bloom upstream change is in the template — i.e., the
-    UserData already copies the plugin JARs and writes dbms.bloom.license_file
-    / gds.enterprise.license_file into neo4j.conf.
+    ``needs_self_signed_import`` is True when the Private/ExistingVpc test path
+    must auto-import a self-signed ACM cert (no ``--cert-arn`` supplied). When
+    that import happens the resulting ARN is recorded as
+    ``AutoImportedCertificateArn`` so teardown deletes only deploy-created certs
+    and never a user-supplied one (see worklog/tls.md D5/D6).
     """
-    if not (bloom_secret or gds_secret):
+
+    mode: str
+    cert_arn: str
+    advertised_dns: str
+    enable_public_tls: bool
+    create_private_dns: bool
+    private_dns_zone: str
+    private_dns_hosted_zone_id: str
+    needs_self_signed_import: bool
+
+
+@dataclass(frozen=True)
+class ExistingVpcInputs:
+    vpc_id: str
+    subnet_1: str
+    private_route_table_1: str
+    subnet_2: str
+    subnet_3: str
+    create_vpc_endpoints: str
+    existing_endpoint_sg_id: str
+
+
+@dataclass(frozen=True)
+class OidcInputs:
+    issuer_uri: str = ""
+    client_id: str = ""
+    browser_client_id: str = ""
+    principal_claim: str = ""
+    groups_claim: str = ""
+    admin_group: str = ""
+    reader_group: str = ""
+
+    def cfn_values(self) -> dict[str, str]:
+        """Non-blank values keyed by template parameter name."""
+        values = {
+            "OidcIssuerUri": self.issuer_uri,
+            "OidcClientId": self.client_id,
+            "OidcBrowserClientId": self.browser_client_id,
+            "OidcPrincipalClaim": self.principal_claim,
+            "OidcGroupsClaim": self.groups_claim,
+            "OidcAdminGroup": self.admin_group,
+            "OidcReaderGroup": self.reader_group,
+        }
+        return {key: value for key, value in values.items() if value}
+
+
+def resolve_tls_plan(
+    *,
+    mode: str,
+    stack_name: str,
+    cert_arn: str,
+    advertised_dns: str,
+    enable_public_tls: bool,
+    create_private_dns: bool,
+    private_dns_zone: str,
+    private_dns_hosted_zone_id: str,
+) -> TlsPlan:
+    """Resolve the TLS plan and validate flag combinations (no AWS calls).
+
+    Raises ``ValueError`` for any invalid combination so callers fail before
+    uploading a template or creating a stack.
+    """
+    cert_arn = cert_arn or ""
+    advertised_dns = advertised_dns or ""
+    private_dns_zone = private_dns_zone or ""
+    private_dns_hosted_zone_id = private_dns_hosted_zone_id or ""
+
+    if mode == "Public":
+        # Public never creates the Route 53 private DNS resources.
+        if create_private_dns or private_dns_zone or private_dns_hosted_zone_id:
+            raise ValueError(
+                "Public mode does not create Route 53 private DNS. Drop "
+                "--create-private-dns / --private-dns-zone / "
+                "--private-dns-hosted-zone-id."
+            )
+        # Fail fast rather than silently shipping a plain-TCP public stack
+        # when the operator clearly intended TLS (item 8).
+        if (cert_arn or advertised_dns) and not enable_public_tls:
+            raise ValueError(
+                "Public mode ignores --cert-arn/--advertised-dns unless "
+                "--enable-public-tls is set. Add --enable-public-tls, or "
+                "drop the TLS inputs for a plain-TCP public stack."
+            )
+        if enable_public_tls and (not cert_arn or not advertised_dns):
+            raise ValueError(
+                "--enable-public-tls requires --cert-arn and --advertised-dns."
+            )
+        return TlsPlan(
+            mode=mode,
+            cert_arn=cert_arn,
+            advertised_dns=advertised_dns,
+            enable_public_tls=enable_public_tls,
+            create_private_dns=False,
+            private_dns_zone="",
+            private_dns_hosted_zone_id="",
+            needs_self_signed_import=False,
+        )
+
+    # Private / ExistingVpc: TLS is mandatory.
+    if create_private_dns and not (
+        private_dns_zone or private_dns_hosted_zone_id
+    ):
+        raise ValueError(
+            "--create-private-dns requires --private-dns-zone or "
+            "--private-dns-hosted-zone-id; the template cannot create a "
+            "useful hosted zone with an empty name."
+        )
+    if not advertised_dns:
+        advertised_dns = f"neo4j-{stack_name}.neo4j.local"
+    return TlsPlan(
+        mode=mode,
+        cert_arn=cert_arn,
+        advertised_dns=advertised_dns,
+        enable_public_tls=False,
+        create_private_dns=create_private_dns,
+        private_dns_zone=private_dns_zone,
+        private_dns_hosted_zone_id=private_dns_hosted_zone_id,
+        needs_self_signed_import=not cert_arn,
+    )
+
+
+def build_cfn_parameters(
+    *,
+    password: str,
+    number_of_servers: int,
+    instance_type: str,
+    allowed_cidr: str,
+    install_bloom: str,
+    install_gds: str,
+    bloom_license_secret_arn: str,
+    gds_license_secret_arn: str,
+    ssm_param_path: str | None,
+    alert_email: str | None,
+    disk_size: int | None,
+    snapshot_id: str | None,
+    mode: str,
+    existing_vpc: ExistingVpcInputs | None,
+    tls: TlsPlan,
+    oidc: OidcInputs | None = None,
+) -> list[dict[str, str]]:
+    """Build the CloudFormation parameter list (pure; no AWS calls).
+
+    ``tls.cert_arn`` must already be the final ARN: for the self-signed test
+    path the caller imports the cert and passes the resulting ARN in.
+    """
+    params: list[dict[str, str]] = [
+        {"ParameterKey": "Password", "ParameterValue": password},
+        {"ParameterKey": "NumberOfServers", "ParameterValue": str(number_of_servers)},
+        {"ParameterKey": "InstanceType", "ParameterValue": instance_type},
+        {"ParameterKey": "AllowedCIDR", "ParameterValue": allowed_cidr},
+        {"ParameterKey": "InstallGDS", "ParameterValue": install_gds},
+        {"ParameterKey": "InstallBloom", "ParameterValue": install_bloom},
+        {"ParameterKey": "BloomLicenseSecretArn", "ParameterValue": bloom_license_secret_arn},
+        {"ParameterKey": "GdsLicenseSecretArn", "ParameterValue": gds_license_secret_arn},
+    ]
+    if ssm_param_path:
+        params.append({"ParameterKey": "ImageId", "ParameterValue": ssm_param_path})
+    if alert_email:
+        params.append({"ParameterKey": "AlertEmail", "ParameterValue": alert_email})
+    if disk_size is not None:
+        params.append({"ParameterKey": "DataDiskSize", "ParameterValue": str(disk_size)})
+    if snapshot_id:
+        params.append({"ParameterKey": "Node1SnapshotId", "ParameterValue": snapshot_id})
+    if mode == "ExistingVpc":
+        if existing_vpc is None:
+            raise ValueError("ExistingVpc mode requires existing_vpc inputs.")
+        params += [
+            {"ParameterKey": "VpcId", "ParameterValue": existing_vpc.vpc_id},
+            {"ParameterKey": "PrivateSubnet1Id", "ParameterValue": existing_vpc.subnet_1},
+            {"ParameterKey": "PrivateRouteTable1Id",
+             "ParameterValue": existing_vpc.private_route_table_1},
+            {"ParameterKey": "PrivateSubnet2Id", "ParameterValue": existing_vpc.subnet_2},
+            {"ParameterKey": "PrivateSubnet3Id", "ParameterValue": existing_vpc.subnet_3},
+            {"ParameterKey": "CreateVpcEndpoints",
+             "ParameterValue": existing_vpc.create_vpc_endpoints},
+        ]
+        if existing_vpc.existing_endpoint_sg_id:
+            params.append({"ParameterKey": "ExistingEndpointSgId",
+                            "ParameterValue": existing_vpc.existing_endpoint_sg_id})
+
+    if mode == "Public":
+        if tls.enable_public_tls:
+            params += [
+                {"ParameterKey": "EnableTLS", "ParameterValue": "true"},
+                {"ParameterKey": "CertificateArn", "ParameterValue": tls.cert_arn},
+                {"ParameterKey": "AdvertisedDNS", "ParameterValue": tls.advertised_dns},
+            ]
+    else:
+        params += [
+            {"ParameterKey": "CertificateArn", "ParameterValue": tls.cert_arn},
+            {"ParameterKey": "AdvertisedDNS", "ParameterValue": tls.advertised_dns},
+            {"ParameterKey": "CreatePrivateDns",
+             "ParameterValue": "true" if tls.create_private_dns else "false"},
+            {"ParameterKey": "BoltTlsScheme",
+             "ParameterValue": "neo4j+ssc" if tls.needs_self_signed_import else "neo4j+s"},
+        ]
+        if tls.private_dns_zone:
+            params.append({"ParameterKey": "PrivateDnsZoneName",
+                            "ParameterValue": tls.private_dns_zone})
+        if tls.private_dns_hosted_zone_id:
+            params.append({"ParameterKey": "PrivateDnsHostedZoneId",
+                            "ParameterValue": tls.private_dns_hosted_zone_id})
+    if oidc is not None:
+        params += [
+            {"ParameterKey": key, "ParameterValue": value}
+            for key, value in oidc.cfn_values().items()
+        ]
+    return params
+
+
+def check_expected_account(actual: str, expected: str) -> None:
+    """Stop when the resolved AWS account is not the one the operator expects.
+
+    An empty `expected` disables the check. A non-empty value must be a
+    12-digit account id so a typo cannot silently weaken the guard.
+    """
+    expected = expected.strip()
+    if not expected:
         return
+    if not (len(expected) == 12 and expected.isdigit()):
+        raise SystemExit(
+            f"ERROR: --expected-account / EXPECTED_AWS_ACCOUNT must be a "
+            f"12-digit account id, got '{expected}'."
+        )
+    if actual.strip() != expected:
+        raise SystemExit(
+            f"ERROR: AWS account mismatch: credentials resolve to account "
+            f"{actual}, expected {expected}. Check AWS_PROFILE and re-run."
+        )
 
-    print()
-    print("--- Licence install phase ---")
-    cfn = boto3.client("cloudformation", region_name=region)
-    iam = boto3.client("iam", region_name=region)
-    ec2 = boto3.client("ec2", region_name=region)
-    ssm = boto3.client("ssm", region_name=region)
-    elbv2 = boto3.client("elbv2", region_name=region)
-    sm = boto3.client("secretsmanager", region_name=region)
 
-    # Resolve names to ARNs so the IAM policy can be tightly scoped.
-    bloom_arn = sm.describe_secret(SecretId=bloom_secret)["ARN"] if bloom_secret else None
-    gds_arn = sm.describe_secret(SecretId=gds_secret)["ARN"] if gds_secret else None
-    arns = [a for a in (bloom_arn, gds_arn) if a]
-
-    role_name = cfn.describe_stack_resource(
-        StackName=stack_name, LogicalResourceId="Neo4jRole"
-    )["StackResourceDetail"]["PhysicalResourceId"]
-    print(f"Attaching inline policy 'Neo4jLicenseSecretsRead' to {role_name}")
-    iam.put_role_policy(
-        RoleName=role_name,
-        PolicyName="Neo4jLicenseSecretsRead",
-        PolicyDocument=json.dumps({
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Sid": "ReadNeo4jLicenses",
-                "Effect": "Allow",
-                "Action": "secretsmanager:GetSecretValue",
-                "Resource": arns,
-            }],
-        }),
+def format_account_banner(account: str, arn: str, profile: str, region: str) -> str:
+    """Return the identity lines printed before any AWS resource is touched."""
+    return (
+        f"Account: {account}  Profile: {profile}  Region: {region}\n"
+        f"Caller:  {arn}"
     )
 
-    # Filter on Role=neo4j-cluster-node so bastion instances (created in --mode
-    # Private / ExistingVpc) are excluded — they use a different IAM role and
-    # the licence file isn't needed there.
-    reservations = ec2.describe_instances(
-        Filters=[
-            {"Name": "tag:aws:cloudformation:stack-name", "Values": [stack_name]},
-            {"Name": "tag:Role", "Values": ["neo4j-cluster-node"]},
-            {"Name": "instance-state-name", "Values": ["running"]},
-        ]
-    )["Reservations"]
-    instance_ids = sorted(
-        i["InstanceId"] for r in reservations for i in r["Instances"]
-    )
-    print(f"Cluster instances: {instance_ids}")
 
-    tg_http = cfn.describe_stack_resource(
-        StackName=stack_name, LogicalResourceId="Neo4jHTTPTargetGroup"
-    )["StackResourceDetail"]["PhysicalResourceId"]
+def write_partial_record(
+    deploy_dir: Path,
+    stack_name: str,
+    region: str,
+    mode: str,
+    ssm_param_path: str = "",
+    copied_ami_id: str = "",
+    license_secret_arns: list[str] | None = None,
+    auto_imported_cert_arn: str = "",
+    stack_id: str = "",
+) -> Path:
+    """Write .deploy/<stack>.failed with what teardown.sh needs, no secrets.
 
-    # _fetch_secret retries 6x over 60s to absorb IAM propagation between
-    # put-role-policy and STS evaluating the new permission on the instance.
-    cmds = [
-        "set -euo pipefail",
-        (
-            "_fetch_secret() { local arn=$1 dest=$2; for i in 1 2 3 4 5 6; do "
-            f"if aws secretsmanager get-secret-value --region {region} "
-            "--secret-id \"$arn\" --query SecretString --output text "
-            "2>/tmp/getval.err | tr -d '\\n' > \"$dest\" && test -s \"$dest\"; "
-            "then return 0; fi; echo \"  fetch $arn attempt $i: $(cat /tmp/getval.err)\"; "
-            "sleep 10; done; echo \"ERROR: could not fetch $arn after 6 attempts\"; "
-            "return 1; }"
-        ),
-        "mkdir -p /var/lib/neo4j/licenses",
+    The .failed suffix keeps operator tooling that picks the newest .txt from
+    treating an unfinished deploy as the latest stack. deploy.py removes it
+    once the normal .txt record is written; teardown.sh accepts it when no
+    .txt exists for the named stack.
+    """
+    fields = [
+        ("StackName", stack_name),
+        ("Region", region),
+        ("DeploymentMode", mode),
+        ("SSMParamPath", ssm_param_path),
+        ("CopiedAmiId", copied_ami_id),
+        ("AutoCreatedLicenseSecretArns", ",".join(license_secret_arns or [])),
+        ("AutoImportedCertificateArn", auto_imported_cert_arn),
+        ("StackID", stack_id),
     ]
-    if bloom_arn:
-        cmds += [
-            f"_fetch_secret '{bloom_arn}' /var/lib/neo4j/licenses/neo4j-bloom.license",
-            "chown neo4j:neo4j /var/lib/neo4j/licenses/neo4j-bloom.license",
-            "chmod 640 /var/lib/neo4j/licenses/neo4j-bloom.license",
-        ]
-    if gds_arn:
-        cmds += [
-            f"_fetch_secret '{gds_arn}' /var/lib/neo4j/licenses/neo4j-gds.license",
-            "chown neo4j:neo4j /var/lib/neo4j/licenses/neo4j-gds.license",
-            "chmod 640 /var/lib/neo4j/licenses/neo4j-gds.license",
-        ]
-    cmds += [
-        "systemctl restart neo4j",
-        ("for i in $(seq 1 60); do curl -sf http://localhost:7474/ -o /dev/null "
-         "&& break; sleep 5; done"),
-        "curl -sf http://localhost:7474/ -o /dev/null",
-    ]
-
-    for inst in instance_ids:
-        print(f"\n>> SSM licence install on {inst}")
-        cmd_id = ssm.send_command(
-            InstanceIds=[inst],
-            DocumentName="AWS-RunShellScript",
-            Parameters={"commands": cmds},
-            TimeoutSeconds=600,
-        )["Command"]["CommandId"]
-        _wait_ssm(ssm, cmd_id, inst)
-        _wait_tg_healthy(elbv2, tg_http, inst)
-
-    print("\n--- Verifying licences via cypher-shell on first node ---")
-    verify_cmds = [
-        "set -uo pipefail",
-        (
-            f"export NEO4J_PASSWORD=$(aws secretsmanager get-secret-value "
-            f"--region {region} --secret-id neo4j/{stack_name}/password "
-            f"--query SecretString --output text)"
-        ),
-    ]
-    if bloom_arn:
-        verify_cmds += [
-            "echo '--- bloom.checkLicenseCompliance ---'",
-            ("cypher-shell -a neo4j://localhost:7687 -u neo4j --format plain "
-             "--non-interactive 'CALL bloom.checkLicenseCompliance();'"),
-        ]
-    if gds_arn:
-        verify_cmds += [
-            "echo '--- gds.isLicensed ---'",
-            ("cypher-shell -a neo4j://localhost:7687 -u neo4j --format plain "
-             "--non-interactive 'RETURN gds.isLicensed() AS isLicensed;'"),
-            "echo '--- gds.debug.sysInfo gdsEdition ---'",
-            ("cypher-shell -a neo4j://localhost:7687 -u neo4j --format plain "
-             "--non-interactive \"CALL gds.debug.sysInfo() YIELD key, value "
-             "WHERE key = 'gdsEdition' RETURN key, value;\""),
-        ]
-    cmd_id = ssm.send_command(
-        InstanceIds=[instance_ids[0]],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": verify_cmds},
-        TimeoutSeconds=120,
-    )["Command"]["CommandId"]
-    _wait_ssm(ssm, cmd_id, instance_ids[0])
-    print(ssm.get_command_invocation(
-        CommandId=cmd_id, InstanceId=instance_ids[0],
-    )["StandardOutputContent"])
+    text = "".join(f"{k:<20} = {v}\n" for k, v in fields if v)
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+    path = deploy_dir / f"{stack_name}.failed"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    path.chmod(0o600)
+    return path
 
 
-def _wait_ssm(ssm, cmd_id, instance_id):
-    while True:
-        try:
-            inv = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
-        except ssm.exceptions.InvocationDoesNotExist:
-            # SSM SendCommand returns a CommandId synchronously, but the
-            # per-instance invocation record isn't created until the SSM agent
-            # picks the command up — usually a few seconds. Retry until it
-            # appears.
-            time.sleep(5)
-            continue
-        if inv["Status"] == "Success":
-            return
-        if inv["Status"] in ("Failed", "Cancelled", "TimedOut"):
-            print(inv["StandardOutputContent"])
-            print(inv["StandardErrorContent"], file=sys.stderr)
-            sys.exit(f"ERROR: SSM command {cmd_id} on {instance_id}: {inv['Status']}")
-        time.sleep(5)
-
-
-def _wait_tg_healthy(elbv2, tg_arn, instance_id, attempts=30, delay=10):
-    for _ in range(attempts):
-        targets = elbv2.describe_target_health(TargetGroupArn=tg_arn)["TargetHealthDescriptions"]
-        for t in targets:
-            if t["Target"]["Id"] == instance_id and t["TargetHealth"]["State"] == "healthy":
-                return
-        time.sleep(delay)
-    sys.exit(f"ERROR: {instance_id} did not reach healthy in target group")
-
-
-def main():
+def main() -> None:
+    # Stack creation takes minutes; flush each line so a redirect or tee shows progress.
+    sys.stdout.reconfigure(line_buffering=True)
+    from_env_file = load_env_file(ENV_FILE)
+    if from_env_file:
+        print(f"Loaded {', '.join(from_env_file)} from {ENV_FILE}")
+    if not os.environ.get("AWS_PROFILE"):
+        print("WARNING: AWS_PROFILE not set, using default", file=sys.stderr)
     os.environ.setdefault("AWS_PROFILE", "default")
     args = parse_args()
+    verify_rendered_templates()
+    identity = get_caller_identity(args.region_override or None)
+    print(
+        format_account_banner(
+            identity["Account"],
+            identity["Arn"],
+            os.environ["AWS_PROFILE"],
+            args.region_override or "(random supported region)",
+        )
+    )
+    check_expected_account(identity["Account"], args.expected_account)
 
-    if args.mode == "ExistingVpc" and not args.vpc_id:
-        deploy_dir = os.path.join(SCRIPT_DIR, ".deploy")
-        vpc_file_path = _resolve_vpc_file(args.vpc_file, deploy_dir)
-        if not vpc_file_path:
+    if args.mode == "ExistingVpc":
+        deploy_dir = SCRIPT_DIR / ".deploy"
+        vpc_file_path = (
+            _resolve_vpc_file(args.vpc_file, deploy_dir)
+            if args.vpc_file or not args.vpc_id
+            else None
+        )
+        if not vpc_file_path and not args.vpc_id:
             sys.exit(
                 "ERROR: --mode ExistingVpc requires --vpc-id and --subnet-1, "
                 "or a vpc-*.txt file from scripts/create-test-vpc.py in .deploy/"
             )
-        vpc_fields = _parse_vpc_file(vpc_file_path)
-        print(f"VPC config from: {os.path.basename(vpc_file_path)}")
-        args.vpc_id = vpc_fields.get("VpcId", "")
-        if not args.subnet_1:
-            args.subnet_1 = vpc_fields.get("Subnet1Id", "")
-        if not args.subnet_2:
-            args.subnet_2 = vpc_fields.get("Subnet2Id", "")
-        if not args.subnet_3:
-            args.subnet_3 = vpc_fields.get("Subnet3Id", "")
-        if not args.allowed_cidr:
-            args.allowed_cidr = vpc_fields.get("VpcCidr", "")
-        if not args.region_override:
-            args.region_override = vpc_fields.get("Region", "")
-        if not args.existing_endpoint_sg_id and "EndpointSgId" in vpc_fields:
-            args.existing_endpoint_sg_id = vpc_fields["EndpointSgId"]
+        if vpc_file_path:
+            vpc_fields = _parse_vpc_file(vpc_file_path)
+            print(f"VPC config from: {os.path.basename(vpc_file_path)}")
+            if not args.vpc_id:
+                args.vpc_id = vpc_fields.get("VpcId", "")
+            if not args.subnet_1:
+                args.subnet_1 = vpc_fields.get("Subnet1Id", "")
+            if not args.subnet_2:
+                args.subnet_2 = vpc_fields.get("Subnet2Id", "")
+            if not args.subnet_3:
+                args.subnet_3 = vpc_fields.get("Subnet3Id", "")
+            if not args.allowed_cidr:
+                args.allowed_cidr = vpc_fields.get("VpcCidr", "")
+            if not args.region_override:
+                args.region_override = vpc_fields.get("Region", "")
+            if not args.existing_endpoint_sg_id and "EndpointSgId" in vpc_fields:
+                args.existing_endpoint_sg_id = vpc_fields["EndpointSgId"]
+            if not args.private_route_table_1:
+                args.private_route_table_1 = vpc_fields.get("RouteTable1Id", "")
+            # When the VPC file declares pre-existing endpoints, default to reusing them.
+            if vpc_fields.get("WithEndpoints", "").lower() == "true" and args.create_vpc_endpoints is None:
+                args.create_vpc_endpoints = "false"
 
     if args.mode == "ExistingVpc":
+        if args.create_vpc_endpoints is None:
+            args.create_vpc_endpoints = "true"
         if not args.vpc_id or not args.subnet_1:
             sys.exit("ERROR: --mode ExistingVpc requires --vpc-id and --subnet-1 (--subnet-2 and --subnet-3 required for 3-node).")
+        if not args.private_route_table_1:
+            sys.exit("ERROR: --mode ExistingVpc requires --private-route-table-1 or a vpc-*.txt file with RouteTable1Id.")
         if args.number_of_servers == 3 and not (args.subnet_2 and args.subnet_3):
             sys.exit("ERROR: --mode ExistingVpc with 3 servers requires --subnet-2 and --subnet-3.")
         if args.create_vpc_endpoints == "false" and not args.existing_endpoint_sg_id:
@@ -424,11 +722,15 @@ def main():
     ts = int(time.time())
     stack_name = f"test-ee-{ts}"
     password = generate_password()
+    install_bloom = "false" if args.no_bloom else "true"
+    install_gds = "false" if args.no_gds else "true"
 
     cleanup_state = {
         "cfn_bucket": None,
         "copied_ami_id": None,
-        "tls_secret_arn": None,
+        "ssm_param_path": None,
+        "auto_imported_cert_arn": None,
+        "license_secret_arns": [],
     }
 
     def cleanup():
@@ -444,94 +746,135 @@ def main():
                 s3.delete_bucket(Bucket=bucket)
             except Exception as e:
                 print(f"  Warning: could not fully clean up S3 bucket {bucket}: {e}")
-        if cleanup_state["tls_secret_arn"]:
-            arn = cleanup_state["tls_secret_arn"]
-            print(f"\nCleaning up TLS secret {arn}...")
+        if cleanup_state["ssm_param_path"]:
+            path = cleanup_state["ssm_param_path"]
+            print(f"\nCleaning up SSM parameter {path}...")
+            try:
+                boto3.client("ssm", region_name=region).delete_parameter(Name=path)
+            except Exception as e:
+                print(f"  Warning: could not delete SSM parameter {path}: {e}")
+        if cleanup_state["auto_imported_cert_arn"]:
+            arn = cleanup_state["auto_imported_cert_arn"]
+            print(f"\nCleaning up auto-imported ACM certificate {arn}...")
+            try:
+                boto3.client("acm", region_name=region).delete_certificate(
+                    CertificateArn=arn
+                )
+            except Exception as e:
+                print(f"  Warning: could not delete ACM certificate "
+                      f"(it may still be in use by the stack): {e}")
+        for arn in cleanup_state["license_secret_arns"]:
+            print(f"\nCleaning up local licence secret {arn}...")
             try:
                 boto3.client("secretsmanager", region_name=region).delete_secret(
                     SecretId=arn, ForceDeleteWithoutRecovery=True
                 )
             except Exception as e:
-                print(f"  Warning: could not delete TLS secret: {e}")
+                print(f"  Warning: could not delete licence secret: {e}")
 
     atexit.register(cleanup)
 
-    ssm_param_path = ""
-    ami_id = ""
-    source_ami_id = ""
-    marketplace_product_code = args.marketplace_product_code if args.marketplace else ""
-    marketplace_ami_owner = ""
-    marketplace_ami_name = ""
-    ami_source = "marketplace"
-
-    if args.marketplace:
-        marketplace_image = resolve_marketplace_ami(region, marketplace_product_code)
-        ami_id = marketplace_image["ImageId"]
-        marketplace_ami_owner = marketplace_image.get("OwnerId", "")
-        marketplace_ami_name = marketplace_image.get("Name", "")
-        print(
-            "Resolved Marketplace AMI "
-            f"{ami_id} in {region} from product code {marketplace_product_code}."
-        )
-    else:
-        ami_source = "local"
-        ami_id_file = os.path.join(SCRIPT_DIR, "marketplace", "ami-id.txt")
-        if not os.path.exists(ami_id_file):
-            sys.exit(
-                f"ERROR: {ami_id_file} not found. Run marketplace/build.sh first,\n"
-                "       or use --marketplace to deploy from the live Marketplace listing."
-            )
-        source_ami_id = Path(ami_id_file).read_text().strip()
-        ec2 = boto3.client("ec2", region_name=region)
-
-        if region != SOURCE_REGION:
-            existing = ec2.describe_images(
-                Owners=["self"],
-                Filters=[{"Name": "description", "Values": [f"Copied from {source_ami_id} in {SOURCE_REGION}"]}],
-            )["Images"]
-            available = sorted(
-                [img for img in existing if img["State"] == "available"],
-                key=lambda img: img["CreationDate"], reverse=True,
-            )
-            pending = [img for img in existing if img["State"] == "pending"]
-            if available:
-                copied_ami_id = available[0]["ImageId"]
-                print(f"Reusing existing copied AMI {copied_ami_id} in {region}.")
-                cleanup_state["copied_ami_id"] = copied_ami_id
-            elif pending:
-                copied_ami_id = pending[0]["ImageId"]
-                print(f"Found in-progress AMI copy {copied_ami_id} in {region} — waiting for it to become available...")
-                ec2.get_waiter("image_available").wait(
-                    ImageIds=[copied_ami_id],
-                    WaiterConfig={"Delay": 30, "MaxAttempts": 60},
-                )
-                print(f"AMI available in {region}.")
-                cleanup_state["copied_ami_id"] = copied_ami_id
-            else:
-                print(f"Copying AMI {source_ami_id} from {SOURCE_REGION} to {region}...")
-                resp = ec2.copy_image(
-                    SourceRegion=SOURCE_REGION,
-                    SourceImageId=source_ami_id,
-                    Name=f"neo4j-ee-copy-{source_ami_id}",
-                    Description=f"Copied from {source_ami_id} in {SOURCE_REGION}",
-                )
-                copied_ami_id = resp["ImageId"]
-                cleanup_state["copied_ami_id"] = copied_ami_id
-                print(f"Copied AMI: {copied_ami_id} — waiting for it to become available...")
-                ec2.get_waiter("image_available").wait(
-                    ImageIds=[copied_ami_id],
-                    WaiterConfig={"Delay": 30, "MaxAttempts": 60},
-                )
-                print(f"AMI available in {region}.")
-            ami_id = copied_ami_id
-        else:
-            ami_id = source_ami_id
-
-    ssm_param_path = f"/neo4j-ee/test/{stack_name}/ami-id"
-    print(f"Creating SSM parameter {ssm_param_path} -> {ami_id}...")
-    boto3.client("ssm", region_name=region).put_parameter(
-        Name=ssm_param_path, Type="String", Value=ami_id, Overwrite=True,
+    ami_info = resolve_ami(
+        args,
+        region=region,
+        stack_name=stack_name,
+        script_dir=SCRIPT_DIR,
+        source_region=SOURCE_REGION,
     )
+    ami_id = ami_info.ami_id
+    source_ami_id = ami_info.source_ami_id
+    ami_source = ami_info.source
+    ssm_param_path = ami_info.ssm_param_path
+    marketplace_product_code = ami_info.marketplace_product_code
+    marketplace_ami_owner = ami_info.marketplace_ami_owner
+    marketplace_ami_name = ami_info.marketplace_ami_name
+    cleanup_state["copied_ami_id"] = ami_info.copied_ami_id
+    # Deleted on any exit before create_stack succeeds. Once the stack exists
+    # its launch templates resolve the AMI through this path, so it is kept.
+    cleanup_state["ssm_param_path"] = ssm_param_path
+
+    bloom_license_secret_arn, gds_license_secret_arn, created_license_secret_arns = (
+        resolve_license_secret_arns(args, region, stack_name, LOCAL_LICENSE_FILES)
+    )
+    cleanup_state["license_secret_arns"] = created_license_secret_arns
+
+    # Fail early: the template now requires matching license ARNs whenever a
+    # plugin is installed (enforced by AWS::CloudFormation::Rules and mirrored
+    # by UserData fail-fast guards). Surface the
+    # missing licence here before we create the stack so the operator gets a
+    # clean error instead of a CloudFormation rollback.
+    if install_bloom == "true" and not bloom_license_secret_arn:
+        sys.exit(
+            "ERROR: InstallBloom=true requires a Bloom licence. Provide one of:\n"
+            "  --bloom-license-secret-id <name|arn>  (existing Secrets Manager secret)\n"
+            "  place a licence at .licenses/bloom.license  (auto-uploaded)\n"
+            "  pass --no-bloom  (skip installing Bloom)"
+        )
+    if install_gds == "true" and not gds_license_secret_arn:
+        sys.exit(
+            "ERROR: InstallGDS=true requires a GDS licence. Provide one of:\n"
+            "  --gds-license-secret-id <name|arn>  (existing Secrets Manager secret)\n"
+            "  place a licence at .licenses/gds.license  (auto-uploaded)\n"
+            "  pass --no-gds  (skip installing GDS)"
+        )
+
+    # --- TLS resolution -----------------------------------------------------
+    # Single-phase: TLS parameters go into the initial create_stack call (no
+    # two-phase update). Private/ExistingVpc require TLS; Public is opt-in via
+    # --enable-public-tls. resolve_tls_plan validates the flag combination with
+    # no AWS calls (see worklog/tls.md, D5/D6).
+    try:
+        tls = resolve_tls_plan(
+            mode=args.mode,
+            stack_name=stack_name,
+            cert_arn=args.cert_arn,
+            advertised_dns=args.advertised_dns,
+            enable_public_tls=args.enable_public_tls,
+            create_private_dns=bool(args.create_private_dns),
+            private_dns_zone=args.private_dns_zone,
+            private_dns_hosted_zone_id=args.private_dns_hosted_zone_id,
+        )
+    except ValueError as e:
+        sys.exit(f"ERROR: {e}")
+
+    # When the operator supplied --cert-arn, verify the cert covers
+    # AdvertisedDNS before stack creation. The published Neo4jBoltUrl uses
+    # AdvertisedDNS as the host; a mismatched cert breaks every client.
+    if tls.cert_arn and tls.advertised_dns:
+        try:
+            certificate._verify_cert_matches_dns(
+                boto3.client("acm", region_name=region),
+                tls.cert_arn,
+                tls.advertised_dns,
+            )
+        except ValueError as e:
+            sys.exit(f"ERROR: {e}")
+        except ClientError as e:
+            sys.exit(
+                f"ERROR: ACM describe_certificate failed for {tls.cert_arn} "
+                f"in region {region}: {e}"
+            )
+
+    # For the default test path (Private/ExistingVpc, no --cert-arn) import a
+    # self-signed cert into ACM with SAN=AdvertisedDNS so tooling connects with
+    # neo4j+ssc://. The resulting ARN is the only cert teardown may delete.
+    # Test-only: +ssc skips certificate verification, so do not copy it into
+    # production clients.
+    if tls.needs_self_signed_import:
+        print(
+            f"No --cert-arn given; importing a self-signed ACM cert with "
+            f"SAN={tls.advertised_dns} (test path; clients use neo4j+ssc://)..."
+        )
+        acm = boto3.client("acm", region_name=region)
+        imported_arn = certificate._import_self_signed(acm, tls.advertised_dns)
+        cleanup_state["auto_imported_cert_arn"] = imported_arn
+        tls = replace(tls, cert_arn=imported_arn)
+        print(f"  Imported CertificateArn: {imported_arn}")
+
+    cert_arn = tls.cert_arn
+    advertised_dns = tls.advertised_dns
+    enable_public_tls = tls.enable_public_tls
+    create_private_dns = tls.create_private_dns
 
     print()
     print("=============================================")
@@ -543,8 +886,21 @@ def main():
     print(f"  Servers:        {args.number_of_servers}")
     print(f"  Mode:           {args.mode}")
     print(f"  AllowedCIDR:    {allowed_cidr}")
-    print(f"  TLS:            {args.tls}")
+    if args.mode == "Public":
+        print(f"  TLS:            {'enabled' if enable_public_tls else 'disabled (plain TCP)'}")
+    else:
+        print(f"  TLS:            mandatory")
+    if cert_arn:
+        print(f"  CertificateArn: {cert_arn}")
+    if advertised_dns:
+        print(f"  AdvertisedDNS:  {advertised_dns}")
+    if args.mode != "Public":
+        print(f"  PrivateDNS:     {'create' if create_private_dns else 'none'}")
     print(f"  AMI source:     {ami_source}")
+    print(f"  Install Bloom:  {install_bloom}")
+    print(f"  Install GDS:    {install_gds}")
+    print(f"  Bloom licence:  {'yes' if bloom_license_secret_arn else 'no'}")
+    print(f"  GDS licence:    {'yes' if gds_license_secret_arn else 'no'}")
     print(f"  AMI:            {ami_id}")
     if args.marketplace:
         print(f"  Product code:   {marketplace_product_code}")
@@ -556,165 +912,119 @@ def main():
         print(f"  AMI original:   {source_ami_id} (copied from {SOURCE_REGION})")
     if args.alert_email:
         print(f"  Alert email:    {args.alert_email}")
+    if args.oidc_issuer_uri:
+        print(f"  OIDC issuer:    {args.oidc_issuer_uri}")
     print("=============================================")
     print()
 
-    # Upload template to S3 (template exceeds 51,200-byte inline CFN limit)
-    account_id = boto3.client("sts", region_name=region).get_caller_identity()["Account"]
-    bucket_name = f"neo4j-ee-cfn-{account_id}-{region}-{ts}"
-    print(f"Uploading template to s3://{bucket_name}...")
-    s3 = boto3.client("s3", region_name=region)
-    if region == "us-east-1":
-        s3.create_bucket(Bucket=bucket_name)
-    else:
-        s3.create_bucket(
-            Bucket=bucket_name,
-            CreateBucketConfiguration={"LocationConstraint": region},
-        )
-    cleanup_state["cfn_bucket"] = bucket_name
     template_file = TEMPLATE_MAP[args.mode]
-    template_key = os.path.basename(template_file)
-    s3.upload_file(os.path.join(SCRIPT_DIR, template_file), bucket_name, template_key)
-    template_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{template_key}"
+    def _register_bucket(name: str) -> None:
+        cleanup_state["cfn_bucket"] = name
 
-    cfn_params = [
-        {"ParameterKey": "Password", "ParameterValue": password},
-        {"ParameterKey": "NumberOfServers", "ParameterValue": str(args.number_of_servers)},
-        {"ParameterKey": "InstanceType", "ParameterValue": instance_type},
-        {"ParameterKey": "AllowedCIDR", "ParameterValue": allowed_cidr},
-        {"ParameterKey": "InstallGDS", "ParameterValue": "true"},
-    ]
-    if ssm_param_path:
-        cfn_params.append({"ParameterKey": "ImageId", "ParameterValue": ssm_param_path})
-    if args.alert_email:
-        cfn_params.append({"ParameterKey": "AlertEmail", "ParameterValue": args.alert_email})
-    if args.disk_size is not None:
-        cfn_params.append({"ParameterKey": "DataDiskSize", "ParameterValue": str(args.disk_size)})
-    if args.snapshot_id:
-        cfn_params.append({"ParameterKey": "Node1SnapshotId", "ParameterValue": args.snapshot_id})
-    if args.mode == "ExistingVpc":
-        cfn_params += [
-            {"ParameterKey": "VpcId",            "ParameterValue": args.vpc_id},
-            {"ParameterKey": "PrivateSubnet1Id", "ParameterValue": args.subnet_1},
-            {"ParameterKey": "PrivateSubnet2Id", "ParameterValue": args.subnet_2},
-            {"ParameterKey": "PrivateSubnet3Id", "ParameterValue": args.subnet_3},
-            {"ParameterKey": "CreateVpcEndpoints", "ParameterValue": args.create_vpc_endpoints},
-        ]
-        if args.existing_endpoint_sg_id:
-            cfn_params.append({"ParameterKey": "ExistingEndpointSgId", "ParameterValue": args.existing_endpoint_sg_id})
+    bucket_name, template_url = upload_template_to_s3(
+        script_dir=SCRIPT_DIR,
+        template_file=template_file,
+        region=region,
+        timestamp=ts,
+        on_bucket_created=_register_bucket,
+    )
+
+    existing_vpc_inputs = (
+        ExistingVpcInputs(
+            vpc_id=args.vpc_id,
+            subnet_1=args.subnet_1,
+            private_route_table_1=args.private_route_table_1,
+            subnet_2=args.subnet_2,
+            subnet_3=args.subnet_3,
+            create_vpc_endpoints=args.create_vpc_endpoints,
+            existing_endpoint_sg_id=args.existing_endpoint_sg_id,
+        )
+        if args.mode == "ExistingVpc"
+        else None
+    )
+    oidc_inputs = OidcInputs(
+        issuer_uri=args.oidc_issuer_uri,
+        client_id=args.oidc_client_id,
+        browser_client_id=args.oidc_browser_client_id,
+        principal_claim=args.oidc_principal_claim,
+        groups_claim=args.oidc_groups_claim,
+        admin_group=args.oidc_admin_group,
+        reader_group=args.oidc_reader_group,
+    )
+    cfn_params = build_cfn_parameters(
+        password=password,
+        number_of_servers=args.number_of_servers,
+        instance_type=instance_type,
+        allowed_cidr=allowed_cidr,
+        install_bloom=install_bloom,
+        install_gds=install_gds,
+        bloom_license_secret_arn=bloom_license_secret_arn,
+        gds_license_secret_arn=gds_license_secret_arn,
+        ssm_param_path=ssm_param_path,
+        alert_email=args.alert_email,
+        disk_size=args.disk_size,
+        snapshot_id=args.snapshot_id,
+        mode=args.mode,
+        existing_vpc=existing_vpc_inputs,
+        tls=tls,
+        oidc=oidc_inputs,
+    )
 
     cfn = boto3.client("cloudformation", region_name=region)
-    print(f"Creating stack {stack_name}...")
-    cfn.create_stack(
-        StackName=stack_name,
-        TemplateURL=template_url,
-        Capabilities=["CAPABILITY_IAM"],
-        DisableRollback=True,
-        Parameters=cfn_params,
-    )
-    print("Waiting for stack to complete (this takes a few minutes)...")
-    cfn.get_waiter("stack_create_complete").wait(
-        StackName=stack_name,
-        WaiterConfig={"Delay": 15, "MaxAttempts": 120},
-    )
 
-    bolt_tls_secret_arn = ""
-    if args.tls:
-        print()
-        print("--- TLS Phase: generating self-signed cert and updating stack ---")
-
-        nlb_dns = boto3.client("ssm", region_name=region).get_parameter(
-            Name=f"/neo4j-ee/{stack_name}/nlb-dns"
-        )["Parameter"]["Value"]
-        print(f"NLB DNS: {nlb_dns}")
-
-        cert_pem, key_pem = generate_tls_cert(nlb_dns)
-        print(f"Self-signed cert generated (SAN: DNS:{nlb_dns})")
-
-        bolt_tls_secret_arn = boto3.client("secretsmanager", region_name=region).create_secret(
-            Name=f"neo4j-bolt-tls-{stack_name}",
-            SecretString=json.dumps({"certificate": cert_pem, "private_key": key_pem}),
-        )["ARN"]
-        cleanup_state["tls_secret_arn"] = bolt_tls_secret_arn
-        print(f"Secrets Manager secret created: {bolt_tls_secret_arn}")
-
-        lambda_dir = os.path.join(SCRIPT_DIR, "sample-private-app", "lambda")
-        ca_path = os.path.join(lambda_dir, "neo4j-ca.crt")
-        with open(ca_path, "w") as f:
-            f.write(cert_pem)
-        print(f"CA bundle staged at {ca_path}")
-
-        print("Updating stack with BoltCertificateSecretArn...")
-        existing_params = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]["Parameters"]
-        update_params = [
-            {"ParameterKey": p["ParameterKey"], "UsePreviousValue": True}
-            for p in existing_params
-            if p["ParameterKey"] != "BoltCertificateSecretArn"
-        ]
-        update_params.append({
-            "ParameterKey": "BoltCertificateSecretArn",
-            "ParameterValue": bolt_tls_secret_arn,
-        })
-        cfn.update_stack(
-            StackName=stack_name,
-            TemplateURL=template_url,
-            Capabilities=["CAPABILITY_IAM"],
-            Parameters=update_params,
+    def _write_failed_record(stack_id: str = "") -> None:
+        write_partial_record(
+            SCRIPT_DIR / ".deploy",
+            stack_name,
+            region,
+            args.mode,
+            ssm_param_path=ssm_param_path or "",
+            copied_ami_id=cleanup_state["copied_ami_id"] or "",
+            license_secret_arns=created_license_secret_arns,
+            auto_imported_cert_arn=cleanup_state["auto_imported_cert_arn"] or "",
+            stack_id=stack_id,
         )
-        print("Waiting for stack update to complete...")
-        cfn.get_waiter("stack_update_complete").wait(
-            StackName=stack_name,
-            WaiterConfig={"Delay": 15, "MaxAttempts": 120},
+
+    # Leave a teardown-able .failed record if the create fails or is
+    # interrupted. The record is rewritten with the StackId as soon as
+    # create_stack returns; the describe_stacks lookup below is a fallback
+    # for an interrupt before that response arrives.
+    def _on_stack_created(stack_id: str) -> None:
+        cleanup_state["ssm_param_path"] = None
+        _write_failed_record(stack_id)
+
+    _write_failed_record()
+    try:
+        create_stack_and_wait(
+            cfn,
+            stack_name,
+            template_url,
+            cfn_params,
+            on_stack_created=_on_stack_created,
         )
-        print("Stack updated.")
+    except (Exception, KeyboardInterrupt):
+        try:
+            stack_id = cfn.describe_stacks(StackName=stack_name)["Stacks"][0][
+                "StackId"
+            ]
+            _on_stack_created(stack_id)
+        except (ClientError, BotoCoreError):
+            # create_stack was rejected (no stack to record) or the session
+            # died during the wait; either way keep the original exception.
+            pass
+        raise
 
-        asg = boto3.client("autoscaling", region_name=region)
-        refresh_ids = {}
-        for i in range(1, args.number_of_servers + 1):
-            asg_name = cfn.describe_stack_resource(
-                StackName=stack_name,
-                LogicalResourceId=f"Neo4jNode{i}ASG",
-            )["StackResourceDetail"]["PhysicalResourceId"]
-            print(f"Starting instance refresh on ASG: {asg_name}")
-            refresh_id = asg.start_instance_refresh(
-                AutoScalingGroupName=asg_name,
-                Preferences={"MinHealthyPercentage": 0, "InstanceWarmup": 300},
-            )["InstanceRefreshId"]
-            print(f"Instance refresh started: {refresh_id}")
-            refresh_ids[asg_name] = refresh_id
-        print("Waiting for instance refresh to complete (EE 3-node: ~5-10 min)...")
-        _REFRESH_TERMINAL_FAIL = {"Failed", "Cancelled", "RollbackSuccessful", "RollbackFailed"}
-        while refresh_ids:
-            time.sleep(60)
-            for asg_name, refresh_id in list(refresh_ids.items()):
-                status = asg.describe_instance_refreshes(
-                    AutoScalingGroupName=asg_name,
-                    InstanceRefreshIds=[refresh_id],
-                )["InstanceRefreshes"][0]["Status"]
-                print(f"  {asg_name}: {status}")
-                if status == "Successful":
-                    print(f"Instance refresh complete for {asg_name}.")
-                    del refresh_ids[asg_name]
-                elif status in _REFRESH_TERMINAL_FAIL:
-                    sys.exit(f"ERROR: Instance refresh {status} for {asg_name}.")
+    # TLS is configured in the single create_stack call above (no two-phase
+    # update / instance refresh). An auto-imported self-signed cert is left in
+    # ACM for the stack's lifetime; teardown removes it (keyed off the recorded
+    # AutoImportedCertificateArn), and cleanup() deletes it on a failed deploy.
+    # Clear the failure-cleanup marker now that the stack created successfully.
+    auto_imported_cert_arn = cleanup_state["auto_imported_cert_arn"]
+    cleanup_state["auto_imported_cert_arn"] = None
 
-        cleanup_state["tls_secret_arn"] = None  # persist for teardown.sh
-
-        print()
-        print("TLS enabled on Bolt. To activate on the Lambda:")
-        print(f"  cd {SCRIPT_DIR}/sample-private-app && cdk deploy")
-        print("(neo4j-ca.crt is already staged in the lambda/ directory)")
-
-    install_licenses(
-        stack_name=stack_name,
-        region=region,
-        bloom_secret=args.bloom_license_secret_id,
-        gds_secret=args.gds_license_secret_id,
-    )
-
-    deploy_dir = os.path.join(SCRIPT_DIR, ".deploy")
-    os.makedirs(deploy_dir, exist_ok=True)
-    outputs_file = os.path.join(deploy_dir, f"{stack_name}.txt")
+    deploy_dir = SCRIPT_DIR / ".deploy"
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+    outputs_file = deploy_dir / f"{stack_name}.txt"
 
     print(f"Stack created. Writing outputs to {outputs_file}...")
     stack_data = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
@@ -733,10 +1043,17 @@ def main():
         ("DeploymentMode", args.mode),
         ("AmiSource", ami_source),
         ("InstallAPOC", "yes"),
-        ("InstallGDS", "true"),
+        ("InstallGDS", install_gds),
+        ("InstallBloom", install_bloom),
+        # The test runner uses this to gate check_bloom_plugin_loaded and the
+        # G3 conf-key audit's Bloom-only expectations. Derived from the
+        # InstallBloom CFN parameter so a deploy with --no-bloom does not
+        # incorrectly assert Bloom is present.
+        ("BloomExpected", "yes" if install_bloom == "true" else "no"),
     ]
     if args.alert_email:
         extra.append(("AlertEmail", args.alert_email))
+    extra.extend(oidc_inputs.cfn_values().items())
     if args.mode == "ExistingVpc":
         extra.append(("CreateVpcEndpoints", args.create_vpc_endpoints))
         if args.existing_endpoint_sg_id:
@@ -751,15 +1068,33 @@ def main():
         extra.append(("MarketplaceAmiOwner", marketplace_ami_owner))
     if cleanup_state["copied_ami_id"]:
         extra.extend([("CopiedAmiId", cleanup_state["copied_ami_id"]), ("SourceRegion", SOURCE_REGION)])
-    if bolt_tls_secret_arn:
-        extra.append(("BoltTlsSecretArn", bolt_tls_secret_arn))
+    # Recorded so the validate-private tooling resolves the +ssc Bolt scheme
+    # and the tunnels print the right AdvertisedDNS (see worklog/tls.md D5/D6).
+    if cert_arn:
+        extra.append(("CertificateArn", cert_arn))
+    if advertised_dns:
+        extra.append(("AdvertisedDNS", advertised_dns))
+    # Only set when deploy.py imported the self-signed cert itself. teardown.sh
+    # deletes exactly this ACM cert after stack deletion and never a
+    # user-supplied --cert-arn (see worklog/tls.md D5/D6).
+    if auto_imported_cert_arn:
+        extra.append(("AutoImportedCertificateArn", auto_imported_cert_arn))
+    # Recorded so test_neo4j can detect a licensed deploy and run the Bloom/GDS
+    # Enterprise-mode assertions; absent fields mean the plugin was not installed.
+    if bloom_license_secret_arn:
+        extra.append(("BloomLicenseSecretArn", bloom_license_secret_arn))
+    if gds_license_secret_arn:
+        extra.append(("GdsLicenseSecretArn", gds_license_secret_arn))
+    if created_license_secret_arns:
+        extra.append(("AutoCreatedLicenseSecretArns", ",".join(created_license_secret_arns)))
     extra.append(("StackID", stack_data["StackId"]))
 
-    lines += [f"{k:<20} = {v}" for k, v in extra]
-    output = "\n".join(lines) + "\n"
-    print(output, end="")
-    with open(outputs_file, "w") as f:
-        f.write(output)
+    # The password goes to the 0600 record file only, never to the terminal.
+    mask = f"<stored in {outputs_file}, mode 0600>"
+    print(format_record(lines, extra, secret_keys=("Password",), mask=mask), end="")
+    write_record_file(outputs_file, format_record(lines, extra))
+    cleanup_state["license_secret_arns"] = []
+    (deploy_dir / f"{stack_name}.failed").unlink(missing_ok=True)
 
     print()
     print(f"Outputs saved to {outputs_file}")

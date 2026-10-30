@@ -19,7 +19,7 @@
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -30,8 +30,10 @@
       VPCZoneIdentifier:
         - !Ref Neo4jPrivateSubnet1
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -57,7 +59,7 @@
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -68,8 +70,10 @@
       VPCZoneIdentifier:
         - !Ref Neo4jPrivateSubnet2
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -95,7 +99,7 @@
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -106,8 +110,10 @@
       VPCZoneIdentifier:
         - !Ref Neo4jPrivateSubnet3
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -127,6 +133,7 @@
 
   Neo4jLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
+    # __INIT_METADATA__
     Properties:
       LaunchTemplateData:
         ImageId: !Ref ImageId
@@ -151,4 +158,3 @@
           HttpTokens: required
           HttpEndpoint: enabled
         # __USERDATA__
-

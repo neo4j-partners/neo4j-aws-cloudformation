@@ -46,16 +46,44 @@
       LogGroupName: !Sub '/neo4j/${AWS::StackName}/application'
       RetentionInDays: 90
 
+  Neo4jAlertTopicKey:
+    Type: AWS::KMS::Key
+    Condition: HasAlertEmail
+    Properties:
+      Description: !Sub 'KMS key for Neo4j alert topic ${AWS::StackName}'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
+      KmsMasterKeyId: !Ref Neo4jAlertTopicKey
       Subscription:
-        Fn::If:
-          - HasAlertEmail
-          - - Protocol: email
-              Endpoint: !Ref AlertEmail
-          - !Ref AWS::NoValue
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
 
   Neo4jFailedAuthMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -70,6 +98,7 @@
 
   Neo4jFailedAuthAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
     Properties:
       AlarmName: !Sub 'Neo4j-FailedAuth-${AWS::StackName}'
       AlarmDescription: 'Neo4j authentication failures exceeded 10 in a 5-minute window'

@@ -10,9 +10,11 @@
 #   - A key pair is NOT required — there is no SSH step
 #
 # Usage:
-#   AWS_PROFILE=marketplace ./create-ami.sh
+#   AWS_PROFILE=marketplace ./create-ami.sh   # Marketplace account: marketplace mode
+#   ./create-ami.sh                            # any other account: iteration mode
 #
-# The AMI is a base OS image only (SSH hardening + OS patches).
+# The AMI is a base OS image with SSH hardening, OS patches, and static
+# deployment tooling pre-baked.
 # Neo4j Enterprise is installed at deploy time via the CloudFormation UserData
 # script, not baked into the AMI.
 
@@ -22,10 +24,16 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 REGION="us-east-1"
-AMI_NAME="neo4j-ee-base-$(date +%Y%m%d)"
+# Set AMI_NAME_SUFFIX to build a second AMI on the same day while the first is
+# still referenced by a launch template.
+AMI_NAME="neo4j-ee-base-$(date +%Y%m%d)${AMI_NAME_SUFFIX:+-${AMI_NAME_SUFFIX}}"
 INSTANCE_TYPE="t3.medium"
+MARKETPLACE_ACCOUNT_ID="385155106615"
 
-TAGS="ResourceType=instance,Tags=[{Key=Name,Value=neo4j-ee-ami-build},{Key=Purpose,Value=marketplace-ami-build}]"
+# AMI_BUILD_MODE defaults from the caller's account: 'marketplace' only in the
+# Marketplace account, 'iteration' everywhere else. The single hard guard is
+# that marketplace mode must run in the Marketplace account; iteration builds
+# just run. Mode and tags are resolved below, once the account is known.
 
 # ---------------------------------------------------------------------------
 # Preflight: verify we're in the correct AWS account
@@ -43,12 +51,47 @@ CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>&1) || {
 ACCOUNT_ID=$(echo "${CALLER_IDENTITY}" | grep -o '"Account": "[^"]*"' | cut -d'"' -f4)
 CALLER_ARN=$(echo "${CALLER_IDENTITY}" | grep -o '"Arn": "[^"]*"' | cut -d'"' -f4)
 
+if [ "${ACCOUNT_ID}" = "${MARKETPLACE_ACCOUNT_ID}" ]; then
+  AMI_BUILD_MODE="${AMI_BUILD_MODE:-marketplace}"
+else
+  AMI_BUILD_MODE="${AMI_BUILD_MODE:-iteration}"
+fi
+
+case "${AMI_BUILD_MODE}" in
+  marketplace|iteration)
+    ;;
+  *)
+    echo "ERROR: AMI_BUILD_MODE must be 'marketplace' or 'iteration'."
+    exit 1
+    ;;
+esac
+
+BUILD_PURPOSE="marketplace-ami-build"
+if [ "${AMI_BUILD_MODE}" = "iteration" ]; then
+  BUILD_PURPOSE="default-account-ami-iteration"
+fi
+
+TAGS="ResourceType=instance,Tags=[{Key=Name,Value=neo4j-ee-ami-build},{Key=Purpose,Value=${BUILD_PURPOSE}}]"
+
 echo "  Account:  ${ACCOUNT_ID}"
 echo "  Identity: ${CALLER_ARN}"
+echo "  Profile:  ${AWS_PROFILE:-default credential chain}"
 echo "  Region:   ${REGION} (overrides profile default)"
+echo "  Mode:     ${AMI_BUILD_MODE}"
 echo ""
 echo "AMI name:      ${AMI_NAME}"
 echo ""
+
+if [ "${AMI_BUILD_MODE}" = "marketplace" ] && [ "${ACCOUNT_ID}" != "${MARKETPLACE_ACCOUNT_ID}" ]; then
+  echo "ERROR: Marketplace mode must run in account ${MARKETPLACE_ACCOUNT_ID}."
+  echo "Omit AMI_BUILD_MODE to build an iteration AMI in this account instead."
+  exit 1
+fi
+
+if [ "${AMI_BUILD_MODE}" = "iteration" ]; then
+  echo "Iteration mode: writing the resulting AMI ID to marketplace/ami-id.txt."
+  echo ""
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1: Deregister any existing AMI with the same name
@@ -62,6 +105,24 @@ EXISTING_AMI=$(aws ec2 describe-images \
 
 if [ -n "${EXISTING_AMI}" ] && [ "${EXISTING_AMI}" != "None" ]; then
   echo "Found existing AMI with name '${AMI_NAME}': ${EXISTING_AMI}"
+
+  # Refuse to deregister the AMI if any launch template in this account still
+  # references it. Deregistering an in-use AMI orphans the launch template:
+  # ASGs cannot replace failed instances and resilience tests time out.
+  IN_USE_LT=$(aws ec2 describe-launch-template-versions \
+    --region "${REGION}" \
+    --filters "Name=image-id,Values=${EXISTING_AMI}" \
+    --query "LaunchTemplateVersions[].[LaunchTemplateId,VersionNumber]" \
+    --output text 2>/dev/null || true)
+
+  if [ -n "${IN_USE_LT}" ] && [ "${IN_USE_LT}" != "None" ]; then
+    echo "ERROR: AMI ${EXISTING_AMI} is still referenced by one or more launch templates:"
+    echo "${IN_USE_LT}"
+    echo ""
+    echo "Deregistering it would orphan the stacks using those launch templates."
+    echo "Tear down those stacks first, or build a new AMI name and update the deploy."
+    exit 1
+  fi
 
   SNAP_IDS=$(aws ec2 describe-images \
     --region "${REGION}" \
@@ -118,6 +179,38 @@ echo "=== Neo4j EE Base AMI Build (via UserData) ==="
 echo "Patching OS..."
 dnf update -y
 
+# --- Static deployment tooling ---
+# aws-cfn-bootstrap (cfn-init, cfn-signal) is installed explicitly, not assumed
+# from the AL2023 base, so a base-image change that drops or relocates the
+# helpers fails test-ami.sh at build time rather than a customer launch (NFR-10).
+# openssl is baked here, not dnf-installed at boot: it is OS-level, immutable,
+# and Neo4j-independent (Placement Decision Rule branch 3). configure-tls.sh
+# uses it to generate the per-instance self-signed cert, so a missing openssl
+# must fail at AMI build, not on the ASG self-heal path with no template fix.
+echo "Installing static deployment tooling..."
+dnf remove -y awscli-2 2>/dev/null || true
+dnf install -y unzip python3.11 jq openssl amazon-cloudwatch-agent aws-cfn-bootstrap
+
+ARCH="x86_64"
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp/
+/tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+rm -rf /tmp/awscliv2.zip /tmp/aws
+
+echo "Configuring Neo4j yum repository..."
+rpm --import https://debian.neo4j.com/neotechnology.gpg.key
+cat > /etc/yum.repos.d/neo4j.repo <<'NEO4JREPO'
+[neo4j]
+name=Neo4j RPM Repository
+baseurl=https://yum.neo4j.com/stable/latest
+enabled=1
+gpgcheck=1
+NEO4JREPO
+
+echo "Creating pinned neo4j system user..."
+getent group neo4j >/dev/null || groupadd -g 500 neo4j
+getent passwd neo4j >/dev/null || useradd -u 500 -g 500 -r -s /sbin/nologin -d /var/lib/neo4j neo4j
+
 # --- SSH Hardening ---
 sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -129,6 +222,7 @@ rm -f /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys
 
 # --- Clean up ---
 dnf clean all
+cloud-init clean --logs
 rm -rf /var/cache/dnf /tmp/* /var/tmp/*
 shred -u /root/.bash_history 2>/dev/null || rm -f /root/.bash_history
 
@@ -174,9 +268,33 @@ echo "Instance running. Build in progress (typically 3-5 minutes)..."
 echo "Waiting for instance to stop (build shuts down when done)..."
 echo ""
 
-aws ec2 wait instance-stopped \
-  --region "${REGION}" \
-  --instance-ids "${INSTANCE_ID}"
+# The build script only reaches shutdown when every step succeeded, because of
+# set -e. A failed step leaves the instance running, so a timeout here means the
+# bake failed. The builder has no IAM profile, so it cannot report why.
+BUILD_STOPPED=false
+for _ in $(seq 1 48); do
+  STATE=$(aws ec2 describe-instances \
+    --region "${REGION}" \
+    --instance-ids "${INSTANCE_ID}" \
+    --query "Reservations[0].Instances[0].State.Name" \
+    --output text)
+  if [ "${STATE}" = "stopped" ]; then
+    BUILD_STOPPED=true
+    break
+  fi
+  echo "  build instance is ${STATE}..."
+  sleep 15
+done
+
+if [ "${BUILD_STOPPED}" != "true" ]; then
+  echo "ERROR: Build instance ${INSTANCE_ID} did not stop within 12 minutes."
+  echo "A build step in the UserData script most likely failed."
+  echo "Terminating the build instance. No AMI was created."
+  aws ec2 terminate-instances \
+    --region "${REGION}" \
+    --instance-ids "${INSTANCE_ID}" > /dev/null
+  exit 1
+fi
 
 echo "Instance stopped. Build complete."
 
@@ -188,7 +306,7 @@ IMAGE_ID=$(aws ec2 create-image \
   --region "${REGION}" \
   --instance-id "${INSTANCE_ID}" \
   --name "${AMI_NAME}" \
-  --description "Neo4j EE base image on Amazon Linux 2023 (Neo4j installed at deploy time)" \
+  --description "Neo4j EE base image on Amazon Linux 2023 with OS patches, AWS CLI v2, CloudWatch agent, jq, Python 3.11, and Neo4j repo/user pre-baked; Neo4j installed at deploy time" \
   --query "ImageId" \
   --output text)
 
@@ -221,7 +339,8 @@ aws ec2 create-tags \
     Key=Neo4jEdition,Value="enterprise-base" \
     Key=BaseOS,Value="Amazon Linux 2023" \
     Key=IMDSv2,Value="v2.0-required" \
-    Key=Purpose,Value="marketplace-ami"
+    Key=Purpose,Value="${BUILD_PURPOSE}" \
+    Key=AmiBuildMode,Value="${AMI_BUILD_MODE}"
 
 # ---------------------------------------------------------------------------
 # Step 8: Save AMI ID for downstream scripts
@@ -248,13 +367,20 @@ echo "  AMI Name:      ${AMI_NAME}"
 echo "  Region:        ${REGION}"
 echo ""
 echo "Next steps:"
-echo "  1. Test the AMI:"
-echo "       AWS_PROFILE=marketplace ./marketplace/test-ami.sh"
-echo ""
-echo "  2. Run Marketplace AMI scan:"
-echo "       Marketplace Portal > Products > Server > Request changes"
-echo "       > Update versions > Test 'Add version'"
-echo ""
-echo "  3. Update the CFT ImageId parameter default with the product code"
-echo "       once the Marketplace listing is published."
+if [ "${AMI_BUILD_MODE}" = "marketplace" ]; then
+  echo "  1. Test the AMI:"
+  echo "       AWS_PROFILE=marketplace ./marketplace/test-ami.sh"
+  echo ""
+  echo "  2. Run Marketplace AMI scan:"
+  echo "       Marketplace Portal > Products > Server > Request changes"
+  echo "       > Update versions > Test 'Add version'"
+  echo ""
+  echo "  3. Update the CFT ImageId parameter default with the product code"
+  echo "       once the Marketplace listing is published."
+else
+  echo "  1. Inspect the AMI in the default account:"
+  echo "       AWS_PROFILE=default ./marketplace/test-ami.sh"
+  echo ""
+  echo "  2. Deploy default-account stacks against this AMI before Marketplace testing."
+fi
 echo "============================================="

@@ -1,17 +1,51 @@
-  Neo4jExternalSecurityGroup:
+  Neo4jNLBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Enable Neo4j External Ports
+      GroupDescription: Allow client traffic to Neo4j NLB on ports 7473 and 7687
       VpcId: !Ref Neo4jVPC
+      SecurityGroupEgress: []
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
+          FromPort: 7473
+          ToPort: 7473
           CidrIp: !Ref AllowedCIDR
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
           CidrIp: !Ref AllowedCIDR
+
+  Neo4jExternalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7473 and 7687
+      VpcId: !Ref Neo4jVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 7473
+          ToPort: 7473
+          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBrowser:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7473
+      ToPort: 7473
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBolt:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7687
+      ToPort: 7687
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
 
   Neo4jInternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -84,11 +118,11 @@
 
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
-  # A non-Neo4j-target t4g.nano used as the SSM Session Manager entry point
+  # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point
   # for operator port-forwarding to the internal NLB. It is deliberately NOT
   # registered in any NLB target group — that topology makes NAT-loopback
   # (hairpin) failures impossible for flows originating from the bastion, so
-  # operator tunnels to :7474/:7687 via the NLB always route to a different
+  # operator tunnels to :7473/:7687 via the NLB always route to a different
   # instance than the flow source. See README "Private mode networking" and
   # neo4j-ee/worklog/FIX_SSM_V7.md §9 for the full analysis.
   # ---------------------------------------------------------------------------
@@ -120,6 +154,7 @@
     Properties:
       GroupDescription: Allow HTTPS from Neo4j instances and operator bastion to VPC interface endpoints
       VpcId: !Ref Neo4jVPC
+      SecurityGroupEgress: []
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443

@@ -6,6 +6,17 @@
     - !Equals
       - !Ref AlertEmail
       - ''
-  BoltTLSEnabled: !Not [!Equals [!Ref BoltCertificateSecretArn, '']]
   HasDataVolumeCmk: !Not [!Equals [!Ref DataVolumeKmsKeyId, '']]
   HasNode1Snapshot: !Not [!Equals [!Ref Node1SnapshotId, '']]
+  CreatePrivateDns: !Equals [!Ref CreatePrivateDns, 'true']
+  UseExistingPrivateDnsHostedZone: !Not [!Equals [!Ref PrivateDnsHostedZoneId, '']]
+  CreatePrivateDnsHostedZone: !And
+    - !Equals [!Ref CreatePrivateDns, 'true']
+    - !Equals [!Ref PrivateDnsHostedZoneId, '']
+  BloomEnabledAndLicensed: !And
+    - !Equals [!Ref InstallBloom, 'true']
+    - !Not [!Equals [!Ref BloomLicenseSecretArn, '']]
+  GdsEnabledAndLicensed: !And
+    - !Equals [!Ref InstallGDS, 'true']
+    - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
+  IsSelfSignedTls: !Equals [!Ref BoltTlsScheme, 'neo4j+ssc']

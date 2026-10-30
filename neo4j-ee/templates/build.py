@@ -8,12 +8,23 @@ Usage:
 """
 
 import argparse
+from dataclasses import dataclass
 import difflib
+import re
 import sys
 from pathlib import Path
 
 SRC = Path(__file__).parent / "src"
 OUT = Path(__file__).parent
+PARTIALS = SRC / "partials"
+PARTIAL_INCLUDE_RE = re.compile(
+    r"^#\s*include\s+partials/([A-Za-z0-9_.-]+\.sh)\s*$",
+    re.MULTILINE,
+)
+BOOTSTRAP_SOURCE = "bootstrap/neo4j-bootstrap.sh"
+BASE_CONF_SOURCE = "neo4j-base.conf"
+BOOTSTRAP_DEST = "/opt/neo4j/bin/neo4j-bootstrap.sh"
+BASE_CONF_DEST = "/opt/neo4j/conf/neo4j-base.conf"
 
 GENERATED_HEADER = """\
 # GENERATED FILE — do not edit directly.
@@ -47,23 +58,170 @@ _PREAMBLE_COMMON = [
     '"installGDS="',
     "Ref: InstallGDS",
     '"\\n"',
+    '"installBloom="',
+    "Ref: InstallBloom",
+    '"\\n"',
+    '"bloomLicenseSecretArn="',
+    "Ref: BloomLicenseSecretArn",
+    '"\\n"',
+    '"gdsLicenseSecretArn="',
+    "Ref: GdsLicenseSecretArn",
+    '"\\n"',
 ]
 
-# Present in all three templates — Bolt over an internet-facing NLB must be
-# encryptable, so the public template carries TLS parameters too.
+# Present in all three templates. The instance only needs the advertised
+# hostname (for its self-signed cert advertised_address); the ACM certificate
+# is terminated at the NLB, so CertificateArn is never passed to the instance.
 _PREAMBLE_TLS = [
-    '"boltCertArn="',
-    "Ref: BoltCertificateSecretArn",
+    '"advertisedDNS="',
+    "Ref: AdvertisedDNS",
     '"\\n"',
-    '"boltAdvertisedDNS="',
-    "Ref: BoltAdvertisedDNS",
+]
+
+# Private and ExistingVpc only: Public has no private DNS, so boltAdvertiseDns
+# stays unset and configure_tls advertises the NLB DNS for Bolt. The value is
+# true only when AdvertisedDNS has an in-VPC record. Private builds a new VPC,
+# so a caller-supplied zone cannot already be associated with it: only a zone
+# the stack creates counts. ExistingVpc trusts CreatePrivateDns, because the
+# caller's zone can already be associated with the caller's VPC.
+_BOLT_ADVERTISE_DNS_PRIVATE = (
+    "Fn::If: [CreatePrivateDnsHostedZone, 'true', 'false']"
+)
+_BOLT_ADVERTISE_DNS_EXISTING_VPC = "Ref: CreatePrivateDns"
+
+
+# Present in all three templates. Each OIDC value is base64-encoded by
+# CloudFormation so the shell assignment is always [A-Za-z0-9+/=]*: a group
+# name with quotes, semicolons or spaces can never run as shell code.
+_PREAMBLE_OIDC = [
+    '"oidcIssuerUriB64="',
+    "Fn::Base64: {Ref: OidcIssuerUri}",
+    '"\\n"',
+    '"oidcClientIdB64="',
+    "Fn::Base64: {Ref: OidcClientId}",
+    '"\\n"',
+    '"oidcBrowserClientIdB64="',
+    "Fn::Base64: {Ref: OidcBrowserClientId}",
+    '"\\n"',
+    '"oidcPrincipalClaimB64="',
+    "Fn::Base64: {Ref: OidcPrincipalClaim}",
+    '"\\n"',
+    '"oidcGroupsClaimB64="',
+    "Fn::Base64: {Ref: OidcGroupsClaim}",
+    '"\\n"',
+    '"oidcAdminGroupB64="',
+    "Fn::Base64: {Ref: OidcAdminGroup}",
+    '"\\n"',
+    '"oidcReaderGroupB64="',
+    "Fn::Base64: {Ref: OidcReaderGroup}",
     '"\\n"',
 ]
 
 
-def _userdata_block(topology: str, base_indent: int = 8) -> str:
+class BuildError(RuntimeError):
+    """Raised when template source partials cannot be assembled."""
+
+
+@dataclass(frozen=True)
+class TemplateSpec:
+    filename: str
+    description: str
+    metadata_partial: str
+    parameter_partials: tuple[str, ...]
+    rule_partials: tuple[str, ...]
+    conditions_partial: str
+    resource_partials: tuple[str, ...]
+    userdata_resource_partial: str
+    outputs_partial: str
+    rules_blank_between_partials: bool = True
+    bolt_advertise_dns: str = ""
+
+
+def _read(filename: str) -> str:
+    try:
+        return (SRC / filename).read_text()
+    except FileNotFoundError as exc:
+        raise BuildError(f"source partial src/{filename} not found") from exc
+
+
+def _inline_partials(content: str, source_name: str) -> str:
+    """Inline UserData partial markers in shell source content."""
+
+    def replace(match: re.Match[str]) -> str:
+        partial_name = match.group(1)
+        partial_path = PARTIALS / partial_name
+        if not partial_path.exists():
+            raise BuildError(
+                f"{source_name} references missing partial {partial_path}"
+            )
+        return partial_path.read_text().rstrip("\n")
+
+    rendered = PARTIAL_INCLUDE_RE.sub(replace, content)
+    if PARTIAL_INCLUDE_RE.search(rendered):
+        raise BuildError(f"unresolved partial include marker remains in {source_name}")
+    return rendered
+
+
+def _literal_block_lines(content: str, indent: int) -> list[str]:
+    """Render content as YAML block-literal lines at the given indent.
+
+    Mirrors the UserData block-literal rule: non-empty lines are indented,
+    blank lines are emitted empty so they do not terminate the scalar.
+    """
+    pad = " " * indent
+    out: list[str] = []
+    for line in content.splitlines():
+        stripped = line.rstrip("\n\r")
+        out.append(f"{pad}{stripped}\n" if stripped else "\n")
+    return out
+
+
+def _metadata_block(base_indent: int = 4) -> str:
+    """Return the LaunchTemplate Metadata: AWS::CloudFormation::Init block.
+
+    Delivers the template-owned bootstrap and neo4j-base.conf as cfn-init
+    file resources. Content is embedded as plain YAML literal blocks, not
+    Fn::Sub, so the bytes are deterministic (NFR-6) and bash ${...} does
+    not collide with Fn::Sub ${} (AD-3).
+    """
+    bootstrap = _inline_partials(_read(BOOTSTRAP_SOURCE), BOOTSTRAP_SOURCE)
+    base_conf = _read(BASE_CONF_SOURCE)
+
+    p = " " * base_indent          # Metadata:
+    p2 = " " * (base_indent + 2)   # AWS::CloudFormation::Init:
+    p4 = " " * (base_indent + 4)   # config:
+    p6 = " " * (base_indent + 6)   # files:
+    p8 = " " * (base_indent + 8)   # /path:
+    p10 = " " * (base_indent + 10)  # mode/owner/group/content:
+    content_indent = base_indent + 12
+
+    result = [
+        f"{p}Metadata:\n",
+        f"{p2}AWS::CloudFormation::Init:\n",
+        f"{p4}config:\n",
+        f"{p6}files:\n",
+        f"{p8}{BOOTSTRAP_DEST}:\n",
+        f"{p10}mode: '000700'\n",
+        f"{p10}owner: root\n",
+        f"{p10}group: root\n",
+        f"{p10}content: |\n",
+    ]
+    result.extend(_literal_block_lines(bootstrap.rstrip("\n"), content_indent))
+    result.extend([
+        f"{p8}{BASE_CONF_DEST}:\n",
+        f"{p10}mode: '000644'\n",
+        f"{p10}owner: root\n",
+        f"{p10}group: root\n",
+        f"{p10}content: |\n",
+    ])
+    result.extend(_literal_block_lines(base_conf.rstrip("\n"), content_indent))
+    return "".join(result)
+
+
+def _userdata_block(spec: TemplateSpec, base_indent: int = 8) -> str:
     """Return the UserData: Fn::Base64: !Join [...] block as YAML text."""
-    sh_content = (SRC / f"userdata-{topology}.sh").read_text()
+    source_name = "userdata.sh"
+    sh_content = _inline_partials(_read(source_name), source_name)
 
     p = " " * base_indent         # UserData: level
     p2 = " " * (base_indent + 2)  # Fn::Base64: level
@@ -73,6 +231,9 @@ def _userdata_block(topology: str, base_indent: int = 8) -> str:
 
     items = _PREAMBLE_COMMON[:]
     items.extend(_PREAMBLE_TLS)
+    if spec.bolt_advertise_dns:
+        items.extend(['"boltAdvertiseDns="', spec.bolt_advertise_dns, '"\\n"'])
+    items.extend(_PREAMBLE_OIDC)
 
     result = [
         f"{p}UserData:\n",
@@ -96,203 +257,196 @@ def _userdata_block(topology: str, base_indent: int = 8) -> str:
     return "".join(result)
 
 
-def _read(filename: str) -> str:
-    return (SRC / filename).read_text()
+def _asg_with_userdata(filename: str, spec: TemplateSpec) -> str:
+    asg_content = _read(filename)
+    userdata_placeholder = "        # __USERDATA__\n"
+    metadata_placeholder = "    # __INIT_METADATA__\n"
+    if userdata_placeholder not in asg_content:
+        raise BuildError(f"# __USERDATA__ placeholder not found in src/{filename}")
+    if metadata_placeholder not in asg_content:
+        raise BuildError(
+            f"# __INIT_METADATA__ placeholder not found in src/{filename}"
+        )
+    asg_content = asg_content.replace(metadata_placeholder, _metadata_block())
+    return asg_content.replace(userdata_placeholder, _userdata_block(spec))
 
 
-def _assemble_private() -> str:
-    asg_content = _read("asg.yaml")
-    userdata = _userdata_block("private")
-    placeholder = "        # __USERDATA__\n"
-    if placeholder not in asg_content:
-        print("ERROR: # __USERDATA__ placeholder not found in src/asg.yaml", file=sys.stderr)
-        sys.exit(1)
-    asg_content = asg_content.replace(placeholder, userdata)
+def _append_partials(
+    parts: list[str],
+    filenames: tuple[str, ...],
+    *,
+    blank_between_partials: bool = True,
+) -> None:
+    for index, filename in enumerate(filenames):
+        parts.append(_read(filename))
+        if blank_between_partials or index == len(filenames) - 1:
+            parts.append("\n")
 
-    return "".join([
+
+def _resource_partial(filename: str, spec: TemplateSpec) -> str:
+    if filename == spec.userdata_resource_partial:
+        return _asg_with_userdata(filename, spec)
+    return _read(filename)
+
+
+def _append_resource_partials(parts: list[str], spec: TemplateSpec) -> None:
+    for filename in spec.resource_partials:
+        parts.append(_resource_partial(filename, spec))
+        parts.append("\n")
+
+
+def _assemble(spec: TemplateSpec) -> str:
+    parts = [
         GENERATED_HEADER,
         "AWSTemplateFormatVersion: '2010-09-09'\n",
-        "Description: Neo4j Enterprise Edition — Private\n",
+        f"Description: {spec.description}\n",
         "Metadata:\n",
-        _read("metadata-private.yaml"),
+        _read(spec.metadata_partial),
         "\n",
         "Parameters:\n",
-        _read("parameters-common.yaml"),
-        "\n",
-        _read("parameters-tls.yaml"),
-        "\n",
-        _read("parameters-private.yaml"),
-        "\n",
+    ]
+    _append_partials(parts, spec.parameter_partials)
+    parts.append("Rules:\n")
+    _append_partials(
+        parts,
+        spec.rule_partials,
+        blank_between_partials=spec.rules_blank_between_partials,
+    )
+    parts.extend([
         "Conditions:\n",
-        _read("conditions-private.yaml"),
+        _read(spec.conditions_partial),
         "\n",
         "Resources:\n",
-        _read("iam.yaml"),
-        "\n",
-        _read("security-groups.yaml"),
-        "\n",
-        _read("ebs-volumes.yaml"),
-        "\n",
-        asg_content,
-        "\n",
-        _read("networking-private.yaml"),
-        "\n",
-        _read("stack-config.yaml"),
-        "\n",
-        _read("observability.yaml"),
-        "\n",
-        "Outputs:\n",
-        _read("outputs-private.yaml"),
     ])
-
-
-def _assemble_public() -> str:
-    asg_content = _read("asg-public.yaml")
-    userdata = _userdata_block("public")
-    placeholder = "        # __USERDATA__\n"
-    if placeholder not in asg_content:
-        print("ERROR: # __USERDATA__ placeholder not found in src/asg-public.yaml", file=sys.stderr)
-        sys.exit(1)
-    asg_content = asg_content.replace(placeholder, userdata)
-
-    return "".join([
-        GENERATED_HEADER,
-        "AWSTemplateFormatVersion: '2010-09-09'\n",
-        "Description: Neo4j Enterprise Edition — Public\n",
-        "Metadata:\n",
-        _read("metadata-public.yaml"),
-        "\n",
-        "Parameters:\n",
-        _read("parameters-common.yaml"),
-        "\n",
-        _read("parameters-tls.yaml"),
-        "\n",
-        _read("parameters-public.yaml"),
-        "\n",
-        "Conditions:\n",
-        _read("conditions-public.yaml"),
-        "\n",
-        "Resources:\n",
-        _read("iam-public.yaml"),
-        "\n",
-        _read("security-groups-public.yaml"),
-        "\n",
-        _read("ebs-volumes.yaml"),
-        "\n",
-        asg_content,
-        "\n",
-        _read("networking-public.yaml"),
-        "\n",
-        _read("password-secret.yaml"),
-        "\n",
-        _read("observability.yaml"),
-        "\n",
+    _append_resource_partials(parts, spec)
+    parts.extend([
         "Outputs:\n",
-        _read("outputs-public.yaml"),
+        _read(spec.outputs_partial),
     ])
+    return "".join(parts)
 
 
-def _assemble_existing_vpc() -> str:
-    asg_content = _read("asg-existing-vpc.yaml")
-    userdata = _userdata_block("existing-vpc")
-    placeholder = "        # __USERDATA__\n"
-    if placeholder not in asg_content:
-        print("ERROR: # __USERDATA__ placeholder not found in src/asg-existing-vpc.yaml", file=sys.stderr)
-        sys.exit(1)
-    asg_content = asg_content.replace(placeholder, userdata)
+_PRIVATE_SPEC = TemplateSpec(
+    filename="neo4j-private.template.yaml",
+    description="Neo4j Enterprise Edition — Private",
+    metadata_partial="metadata-private.yaml",
+    parameter_partials=(
+        "parameters-common.yaml",
+        "parameters-tls.yaml",
+        "parameters-bolt-tls-scheme.yaml",
+        "parameters-private.yaml",
+        "parameters-oidc.yaml",
+    ),
+    rule_partials=("rules-common.yaml", "rules-tls-required.yaml", "rules-oidc.yaml"),
+    conditions_partial="conditions-private.yaml",
+    resource_partials=(
+        "iam.yaml",
+        "security-groups.yaml",
+        "ebs-volumes.yaml",
+        "asg.yaml",
+        "networking-private.yaml",
+        "stack-config.yaml",
+        "observability.yaml",
+    ),
+    userdata_resource_partial="asg.yaml",
+    outputs_partial="outputs-private.yaml",
+    bolt_advertise_dns=_BOLT_ADVERTISE_DNS_PRIVATE,
+)
 
-    return "".join([
-        GENERATED_HEADER,
-        "AWSTemplateFormatVersion: '2010-09-09'\n",
-        "Description: Neo4j Enterprise Edition — Private, Existing VPC\n",
-        "Metadata:\n",
-        _read("metadata-existing-vpc.yaml"),
-        "\n",
-        "Parameters:\n",
-        _read("parameters-common.yaml"),
-        "\n",
-        _read("parameters-tls.yaml"),
-        "\n",
-        _read("parameters-existing-vpc.yaml"),
-        "\n",
-        "Rules:\n",
-        _read("rules-existing-vpc.yaml"),
-        "\n",
-        "Conditions:\n",
-        _read("conditions-existing-vpc.yaml"),
-        "\n",
-        "Resources:\n",
-        _read("iam.yaml"),
-        "\n",
-        _read("security-groups-existing-vpc.yaml"),
-        "\n",
-        _read("ebs-volumes.yaml"),
-        "\n",
-        asg_content,
-        "\n",
-        _read("networking-existing-vpc.yaml"),
-        "\n",
-        _read("stack-config-existing-vpc.yaml"),
-        "\n",
-        _read("observability-existing-vpc.yaml"),
-        "\n",
-        "Outputs:\n",
-        _read("outputs-existing-vpc.yaml"),
-    ])
+_PUBLIC_SPEC = TemplateSpec(
+    filename="neo4j-public.template.yaml",
+    description="Neo4j Enterprise Edition — Public",
+    metadata_partial="metadata-public.yaml",
+    parameter_partials=(
+        "parameters-common.yaml",
+        "parameters-tls.yaml",
+        "parameters-public.yaml",
+        "parameters-oidc.yaml",
+    ),
+    rule_partials=("rules-common.yaml", "rules-public-tls.yaml", "rules-oidc.yaml"),
+    conditions_partial="conditions-public.yaml",
+    resource_partials=(
+        "iam-public.yaml",
+        "security-groups-public.yaml",
+        "ebs-volumes.yaml",
+        "asg-public.yaml",
+        "networking-public.yaml",
+        "stack-config-public.yaml",
+        "observability.yaml",
+    ),
+    userdata_resource_partial="asg-public.yaml",
+    outputs_partial="outputs-public.yaml",
+)
 
+_EXISTING_VPC_SPEC = TemplateSpec(
+    filename="neo4j-private-existing-vpc.template.yaml",
+    description="Neo4j Enterprise Edition — Private, Existing VPC",
+    metadata_partial="metadata-existing-vpc.yaml",
+    parameter_partials=(
+        "parameters-common.yaml",
+        "parameters-tls.yaml",
+        "parameters-bolt-tls-scheme.yaml",
+        "parameters-existing-vpc.yaml",
+        "parameters-oidc.yaml",
+    ),
+    rule_partials=(
+        "rules-common.yaml",
+        "rules-existing-vpc.yaml",
+        "rules-tls-required.yaml",
+        "rules-oidc.yaml",
+    ),
+    conditions_partial="conditions-existing-vpc.yaml",
+    resource_partials=(
+        "iam.yaml",
+        "security-groups-existing-vpc.yaml",
+        "ebs-volumes.yaml",
+        "asg-existing-vpc.yaml",
+        "networking-existing-vpc.yaml",
+        "stack-config-existing-vpc.yaml",
+        "observability-existing-vpc.yaml",
+    ),
+    userdata_resource_partial="asg-existing-vpc.yaml",
+    outputs_partial="outputs-existing-vpc.yaml",
+    rules_blank_between_partials=False,
+    bolt_advertise_dns=_BOLT_ADVERTISE_DNS_EXISTING_VPC,
+)
 
-def _diff_userdata_scripts() -> None:
-    """Print a diff of the three UserData scripts; runs on every build."""
-    scripts = {
-        "private": (SRC / "userdata-private.sh").read_text().splitlines(),
-        "public": (SRC / "userdata-public.sh").read_text().splitlines(),
-        "existing-vpc": (SRC / "userdata-existing-vpc.sh").read_text().splitlines(),
-    }
-    for a, b in [("private", "public"), ("private", "existing-vpc")]:
-        diff = list(difflib.unified_diff(
-            scripts[a], scripts[b],
-            fromfile=f"userdata-{a}.sh",
-            tofile=f"userdata-{b}.sh",
-            lineterm="",
-        ))
-        if diff:
-            print(f"\nUserData diff ({a} vs {b}):")
-            for line in diff[:60]:
-                print(line)
-            if len(diff) > 60:
-                print(f"  ... ({len(diff) - 60} more lines)")
-        else:
-            print(f"UserData: {a} and {b} are identical")
-
-
-_TEMPLATES = [
-    ("neo4j-private.template.yaml", _assemble_private),
-    ("neo4j-public.template.yaml", _assemble_public),
-    ("neo4j-private-existing-vpc.template.yaml", _assemble_existing_vpc),
+_TEMPLATE_SPECS = [
+    _PRIVATE_SPEC,
+    _PUBLIC_SPEC,
+    _EXISTING_VPC_SPEC,
 ]
 
 
+def _assemble_private() -> str:
+    return _assemble(_PRIVATE_SPEC)
+
+
+def _assemble_public() -> str:
+    return _assemble(_PUBLIC_SPEC)
+
+
+def _assemble_existing_vpc() -> str:
+    return _assemble(_EXISTING_VPC_SPEC)
+
+
 def _build() -> None:
-    for filename, assembler in _TEMPLATES:
-        out_path = OUT / filename
-        out_path.write_text(assembler())
+    for spec in _TEMPLATE_SPECS:
+        out_path = OUT / spec.filename
+        out_path.write_text(_assemble(spec))
         print(f"wrote {out_path.relative_to(OUT.parent)}")
 
-    print()
-    _diff_userdata_scripts()
 
-
-def _verify() -> None:
+def _verify() -> bool:
     failed = False
-    for filename, assembler in _TEMPLATES:
-        committed_path = OUT / filename
+    for spec in _TEMPLATE_SPECS:
+        committed_path = OUT / spec.filename
         if not committed_path.exists():
-            print(f"ERROR: {filename} not found; run build.py first", file=sys.stderr)
-            sys.exit(1)
-        generated = assembler()
+            raise BuildError(f"{spec.filename} not found; run build.py first")
+        generated = _assemble(spec)
         committed = committed_path.read_text()
         if generated == committed:
-            print(f"{filename} is up to date")
+            print(f"{spec.filename} is up to date")
             continue
         diff = list(difflib.unified_diff(
             committed.splitlines(),
@@ -301,14 +455,16 @@ def _verify() -> None:
             tofile="generated",
             lineterm="",
         ))
-        print(f"ERROR: {filename} is out of date. Run build.py to regenerate.", file=sys.stderr)
+        print(
+            f"ERROR: {spec.filename} is out of date. Run build.py to regenerate.",
+            file=sys.stderr,
+        )
         for line in diff[:80]:
             print(line, file=sys.stderr)
         if len(diff) > 80:
             print(f"  ... ({len(diff) - 80} more lines)", file=sys.stderr)
         failed = True
-    if failed:
-        sys.exit(1)
+    return not failed
 
 
 def main() -> None:
@@ -321,10 +477,15 @@ def main() -> None:
         help="exit non-zero if committed templates differ from a fresh build",
     )
     args = parser.parse_args()
-    if args.verify:
-        _verify()
-    else:
-        _build()
+    try:
+        if args.verify:
+            if not _verify():
+                sys.exit(1)
+        else:
+            _build()
+    except BuildError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

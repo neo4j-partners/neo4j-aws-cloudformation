@@ -1,17 +1,51 @@
-  Neo4jExternalSecurityGroup:
+  Neo4jNLBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Enable Neo4j External Ports
+      GroupDescription: Allow client traffic to Neo4j NLB on ports 7473 and 7687
       VpcId: !Ref VpcId
+      SecurityGroupEgress: []
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
+          FromPort: 7473
+          ToPort: 7473
           CidrIp: !Ref AllowedCIDR
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
           CidrIp: !Ref AllowedCIDR
+
+  Neo4jExternalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7473 and 7687
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 7473
+          ToPort: 7473
+          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBrowser:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7473
+      ToPort: 7473
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBolt:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7687
+      ToPort: 7687
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
 
   Neo4jInternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -101,6 +135,7 @@
     Properties:
       GroupDescription: Allow HTTPS from Neo4j instances and operator bastion to VPC interface endpoints
       VpcId: !Ref VpcId
+      SecurityGroupEgress: []
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -114,6 +149,16 @@
   ExistingEndpointSgBastionIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Condition: UseExistingVpcEndpoints
+    # ExistingEndpointSgId is an optional String param (Default '') because it
+    # only applies when reusing pre-existing VPC endpoints. cfn-lint resolves
+    # the empty default and emits W1030 even though this resource only exists
+    # under UseExistingVpcEndpoints, where the ExistingEndpointSgIdRequired
+    # Rule guarantees a real sg- value. Scope the suppression to this resource.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupId: !Ref ExistingEndpointSgId
       IpProtocol: tcp
@@ -124,6 +169,14 @@
   ExistingEndpointSgNeo4jIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Condition: UseExistingVpcEndpoints
+    # See ExistingEndpointSgBastionIngress: same optional-param W1030 case,
+    # guarded by Condition UseExistingVpcEndpoints and the
+    # ExistingEndpointSgIdRequired Rule.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupId: !Ref ExistingEndpointSgId
       IpProtocol: tcp

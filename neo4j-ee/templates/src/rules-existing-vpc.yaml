@@ -1,6 +1,18 @@
   ExistingEndpointSgIdRequired:
-    RuleCondition: !Equals [!Ref CreateVpcEndpoints, 'false']
     Assertions:
-      - Assert: !Not [!Equals [!Ref ExistingEndpointSgId, '']]
+      - Assert: !Or
+          - !Equals [!Ref CreateVpcEndpoints, 'true']
+          - !Not [!Equals [!Ref ExistingEndpointSgId, '']]
         AssertDescription: >-
           ExistingEndpointSgId must be provided when CreateVpcEndpoints is false.
+  ClusterSubnetsRequired:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref NumberOfServers, '1']
+          - !And
+              - !Not [!Equals [!Ref PrivateSubnet2Id, '']]
+              - !Not [!Equals [!Ref PrivateSubnet3Id, '']]
+        AssertDescription: >-
+          PrivateSubnet2Id and PrivateSubnet3Id must be provided when
+          NumberOfServers is not 1 (a 3-node cluster spreads one node per
+          subnet across the three private subnets).

@@ -6,8 +6,10 @@ dependencies = ["boto3>=1.34"]
 
 [project.scripts]
 validate-private = "validate_private.cli:main"
+preflight = "validate_private.preflight:main"
 run-cypher = "validate_private.run_cypher:main"
 admin-shell = "validate_private.admin_shell:main"
+ssm-check-sessions = "validate_private.ssm_sessions:main"
 
 [build-system]
 requires = ["hatchling"]

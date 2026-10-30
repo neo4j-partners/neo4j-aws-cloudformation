@@ -28,6 +28,7 @@ from neo4j import GraphDatabase
 
 stack = sys.argv[1]
 region = sys.argv[2]
+bolt_scheme = sys.argv[3]
 
 data = json.load(sys.stdin)
 cypher = data["cypher"]
@@ -38,13 +39,9 @@ sm = boto3.client("secretsmanager", region_name=region)
 password = sm.get_secret_value(SecretId=f"neo4j/{stack}/password")["SecretString"]
 
 ssm_client = boto3.client("ssm", region_name=region)
-nlb = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
+nlb_dns = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
 
-bolt_tls_cert_pem = data.get("bolt_tls_cert_pem") or ""
-if bolt_tls_cert_pem:
-    driver = GraphDatabase.driver(f"neo4j+ssc://{nlb}:7687", auth=("neo4j", password))
-else:
-    driver = GraphDatabase.driver(f"neo4j://{nlb}:7687", auth=("neo4j", password))
+driver = GraphDatabase.driver(f"{bolt_scheme}://{nlb_dns}:7687", auth=("neo4j", password))
 try:
     kwargs = {"parameters_": params}
     if database:
@@ -128,25 +125,17 @@ def run_cypher_on_bastion(
 
     b64_script = base64.b64encode(_BASTION_SCRIPT.encode()).decode()
 
-    bolt_tls_cert_pem = ""
-    if config.bolt_tls_secret_arn:
-        import boto3 as _boto3
-        sm_local = _boto3.Session(region_name=config.region).client("secretsmanager", config=_RETRY_CFG)
-        secret_str = sm_local.get_secret_value(SecretId=config.bolt_tls_secret_arn)["SecretString"]
-        bolt_tls_cert_pem = json.loads(secret_str)["certificate"]
-
     payload = json.dumps({
         "cypher": cypher,
         "params": params or {},
         "database": database,
-        "bolt_tls_cert_pem": bolt_tls_cert_pem,
     })
     b64_payload = base64.b64encode(payload.encode()).decode()
 
     command = (
         f"echo {b64_script} | base64 -d > /tmp/vprun.py && "
         f"echo {b64_payload} | base64 -d | python3.11 /tmp/vprun.py "
-        f"{config.stack_name} {config.region}"
+        f"{config.stack_name} {config.region} {config.bolt_scheme}"
     )
 
     ssm = boto3.Session(region_name=config.region).client("ssm", config=_RETRY_CFG)
@@ -162,7 +151,7 @@ def run_cypher_on_bastion(
         if code == "InvalidInstanceId":
             raise BastionCommandError(
                 f"Bastion {config.bastion_id} is not SSM-registered. "
-                "Run neo4j-ee/validate-private/scripts/preflight.sh to diagnose."
+                "Run uv run preflight from neo4j-ee/validate-private to diagnose."
             ) from exc
         raise
 

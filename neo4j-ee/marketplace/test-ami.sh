@@ -5,7 +5,8 @@
 # over SSM (no SSH key or port 22 required), reports pass/fail, and
 # cleans up.
 #
-# The EE AMI is a base OS image only (SSH hardening + OS patches).
+# The EE AMI is a base OS image with SSH hardening, OS patches, and static
+# deployment tooling pre-baked.
 # Neo4j Enterprise is installed at deploy time via CloudFormation UserData,
 # so this script only verifies the base image properties.
 #
@@ -211,7 +212,45 @@ COMMAND_ID=$(aws ssm send-command \
     "grep -i UseDNS /etc/ssh/sshd_config | head -5",
     "echo \"\"",
     "echo \"=== CHECK 4: OS identity ===\"",
-    "cat /etc/os-release 2>&1 | head -5 || echo FAIL: cannot read os-release"
+    "cat /etc/os-release 2>&1 | head -5 || echo FAIL: cannot read os-release",
+    "echo \"\"",
+    "echo \"=== CHECK 5: Running kernel ===\"",
+    "uname -r",
+    "echo \"\"",
+    "echo \"=== CHECK 5B: Installed kernel packages ===\"",
+    "rpm -q kernel 2>&1 || echo FAIL: kernel package not installed",
+    "rpm -q kernel-core 2>&1 || echo INFO: kernel-core package not installed separately",
+    "echo \"\"",
+    "echo \"=== CHECK 6: AWS CLI v2 installed at /usr/local/bin, distro awscli-2 package absent ===\"",
+    "aws --version 2>&1 || echo FAIL: aws command missing",
+    "test \"$(command -v aws)\" = /usr/local/bin/aws && echo PASS: aws resolves to /usr/local/bin/aws || echo FAIL: aws resolves to $(command -v aws)",
+    "rpm -q awscli-2 > /dev/null 2>&1 && echo FAIL: awscli-2 package present || echo PASS: awscli-2 package absent",
+    "echo \"\"",
+    "echo \"=== CHECK 7: Pre-baked tools ===\"",
+    "command -v jq && jq --version",
+    "command -v python3.11 && python3.11 --version",
+    "command -v unzip && unzip -v | head -1",
+    "test -x /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl && echo PASS: CloudWatch agent control binary present",
+    "test -d /opt/aws/amazon-cloudwatch-agent/etc && echo PASS: CloudWatch agent etc directory present",
+    "command -v openssl && echo PASS: openssl present",
+    "command -v find && command -v hostname && echo PASS: findutils and hostname present",
+    "echo \"\"",
+    "echo \"=== CHECK 8: Neo4j repo and system user ===\"",
+    "test -f /etc/yum.repos.d/neo4j.repo && echo PASS: Neo4j repo present",
+    "rpm -qa --qf \"%{SUMMARY}\\n\" gpg-pubkey* | grep -qi neo4j && echo PASS: Neo4j GPG key imported",
+    "getent passwd neo4j",
+    "getent group neo4j",
+    "echo \"\"",
+    "echo \"=== CHECK 9: Volume helper prerequisites ===\"",
+    "command -v lsblk && echo PASS: lsblk present",
+    "command -v mkfs.xfs && echo PASS: mkfs.xfs present",
+    "echo \"\"",
+    "echo \"=== CHECK 10: No Neo4j configuration or bootstrap baked in AMI ===\"",
+    "test ! -e /etc/neo4j/neo4j.conf && test ! -e /opt/neo4j/conf/neo4j-base.conf && test ! -e /opt/neo4j/bin/neo4j-bootstrap.sh && echo PASS: No Neo4j config on AMI || echo FAIL: Neo4j config present on AMI",
+    "echo \"\"",
+    "echo \"=== CHECK 11: cfn helpers resolve ===\"",
+    "command -v cfn-init && echo PASS: cfn-init resolves || echo FAIL: cfn-init does not resolve",
+    "command -v cfn-signal && echo PASS: cfn-signal resolves || echo FAIL: cfn-signal does not resolve"
   ]' \
   --query "Command.CommandId" \
   --output text)
@@ -291,6 +330,80 @@ else
   echo "  FAIL: OS does not appear to be Amazon Linux 2023"
   FAILURES=$((FAILURES + 1))
 fi
+
+KERNEL_VERSION=$(echo "${COMMAND_OUTPUT}" | awk '/^=== CHECK 5: Running kernel ===/{getline; print; exit}')
+KERNEL_MIN="6.1.168-203.330.amzn2023"
+if [ -n "${KERNEL_VERSION}" ] && [ "$(printf '%s\n%s\n' "${KERNEL_MIN}" "${KERNEL_VERSION}" | sort -V | head -1)" = "${KERNEL_MIN}" ]; then
+  echo "  PASS: Running kernel is ${KERNEL_VERSION}"
+else
+  echo "  FAIL: Running kernel '${KERNEL_VERSION}' is older than ${KERNEL_MIN}"
+  FAILURES=$((FAILURES + 1))
+fi
+
+if echo "${COMMAND_OUTPUT}" | grep -q "aws-cli/2"; then
+  echo "  PASS: AWS CLI v2 is installed"
+else
+  echo "  FAIL: AWS CLI v2 is missing"
+  FAILURES=$((FAILURES + 1))
+fi
+
+if echo "${COMMAND_OUTPUT}" | grep -q "PASS: aws resolves to /usr/local/bin/aws"; then
+  echo "  PASS: aws resolves to the AWS CLI v2 installer path"
+else
+  echo "  FAIL: aws does not resolve to /usr/local/bin/aws"
+  FAILURES=$((FAILURES + 1))
+fi
+
+if echo "${COMMAND_OUTPUT}" | grep -q "PASS: awscli-2 package absent"; then
+  echo "  PASS: distro awscli-2 package is absent"
+else
+  echo "  FAIL: distro awscli-2 package may still be present"
+  FAILURES=$((FAILURES + 1))
+fi
+
+for expected in \
+  "PASS: CloudWatch agent control binary present" \
+  "PASS: CloudWatch agent etc directory present" \
+  "PASS: openssl present" \
+  "PASS: findutils and hostname present" \
+  "PASS: Neo4j repo present" \
+  "PASS: Neo4j GPG key imported" \
+  "neo4j:x:500:500" \
+  "neo4j:x:500:" \
+  "PASS: lsblk present" \
+  "PASS: mkfs.xfs present"; do
+  if echo "${COMMAND_OUTPUT}" | grep -q "${expected}"; then
+    echo "  PASS: ${expected#PASS: }"
+  else
+    echo "  FAIL: Missing expected output '${expected}'"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
+
+if echo "${COMMAND_OUTPUT}" | grep -q "PASS: No Neo4j config on AMI"; then
+  echo "  PASS: No Neo4j configuration or bootstrap is baked into the AMI"
+else
+  echo "  FAIL: Neo4j config or bootstrap found on the AMI (NFR-3/AD-3 violation)"
+  FAILURES=$((FAILURES + 1))
+fi
+
+for helper in cfn-init cfn-signal; do
+  if echo "${COMMAND_OUTPUT}" | grep -q "PASS: ${helper} resolves"; then
+    echo "  PASS: ${helper} resolves on the AMI"
+  else
+    echo "  FAIL: ${helper} does not resolve on the AMI (NFR-10 violation)"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
+
+for tool in jq python3.11 unzip; do
+  if echo "${COMMAND_OUTPUT}" | grep -q "/${tool}"; then
+    echo "  PASS: ${tool} is installed"
+  else
+    echo "  FAIL: ${tool} is missing"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
 
 echo "============================================="
 echo ""

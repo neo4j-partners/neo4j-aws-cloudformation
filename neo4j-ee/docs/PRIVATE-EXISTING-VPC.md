@@ -1,10 +1,22 @@
 # Neo4j EE: Private, Existing VPC
 
-`neo4j-private-existing-vpc.template.yaml` deploys a Neo4j Enterprise cluster into a VPC you supply. The template creates the bastion, NLB, cluster ASGs, EBS volumes, security groups, and SSM contract. It does not create a VPC, subnets, or NAT Gateways. Use this topology when the cluster must live inside an existing network: peered VPC, Transit Gateway, shared services account, or a VPC provisioned by a separate infrastructure team.
+`neo4j-private-existing-vpc.template.yaml` deploys a Neo4j Enterprise cluster into a VPC you supply.
+
+- **What it deploys:** bastion, internal NLB, cluster ASGs, EBS volumes, security groups, SSM contract
+- **What it does not deploy:** VPC, subnets, internet gateway, NAT Gateways — outbound routing is the caller's responsibility
+- **You provide:** `VpcId` and `PrivateSubnet1Id/2Id/3Id` (one subnet per AZ for a 3-node cluster)
+- **When to use:** the cluster must live inside an existing network — peered VPC, Transit Gateway, shared services account, or a VPC managed by a separate infrastructure team
+
+> **Marketplace operator** (deployed from AWS Marketplace, running stack):
+> Start with [Prerequisites](#prerequisites) and the [Operator Guide](#operator-guide) below.
+>
+> **Template developer** (working on the templates, deploying from source):
+> Start with [Local Deployment and Testing](#local-deployment-and-testing).
+> The [Operator Guide](#operator-guide) applies once your stack is running.
 
 ## Contents
 
-- [General Operator Guide](#general-operator-guide)
+- [Operator Guide](#operator-guide)
   - [Prerequisites](#prerequisites)
   - [Access, Admin Tools, and Password](#access-admin-tools-and-password)
   - [Observability Checks](#observability-checks)
@@ -14,7 +26,6 @@
   - [VPC Interface Endpoint Design](#vpc-interface-endpoint-design)
   - [What the Caller's VPC Must Provide](#what-the-callers-vpc-must-provide)
   - [Platform Contract](#platform-contract)
-  - [Production DNS Alias (BoltAdvertisedDNS)](#production-dns-alias-boltadvertiseddns)
 - [Local Deployment and Testing](#local-deployment-and-testing)
   - [Build](#build)
   - [Deploy](#deploy)
@@ -25,7 +36,9 @@
 
 ---
 
-## General Operator Guide
+## Operator Guide
+
+Applies to any running ExistingVpc stack, whether deployed from the Marketplace or from source.
 
 ### Prerequisites
 
@@ -38,9 +51,27 @@
 
 **`AllowedCIDR`** defaults to `10.0.0.0/16`. Pass `--allowed-cidr` explicitly if your VPC uses a different CIDR.
 
+**Plugin licenses (optional)**
+
+Bloom and Graph Data Science are off by default in the Marketplace templates (`InstallBloom=false`, `InstallGDS=false`). The local `deploy.py` helper flips both defaults on for internal validation; this section describes the buyer-facing template contract. To enable either plugin at launch, first create a Secrets Manager secret holding the license file contents, then pass its ARN to the matching CFN parameter:
+
+```bash
+aws secretsmanager create-secret \
+  --name neo4j/bloom-license \
+  --secret-string file:///path/to/bloom.license \
+  --region <region>
+```
+
+Launch the stack with `InstallBloom=true` and `BloomLicenseSecretArn=<ARN returned above>`. The same pattern applies to GDS via `InstallGDS=true` with `GdsLicenseSecretArn`. The instance role is granted `secretsmanager:GetSecretValue` scoped to the specific ARN you supplied, and only when the matching `Install*=true` parameter is set; a default launch grants no Secrets Manager access for licenses.
+
+Failures are surfaced at two layers:
+
+- `AWS::CloudFormation::Rules` reject `InstallBloom=true` with an empty `BloomLicenseSecretArn` (and the same for GDS) at parameter validation, before any resource is created. Console, CLI, SDK, and Service Catalog stack create and update calls all go through this gate.
+- If the runtime fetch or plugin install fails on boot (unreachable secret, wrong region, empty or malformed payload, IAM denial, missing JAR in the AMI), UserData calls `cfn-signal --success false` so the stack moves to `CREATE_FAILED` within minutes instead of waiting out the ASG signal timeout.
+
 ### Access, Admin Tools, and Password
 
-Access via bastion and all operator tools (`preflight.sh`, `validate-private`, `admin-shell`, `run-cypher`, `smoke-write.sh`, `browser-tunnel.sh`, `bolt-tunnel.sh`) are identical to the Private template. See [the Operator Guide in PRIVATE.md](PRIVATE.md#general-operator-guide) from "Access via Bastion" onward.
+Bastion access and all operator tools (`uv run preflight`, `validate-private`, `admin-shell`, `run-cypher`, `uv run scripts/smoke-write.py`, `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`) are identical to the Private template. See [the Operator Guide in PRIVATE.md](PRIVATE.md#operator-guide) from "Access via Bastion" onward.
 
 ### Observability Checks
 
@@ -63,43 +94,38 @@ The template creates the following inside your VPC. It does **not** create: VPC,
 
 | AWS Resource | What it creates |
 |---|---|
-| Internal NLB | Listeners on port 7474 (HTTP) and 7687 (Bolt); deployed into the subnets you supply |
+| Internal NLB | TLS listeners on port 7473 (HTTPS Browser) and 7687 (Bolt); deployed into the subnets you supply |
 | EC2 instances | 1 or 3 Neo4j nodes in your private subnets; no public IPs |
 | ASG per node | One Auto Scaling Group per Neo4j node, fixed at `MinSize=MaxSize=DesiredCapacity=1`, for self-healing |
 | EBS data volumes | One GP3 volume per node with `DeletionPolicy: Retain`; survives stack deletion |
-| Operator bastion | `t4g.nano` in your private subnet, not registered as an NLB target; receives SSM sessions for operator access |
+| Operator bastion | `t4g.small` in your private subnet, not registered as an NLB target; receives SSM sessions for operator access |
 | VPC interface endpoints | `ssm`, `ssmmessages`, `logs`, `secretsmanager` with `PrivateDnsEnabled: true`; created when `CreateVpcEndpoints=true` (the default), skipped when `CreateVpcEndpoints=false` |
-| Security groups | External SG (AllowedCIDR on 7474/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
+| Security groups | NLB SG (AllowedCIDR on 7473/7687 to the NLB); External SG (NLB SG as source on 7473/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
 | SSM parameters | `/neo4j-ee/<stack>/` prefix; publishes VPC ID, NLB DNS, security group IDs, and secret ARN |
 | Secrets Manager | Neo4j admin password at `neo4j/<stack>/password` |
 | CloudWatch | Log group, VPC flow logs, failed-auth alarm, CloudTrail trail |
 
 ### Relationship to the Private Template
 
-This template is structurally identical to `neo4j-private.template.yaml`: same operator bastion, same internal NLB, same cluster ASGs, same SSM platform contract. The only difference is that it does not provision any VPC or networking infrastructure. It accepts `VpcId` and `PrivateSubnet1Id/2Id/3Id` and deploys entirely into the caller-supplied network.
+Structurally identical to `neo4j-private.template.yaml`: same operator bastion, same internal NLB, same cluster ASGs, same SSM platform contract. The only difference is that this template does not provision any VPC or networking infrastructure — it accepts `VpcId` and `PrivateSubnet1Id/2Id/3Id` and deploys into the caller-supplied network.
 
-The NLB hairpin fix (non-target bastion plus `preserve_client_ip.enabled=false`) applies here exactly as in the Private template. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin) for the root cause and two-layer fix.
-
-The password security model (alphanumeric-only `AllowedPattern`, Secrets Manager retrieval at boot, no UserData embedding) is identical to the Private template. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model).
+- **NLB hairpin fix** (non-target bastion + `preserve_client_ip.enabled=false`) — applies identically. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin)
+- **Password security model** (alphanumeric-only `AllowedPattern`, Secrets Manager retrieval at boot, no UserData embedding) — identical. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model)
+- **Bolt advertised address:** This part differs from the Private template. With `CreatePrivateDns=true`, Bolt advertises `AdvertisedDNS` whether the stack creates the hosted zone or you pass one in `PrivateDnsHostedZoneId`. A zone you pass must already be associated with `VpcId`. See [NLB Routing in PRIVATE.md](PRIVATE.md#nlb-routing).
 
 ### VPC Interface Endpoint Design
 
-Two parameters control endpoint creation:
+**`CreateVpcEndpoints` parameter** (default `true`)
 
-**`CreateVpcEndpoints` (default `true`)**
-When `true`, the template creates all four interface endpoints and a dedicated endpoint security group. When `false`, the caller supplies an existing endpoint SG via `ExistingEndpointSgId`. A CloudFormation `Rules` block enforces that `ExistingEndpointSgId` is non-empty when `CreateVpcEndpoints=false`. The deployment fails at parameter validation if it is missing.
-
-Enterprise VPCs typically have a single shared endpoint SG covering all four interface endpoints. Creating duplicate endpoints in a VPC that already has them fails the deployment. This flag prevents that.
-
-**Why a single `CreateVpcEndpoints` flag, not per-service flags**
-
-The original design used two flags (`CreateSSMEndpoint` + `CreateSecretsManagerEndpoint`). That produced four possible states, two of which are half-managed: endpoints split between the template's SG and the customer's SG. A single `vpc-endpoint-sg-id` SSM contract parameter cannot correctly represent both groups. Customers who have pre-existing endpoints virtually always have a shared SG covering all four. The single flag matches the real-world case cleanly.
+- **`true` — Path A:** template creates endpoints for `ssm`, `ssmmessages`, `logs`, and `secretsmanager` plus a dedicated endpoint security group
+- **`false` — Path B:** caller supplies an existing endpoint SG via `ExistingEndpointSgId`. A CloudFormation `Rules` block enforces this — deployment fails at parameter validation if missing
+- **Why one flag, not per-service:** enterprise VPCs that have endpoints virtually always have a single shared SG covering all five. Per-service flags produce half-managed states that the single `vpc-endpoint-sg-id` SSM contract parameter cannot represent
 
 **Endpoint security group ingress**
 
-Both paths publish a `vpc-endpoint-sg-id` SSM parameter pointing to the correct, functional endpoint SG: the template-created one (Path A) or the caller-supplied one (Path B). Applications follow the same contract in both cases — add their own security group to this SG's ingress on port 443 to reach the endpoints.
-
-The instance and bastion SGs are wired into the endpoint SG at deploy time. In Path B, the template adds `AWS::EC2::SecurityGroupIngress` rules into the pre-existing endpoint SG; stack deletion removes those rules automatically.
+- Both paths publish `vpc-endpoint-sg-id` to SSM, pointing at the functional endpoint SG (template-created in Path A, caller-supplied in Path B)
+- Applications follow the same contract in both cases: add their SG to this SG's ingress on port 443
+- Instance and bastion SGs are wired into the endpoint SG at deploy time. In Path B, the template adds `AWS::EC2::SecurityGroupIngress` rules into the pre-existing SG and removes them on stack deletion
 
 ### What the Caller's VPC Must Provide
 
@@ -109,25 +135,15 @@ The instance and bastion SGs are wired into the endpoint SG at deploy time. In P
 | One subnet per AZ for a 3-node cluster | Each Neo4j node and its bastion are placed in the subnet passed via `PrivateSubnet1/2/3Id` |
 | No duplicate interface endpoints | If `CreateVpcEndpoints=true`, the VPC must not already have `ssm`, `ssmmessages`, `logs`, or `secretsmanager` endpoints; use `CreateVpcEndpoints=false` if it does |
 | Matching CIDR in `AllowedCIDR` | Defaults to `10.0.0.0/16`; pass `--allowed-cidr` if your VPC uses a different range |
+| A hosted zone you pass is associated with the VPC | Applies with `CreatePrivateDns=true` and `PrivateDnsHostedZoneId`. Bolt advertises `AdvertisedDNS`, so the name must resolve inside the VPC. A zone the stack creates is associated for you |
 
 ### Platform Contract
 
 Identical to the Private template. See [Platform Contract in PRIVATE.md](PRIVATE.md#platform-contract) for the full SSM parameter reference.
 
-### Production DNS Alias (BoltAdvertisedDNS)
-
-In production, use a stable customer-owned DNS name in front of the NLB so that certificates are not pinned to the AWS-generated NLB DNS:
-
-1. Create a Route 53 private hosted zone with an A-record alias pointing to the internal NLB, or configure external DNS pointing to the NLB.
-2. Obtain a certificate for that name.
-3. Push the cert and key to Secrets Manager in the JSON format described in [Bolt TLS in PRIVATE.md](PRIVATE.md#bolt-tls).
-4. Set the `BoltAdvertisedDNS` and `BoltCertificateSecretArn` CloudFormation parameters when creating or updating the stack. Pass them via the AWS CloudFormation console or `aws cloudformation create-stack --parameters`.
-
-`server.bolt.advertised_address`, the cert SAN, and the client connect URL will all resolve to the custom DNS name. Certificate rotation does not require reissuing against a changing NLB DNS: update the Secrets Manager secret value and trigger an ASG instance refresh.
-
----
-
 ## Local Deployment and Testing
+
+See [LOCAL-TESTING.md](LOCAL-TESTING.md) for AMI selection, the self-signed certificate, and the private DNS options. This section covers the Existing VPC specifics.
 
 ### Build
 
@@ -142,37 +158,52 @@ Commit both the edited partial and the regenerated `neo4j-private-existing-vpc.t
 
 ### Deploy
 
-Pass the VPC and subnet IDs at deploy time:
+Pass the VPC, subnet, and route table IDs at deploy time. `--private-route-table-1` is required, and a three-node cluster also needs `--subnet-2` and `--subnet-3`:
 
 ```bash
 cd neo4j-ee
 
-# 1-node
+# 1-node memory-optimized instance in us-east-2
 ./deploy.py --mode ExistingVpc \
   --number-of-servers 1 \
-  --vpc-id vpc-xxxx \
-  --subnet-1 subnet-xxxx
+  --region us-east-2 \
+  --vpc-id vpc-0123456789abcdef0 \
+  --subnet-1 subnet-0123456789abcdef0 \
+  --private-route-table-1 rtb-0123456789abcdef0 \
+  r8i.xlarge
 
 # 3-node (three subnets required, one per AZ)
 ./deploy.py --mode ExistingVpc \
-  --vpc-id vpc-xxxx \
-  --subnet-1 subnet-a \
-  --subnet-2 subnet-b \
-  --subnet-3 subnet-c
+  --vpc-id vpc-0123456789abcdef0 \
+  --subnet-1 subnet-11111111111111111 \
+  --subnet-2 subnet-22222222222222222 \
+  --subnet-3 subnet-33333333333333333 \
+  --private-route-table-1 rtb-0123456789abcdef0
 
 # With Marketplace AMI
 ./deploy.py --marketplace --mode ExistingVpc \
-  --vpc-id vpc-xxxx \
-  --subnet-1 subnet-xxxx
+  --vpc-id vpc-0123456789abcdef0 \
+  --subnet-1 subnet-0123456789abcdef0 \
+  --private-route-table-1 rtb-0123456789abcdef0
 
 # VPC already has interface endpoints; skip endpoint creation
 ./deploy.py --mode ExistingVpc \
-  --vpc-id vpc-xxxx --subnet-1 subnet-xxxx \
+  --vpc-id vpc-0123456789abcdef0 --subnet-1 subnet-0123456789abcdef0 \
+  --private-route-table-1 rtb-0123456789abcdef0 \
   --create-vpc-endpoints false \
-  --existing-endpoint-sg-id sg-xxxx
+  --existing-endpoint-sg-id sg-0123456789abcdef0
 ```
 
 The deploy script writes outputs to `.deploy/<stack-name>.txt`. Stack creation takes 10-20 minutes (includes AMI copy if the region differs from the source AMI region; pin `--region` to the source region to skip the copy).
+
+For a deeper local check after template edits, run:
+
+```bash
+python3 templates/build.py --verify
+python3 -m py_compile deploy.py
+```
+
+`cfn-lint templates/neo4j-private-existing-vpc.template.yaml` is also useful, but the current template emits known `W1030` warnings for optional blank ExistingVpc parameters. Treat any other warnings or errors as failures.
 
 ### Create a Test VPC
 
@@ -185,7 +216,8 @@ scripts/create-test-vpc.py --region us-east-1
 
 # Path B: VPC already has endpoints
 scripts/create-test-vpc.py --region us-east-1 --with-endpoints
-./deploy.py --mode ExistingVpc --number-of-servers 1 --create-vpc-endpoints false
+./deploy.py --mode ExistingVpc --number-of-servers 1 \
+  --create-vpc-endpoints false
 
 # Select a specific VPC file when multiple exist
 ./deploy.py --mode ExistingVpc --vpc-file .deploy/vpc-<ts>.txt
@@ -213,9 +245,9 @@ scripts/create-test-vpc.py --region us-east-1
 ./deploy.py --mode ExistingVpc --number-of-servers 3
 STACK=$(ls -t .deploy/test-ee-*.txt | head -1 | xargs basename | sed 's/\.txt$//')
 
-# 3. Preflight (11 checks: stack, bastion, endpoints)
+# 3. Preflight (12 checks: stack, bastion, endpoints)
 cd validate-private
-./scripts/preflight.sh "$STACK"
+uv run preflight "$STACK"
 
 # 4. Basic cluster validation (8 checks)
 uv run validate-private --stack "$STACK"
@@ -238,12 +270,13 @@ cd neo4j-ee
 scripts/create-test-vpc.py --region us-east-1 --with-endpoints
 
 # 2. Deploy 1-node cluster (auto-detects VPC file and reads EndpointSgId)
-./deploy.py --mode ExistingVpc --number-of-servers 1 --create-vpc-endpoints false
+./deploy.py --mode ExistingVpc --number-of-servers 1 \
+  --create-vpc-endpoints false
 STACK=$(ls -t .deploy/test-ee-*.txt | head -1 | xargs basename | sed 's/\.txt$//')
 
 # 3. Preflight: endpoint reachability confirms the wiring the template added
 cd validate-private
-./scripts/preflight.sh "$STACK"
+uv run preflight "$STACK"
 
 # 4. Basic cluster validation (cluster roles: 1 writer for 1-node is PASS)
 uv run validate-private --stack "$STACK"

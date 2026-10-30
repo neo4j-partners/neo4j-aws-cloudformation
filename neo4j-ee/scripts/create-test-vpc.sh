@@ -4,8 +4,9 @@
 # Usage:
 #   scripts/create-test-vpc.sh --region <region> [--with-endpoints]
 #
-# --with-endpoints: also creates ssm, ssmmessages, logs, secretsmanager interface
-#   endpoints in the private subnets with a shared endpoint security group.
+# --with-endpoints: also creates ssm, ssmmessages, logs, secretsmanager
+#   interface endpoints in the private subnets with a shared
+#   endpoint security group.
 #   Required for Path B (CreateVpcEndpoints=false) testing.
 #
 # Writes .deploy/vpc-<ts>.txt with all resource IDs for use by teardown-test-vpc.sh.

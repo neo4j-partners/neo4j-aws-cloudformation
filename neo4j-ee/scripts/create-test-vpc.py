@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEPLOY_DIR = SCRIPT_DIR.parent / ".deploy"
@@ -27,6 +28,74 @@ def parse_args():
              "with a shared endpoint SG. Required for Path B (CreateVpcEndpoints=false) testing.",
     )
     return p.parse_args()
+
+
+def _create_each(items, create, delete, undo, label):
+    """Create one resource per item, registering an undo as each one exists."""
+    ids = []
+    for item in items:
+        resource_id = create(item)
+        undo.append((f"{label} {resource_id}", lambda r=resource_id: delete(r)))
+        ids.append(resource_id)
+    return ids
+
+
+def _delete_endpoints(ec2, vpc_id: str) -> None:
+    endpoints = ec2.describe_vpc_endpoints(
+        Filters=[
+            {"Name": "vpc-id", "Values": [vpc_id]},
+            {"Name": "vpc-endpoint-state", "Values": ["available", "pending"]},
+        ]
+    )["VpcEndpoints"]
+    if not endpoints:
+        return
+    ec2.delete_vpc_endpoints(
+        VpcEndpointIds=[ep["VpcEndpointId"] for ep in endpoints]
+    )
+    for _ in range(30):
+        remaining = ec2.describe_vpc_endpoints(
+            Filters=[
+                {"Name": "vpc-id", "Values": [vpc_id]},
+                {
+                    "Name": "vpc-endpoint-state",
+                    "Values": ["deleting", "available", "pending"],
+                },
+            ]
+        )["VpcEndpoints"]
+        if not remaining:
+            return
+        time.sleep(10)
+
+
+def _delete_security_group(ec2, group_id: str) -> None:
+    # Endpoint ENIs can linger after the endpoints report deleted.
+    for _ in range(12):
+        try:
+            ec2.delete_security_group(GroupId=group_id)
+            return
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "DependencyViolation":
+                raise
+            time.sleep(10)
+    raise RuntimeError(f"security group {group_id} still has dependencies")
+
+
+def _wait_nat_gateways_deleted(ec2, nat_ids: list[str]) -> None:
+    if nat_ids:
+        ec2.get_waiter("nat_gateway_deleted").wait(
+            NatGatewayIds=nat_ids,
+            WaiterConfig={"Delay": 15, "MaxAttempts": 20},
+        )
+
+
+def _rollback(undo) -> None:
+    print("ERROR: VPC creation failed. Rolling back the resources created so far...")
+    while undo:
+        label, action = undo.pop()
+        try:
+            action()
+        except Exception as e:
+            print(f"  Warning: could not delete {label}: {e}")
 
 
 def main():
@@ -53,33 +122,55 @@ def main():
         raise SystemExit(f"ERROR: need at least 3 available AZs in {region}, found {len(azs)}")
     print(f"  AZs: {' '.join(azs)}")
 
+    # LIFO list of (label, delete callable) for everything created so far.
+    undo = []
+    try:
+        _create_vpc(ec2, args, region, ts, azs, output_file, undo)
+    except (Exception, KeyboardInterrupt):
+        _rollback(undo)
+        raise
+
+
+def _create_vpc(ec2, args, region, ts, azs, output_file, undo) -> None:
     # VPC
     vpc_id = ec2.create_vpc(CidrBlock=VPC_CIDR)["Vpc"]["VpcId"]
+    undo.append((f"VPC {vpc_id}", lambda: ec2.delete_vpc(VpcId=vpc_id)))
     ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsSupport={"Value": True})
     ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsHostnames={"Value": True})
     print(f"  VPC: {vpc_id}")
 
     # Internet Gateway
     igw_id = ec2.create_internet_gateway()["InternetGateway"]["InternetGatewayId"]
+    undo.append(
+        (f"IGW {igw_id}", lambda: ec2.delete_internet_gateway(InternetGatewayId=igw_id))
+    )
     ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
+    undo.append((
+        f"IGW attachment {igw_id}",
+        lambda: ec2.detach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id),
+    ))
     print(f"  IGW: {igw_id}")
 
     # Private subnets (10.42.0–2.0/24)
-    private_subnets = [
-        ec2.create_subnet(
-            VpcId=vpc_id, CidrBlock=f"10.42.{i}.0/24", AvailabilityZone=az,
-        )["Subnet"]["SubnetId"]
-        for i, az in enumerate(azs)
-    ]
+    private_subnets = _create_each(
+        [(f"10.42.{i}.0/24", az) for i, az in enumerate(azs)],
+        lambda ca: ec2.create_subnet(
+            VpcId=vpc_id, CidrBlock=ca[0], AvailabilityZone=ca[1],
+        )["Subnet"]["SubnetId"],
+        lambda s: ec2.delete_subnet(SubnetId=s),
+        undo, "subnet",
+    )
     print(f"  Private subnets: {' '.join(private_subnets)}")
 
     # Public subnets (10.42.10–12.0/24, for NAT gateways)
-    public_subnets = [
-        ec2.create_subnet(
-            VpcId=vpc_id, CidrBlock=f"10.42.{10 + i}.0/24", AvailabilityZone=az,
-        )["Subnet"]["SubnetId"]
-        for i, az in enumerate(azs)
-    ]
+    public_subnets = _create_each(
+        [(f"10.42.{10 + i}.0/24", az) for i, az in enumerate(azs)],
+        lambda ca: ec2.create_subnet(
+            VpcId=vpc_id, CidrBlock=ca[0], AvailabilityZone=ca[1],
+        )["Subnet"]["SubnetId"],
+        lambda s: ec2.delete_subnet(SubnetId=s),
+        undo, "subnet",
+    )
     print(f"  Public subnets:  {' '.join(public_subnets)}")
 
     # Main route table — add IGW route and associate public subnets
@@ -94,24 +185,38 @@ def main():
         ec2.associate_route_table(RouteTableId=main_rt, SubnetId=subnet_id)
 
     # Private route tables (one per AZ)
-    private_rts = [
-        ec2.create_route_table(VpcId=vpc_id)["RouteTable"]["RouteTableId"]
-        for _ in azs
-    ]
+    private_rts = _create_each(
+        azs,
+        lambda _az: ec2.create_route_table(VpcId=vpc_id)["RouteTable"]["RouteTableId"],
+        lambda rt: ec2.delete_route_table(RouteTableId=rt),
+        undo, "route table",
+    )
     print(f"  Private route tables: {' '.join(private_rts)}")
 
     # EIPs for NAT Gateways
-    eip_alloc_ids = [
-        ec2.allocate_address(Domain="vpc")["AllocationId"]
-        for _ in azs
-    ]
+    eip_alloc_ids = _create_each(
+        azs,
+        lambda _az: ec2.allocate_address(Domain="vpc")["AllocationId"],
+        lambda a: ec2.release_address(AllocationId=a),
+        undo, "EIP",
+    )
     print(f"  EIPs: {' '.join(eip_alloc_ids)}")
 
     # NAT Gateways (one per public subnet)
-    nat_ids = [
-        ec2.create_nat_gateway(SubnetId=pub, AllocationId=eip)["NatGateway"]["NatGatewayId"]
-        for pub, eip in zip(public_subnets, eip_alloc_ids)
-    ]
+    # Runs after the NAT deletes below (LIFO) and before the EIPs are released.
+    nat_ids: list[str] = []
+    undo.append((
+        "NAT gateway deletion wait",
+        lambda: _wait_nat_gateways_deleted(ec2, nat_ids),
+    ))
+    for pub, eip in zip(public_subnets, eip_alloc_ids):
+        nat_id = ec2.create_nat_gateway(SubnetId=pub, AllocationId=eip)[
+            "NatGateway"
+        ]["NatGatewayId"]
+        nat_ids.append(nat_id)
+        undo.append(
+            (f"NAT gateway {nat_id}", lambda n=nat_id: ec2.delete_nat_gateway(NatGatewayId=n))
+        )
     print(f"  NAT gateways: {' '.join(nat_ids)}")
     print("  Waiting for NAT gateways to become available...")
     ec2.get_waiter("nat_gateway_available").wait(
@@ -134,6 +239,10 @@ def main():
             Description="Shared interface endpoint SG for test VPC",
             VpcId=vpc_id,
         )["GroupId"]
+        undo.append((
+            f"endpoint SG {endpoint_sg_id}",
+            lambda: _delete_security_group(ec2, endpoint_sg_id),
+        ))
         ec2.authorize_security_group_ingress(
             GroupId=endpoint_sg_id,
             IpPermissions=[{
@@ -143,6 +252,7 @@ def main():
         )
         print(f"  Endpoint SG: {endpoint_sg_id}")
 
+        undo.append(("VPC endpoints", lambda: _delete_endpoints(ec2, vpc_id)))
         for svc in ("ssm", "ssmmessages", "logs", "secretsmanager"):
             ep_id = ec2.create_vpc_endpoint(
                 VpcId=vpc_id,

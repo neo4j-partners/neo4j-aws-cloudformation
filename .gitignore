@@ -52,6 +52,7 @@ worklog/
 .licenses/
 sample-licenses/
 
-# Self-signed CA bundle staged by deploy.sh --tls; removed by teardown.sh
+# Self-signed CA bundle for the sample private app lambda
 neo4j-ee/sample-private-app/lambda/neo4j-ca.crt
 
+neo4j-ee/.licenses/

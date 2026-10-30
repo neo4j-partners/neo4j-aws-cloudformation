@@ -1,13 +1,20 @@
   Neo4jNLBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow external traffic to Neo4j NLB on ports 7474 and 7687
+      GroupDescription: Allow external traffic to Neo4j NLB on Browser and Bolt ports
       VpcId: !Ref Neo4jVPC
+      SecurityGroupEgress: []
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
-          CidrIp: !Ref AllowedCIDR
+        - !If
+          - UsePublicTLS
+          - IpProtocol: tcp
+            FromPort: 7473
+            ToPort: 7473
+            CidrIp: !Ref AllowedCIDR
+          - IpProtocol: tcp
+            FromPort: 7474
+            ToPort: 7474
+            CidrIp: !Ref AllowedCIDR
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
@@ -16,17 +23,41 @@
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7474 and 7687
+      GroupDescription: Allow Neo4j traffic from NLB to instances on Browser and Bolt ports
       VpcId: !Ref Neo4jVPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
-          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+        - !If
+          - UsePublicTLS
+          - IpProtocol: tcp
+            FromPort: 7473
+            ToPort: 7473
+            SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          - IpProtocol: tcp
+            FromPort: 7474
+            ToPort: 7474
+            SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
           SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBrowser:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !If [UsePublicTLS, 7473, 7474]
+      ToPort: !If [UsePublicTLS, 7473, 7474]
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBolt:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7687
+      ToPort: 7687
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
 
   Neo4jInternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup

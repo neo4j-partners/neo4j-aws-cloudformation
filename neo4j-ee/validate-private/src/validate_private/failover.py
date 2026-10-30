@@ -38,16 +38,14 @@ _READS_PROBE = """\
 import sys, json, time, boto3
 from neo4j import GraphDatabase
 
-stack, region, n_iter = sys.argv[1], sys.argv[2], int(sys.argv[3])
-use_tls = len(sys.argv) > 4 and sys.argv[4] == "1"
+stack, region, bolt_scheme, n_iter = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 
 sm = boto3.client("secretsmanager", region_name=region)
 password = sm.get_secret_value(SecretId=f"neo4j/{stack}/password")["SecretString"]
 ssm_client = boto3.client("ssm", region_name=region)
-nlb = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
+nlb_dns = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
 
-scheme = "bolt+ssc" if use_tls else "bolt"
-driver = GraphDatabase.driver(f"{scheme}://{nlb}:7687", auth=("neo4j", password))
+driver = GraphDatabase.driver(f"{bolt_scheme}://{nlb_dns}:7687", auth=("neo4j", password))
 failures = 0
 exc_types = []
 try:
@@ -494,10 +492,10 @@ def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
     # Fire the read probe on the bastion async — ssm.send_command returns immediately.
     n_iter = 30
     b64_probe = base64.b64encode(_READS_PROBE.encode()).decode()
-    tls_flag = "1" if config.bolt_tls_secret_arn else "0"
     probe_cmd = (
         f"echo {b64_probe} | base64 -d > /tmp/vp_probe.py && "
-        f"python3.11 /tmp/vp_probe.py {config.stack_name} {config.region} {n_iter} {tls_flag}"
+        f"python3.11 /tmp/vp_probe.py {config.stack_name} {config.region} "
+        f"{config.bolt_scheme} {n_iter}"
     )
 
     start = time.monotonic()

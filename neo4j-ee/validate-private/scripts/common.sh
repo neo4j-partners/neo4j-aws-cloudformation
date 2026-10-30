@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# common.sh — shared helpers sourced by neo4j-ee/validate-private/scripts/*.sh (not executed directly)
-
-export AWS_PROFILE="${AWS_PROFILE:-default}"
+# common.sh - shared helpers sourced by Bash-only validate-private scripts.
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="${SCRIPTS_DIR}/../../.deploy"
@@ -39,15 +37,14 @@ resolve_stack() {
   echo "$path"
 }
 
-# Exit with an error if the stack is not Private-mode.
-# Protects smoke-write.sh and browser-tunnel.sh from Public stacks.
+# Exit with an error if the stack is not Private or ExistingVpc mode.
 require_private_mode() {
   local outputs_file="$1"
   local mode stack_name
   mode=$(read_field "$outputs_file" "DeploymentMode")
-  if [ "$mode" != "Private" ]; then
+  if [ "$mode" != "Private" ] && [ "$mode" != "ExistingVpc" ]; then
     stack_name=$(read_field "$outputs_file" "StackName")
-    echo "ERROR: This script requires a Private-mode stack." >&2
+    echo "ERROR: This script requires a Private or ExistingVpc stack." >&2
     echo "  Stack '${stack_name}' has DeploymentMode=${mode}." >&2
     echo "  For Public stacks, connect directly to the NLB endpoint." >&2
     exit 1

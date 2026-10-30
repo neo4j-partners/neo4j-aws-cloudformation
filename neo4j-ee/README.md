@@ -1,6 +1,6 @@
 # Neo4j Enterprise Edition: AWS CloudFormation
 
-CloudFormation templates and operator tooling for the Neo4j Enterprise Edition AWS Marketplace listing. Each template deploys a one or three-node Neo4j cluster fronted by a Network Load Balancer. Every node runs in a dedicated Auto Scaling group for self-healing, with a GP3 EBS data volume that is retained across stack deletion. Bolt TLS is optional on all three templates. Three topologies are available to match different infrastructure requirements: a public new-VPC deployment for evaluation, a private new-VPC deployment for production, and a private deployment into an existing VPC for environments with pre-existing network infrastructure.
+CloudFormation templates and operator tooling for the Neo4j Enterprise Edition AWS Marketplace listing. Each template deploys a one or three-node Neo4j cluster fronted by a Network Load Balancer. Every node runs in a dedicated Auto Scaling group for self-healing, with a GP3 EBS data volume that is retained across stack deletion. The Private and Private Existing VPC templates terminate TLS at the NLB by default (HTTPS Browser on 7473, Bolt on 7687); the Public template is plain TCP unless `--enable-public-tls` is set with a certificate. Three topologies are available to match different infrastructure requirements: a public new-VPC deployment for evaluation, a private new-VPC deployment for production, and a private deployment into an existing VPC for environments with pre-existing network infrastructure.
 
 ---
 
@@ -14,19 +14,30 @@ CloudFormation templates and operator tooling for the Neo4j Enterprise Edition A
 
 ---
 
-## Sample Application
+## Sample Applications
 
-[`sample-private-app/`](sample-private-app/README.md) is a worked example of connecting an application workload to a Private-mode cluster. It covers the platform contract the EE stack publishes, the security group wiring required to reach the VPC interface endpoints, two Python 3.13 Lambdas behind IAM-authenticated Function URLs, and a resilience test that stops and restarts a follower via SSM.
+Two samples cover the two consumer paths. Pick the one that matches the topology you deployed.
+
+| Sample | Use when | What it shows |
+|---|---|---|
+| [`sample-public-app/`](sample-public-app/README.md) | Connecting from a laptop to a **Public** stack | The off-VPC discovery flow: seven-key public SSM contract, password retrieval from Secrets Manager, topology-aware Bolt URI selection (`bolt://` / `neo4j://` / `neo4j+s://`), and the routing-table view on three-node clusters. `uv`-managed Python script. |
+| [`sample-private-app/`](sample-private-app/README.md) | Connecting from inside the VPC to a **Private** or **ExistingVpc** stack | The in-VPC application flow: SSM and VPC-endpoint security group wiring, two Python 3.13 Lambdas behind IAM-authenticated Function URLs, and a resilience test that stops and restarts a follower via SSM. |
 
 ---
 
 ## For Marketplace Users
 
-Deploy from the AWS Marketplace listing. Once the stack is complete, the guide for your topology covers prerequisites, accessing the cluster, retrieving the password, observability checks, and tear down:
+Deploy from the AWS Marketplace listing. By default, no Neo4j plugins are installed: the templates set `InstallBloom=false` and `InstallGDS=false`. To enable Bloom or Graph Data Science at launch, create a Secrets Manager secret holding the license file contents and pass its ARN as `BloomLicenseSecretArn` or `GdsLicenseSecretArn`. Stacks that request a plugin without supplying its license ARN are rejected at parameter validation before any resource is created. See the "Plugin licenses (optional)" prerequisite in the topology guide for your deployment.
 
-- **Public:** [docs/PUBLIC.md — General Operator Guide](docs/PUBLIC.md#general-operator-guide)
-- **Private:** [docs/PRIVATE.md — General Operator Guide](docs/PRIVATE.md#general-operator-guide)
-- **Private, Existing VPC:** [docs/PRIVATE-EXISTING-VPC.md — General Operator Guide](docs/PRIVATE-EXISTING-VPC.md#general-operator-guide)
+Once the stack is complete, the guide for your topology covers prerequisites, accessing the cluster, retrieving the password, observability checks, and tear down:
+
+- **Public:** [docs/PUBLIC.md — Operator Guide](docs/PUBLIC.md#operator-guide)
+- **Private:** [docs/PRIVATE.md — Operator Guide](docs/PRIVATE.md#operator-guide)
+- **Private, Existing VPC:** [docs/PRIVATE-EXISTING-VPC.md — Operator Guide](docs/PRIVATE-EXISTING-VPC.md#operator-guide)
+
+### Single Sign-On
+
+A Private stack can add sign-in through OpenID Connect next to the native password. [docs/oidc-run-book.md](docs/oidc-run-book.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On in PRIVATE.md](docs/PRIVATE.md#single-sign-on-oidc) describes each setting and how to fix sign-in problems.
 
 ---
 
@@ -38,7 +49,7 @@ All scripts read `AWS_PROFILE` from the environment and fall back to the `defaul
 export AWS_PROFILE=<your-profile>   # omit to use your default profile
 ```
 
-> **Marketplace publishing scripts only** (`marketplace/create-ami.sh`, `marketplace/test-ami.sh`): these must run against the `neo4j-marketplace` account (`385155106615`). Set `AWS_PROFILE=marketplace` before running them. All other scripts work with any account that has CloudFormation, SSM, EC2, and IAM permissions.
+> **Marketplace publishing scripts**: run `marketplace/create-ami.sh` against the `neo4j-marketplace` account (`385155106615`) with `AWS_PROFILE=marketplace` for Marketplace builds. For local AMI iteration only, `marketplace/create-ami.sh` also supports the guarded default-account mode `AMI_BUILD_MODE=iteration AWS_PROFILE=default`. `marketplace/test-ami.sh` should use the same account that owns the AMI under test. All other scripts work with any account that has CloudFormation, SSM, EC2, and IAM permissions.
 
 ### Deploy
 
@@ -50,20 +61,45 @@ export AWS_PROFILE=<your-profile>   # omit to use your default profile
 ./deploy.py --mode Public --region us-east-1
 
 # Existing VPC
-./deploy.py --mode ExistingVpc --vpc-id vpc-xxxx --subnet-1 subnet-xxxx
+./deploy.py --mode ExistingVpc --vpc-id <vpc-id> --subnet-1 <subnet-1-id> \
+  --subnet-2 <subnet-2-id> --subnet-3 <subnet-3-id> --private-route-table-1 <route-table-id>
 
 # Common flags (apply to all modes)
 ./deploy.py --number-of-servers 1           # single instance instead of 3-node
 ./deploy.py r8i.xlarge                      # memory-optimized instance type
 ./deploy.py --marketplace                   # use the published Marketplace AMI
 ./deploy.py --alert-email you@example.com   # enable CloudWatch alarm emails
+
+# Private/ExistingVpc terminate TLS at the NLB by default: with no --cert-arn a
+# self-signed ACM cert is auto-imported so tooling connects with neo4j+ssc://.
+# Public is plain TCP unless TLS is opted in:
+./deploy.py --mode Public --enable-public-tls --cert-arn <acm-arn> --advertised-dns <dns>
 ```
+
+For AMI selection, the self-signed certificate, private DNS, and validation steps, see [docs/LOCAL-TESTING.md](docs/LOCAL-TESTING.md). Always pass `--region`, because `deploy.py` picks a random region otherwise.
 
 `--marketplace` uses the region-local AWS Marketplace AMI for the live Neo4j EE
 listing, resolved by Marketplace product code, with this repo's selected
 template. It does not launch through the live Marketplace CloudFormation
 delivery option, so it can test repo-only topologies such as Private before
 those templates are published on the listing.
+
+`--marketplace` requires a listing AMI built by the current
+`marketplace/create-ami.sh`. A listing AMI built before that change lacks the
+`neo4j` user, the Neo4j yum repo, `python3.11`, and the CloudWatch agent, so
+bootstrap fails. The account must also be subscribed to the listing. See
+[Choose an AMI](docs/LOCAL-TESTING.md#choose-an-ami) for the lookup and the
+observed failure.
+
+> **`deploy.py` defaults differ from Marketplace template defaults.** `deploy.py` installs both Bloom and Graph Data Science by default so local validation exercises the same plugin surface customers tend to enable. The Marketplace templates default `InstallBloom=false` and `InstallGDS=false`. The buyer-facing flow is covered in the topology guides ([Public](docs/PUBLIC.md#prerequisites), [Private](docs/PRIVATE.md#prerequisites), [Private Existing VPC](docs/PRIVATE-EXISTING-VPC.md#prerequisites)).
+
+For licensed local validation, place the license files at
+`neo4j-ee/.licenses/bloom.license` and `neo4j-ee/.licenses/gds.license`;
+`deploy.py` uploads any matching local file to Secrets Manager, installs it on
+each Neo4j node, records the secret ARN in `.deploy/<stack>.txt`, and
+`teardown.sh` removes auto-created license secrets. Use
+`--bloom-license-secret-id` or `--gds-license-secret-id` to reuse existing
+Secrets Manager secrets, or `--no-local-licenses` to skip local file discovery.
 
 ### Look Up Connection Details
 
@@ -90,6 +126,8 @@ Multiple deployments can coexist; each gets its own file in `.deploy/`.
 ---
 
 ## Modifying Templates
+
+> **Required reading before changing any template, the AMI, UserData, or Neo4j config:** [docs/architecture/template-architecture.md](docs/architecture/template-architecture.md). It is the finalized architecture contract. Place every new config value or boot logic by its Placement Decision Rule, and treat its Prohibitions as binding.
 
 The three output templates are assembled from source partials in `templates/src/`. Edit the partials, then regenerate:
 
@@ -121,8 +159,11 @@ python build.py --verify
 | `templates/neo4j-private-existing-vpc.template.yaml` | CloudFormation template for private, existing VPC deployments |
 | `templates/src/` | Source partials assembled by `build.py` |
 | `templates/build.py` | Assembles the three templates from `templates/src/` partials |
-| `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/` |
+| `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/`. See [docs/LOCAL-TESTING.md](docs/LOCAL-TESTING.md) |
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, secrets, and deployment file |
+| `browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `browse.py` | Opens the Browser and Bolt tunnels and prints the URL and credentials |
 | `test-observability.sh` | Observability checks: CloudWatch, logs, flow logs, alarm, CloudTrail |
 | `validate-private/` | Operator tooling for Private and ExistingVpc stacks |
 | `marketplace/` | AMI build and test scripts |
@@ -130,5 +171,7 @@ python build.py --verify
 | `marketplace/test-ami.sh` | SSM-based AMI verification; no SSH key required |
 | `scripts/create-test-vpc.py` | Creates a minimal test VPC for ExistingVpc template testing |
 | `scripts/teardown-test-vpc.py` | Deletes a test VPC created by `create-test-vpc.py` |
+| `sample-public-app/` | Off-VPC sample app connecting to a Public cluster |
 | `sample-private-app/` | Sample Lambda app connecting to a private cluster |
+| `scripts/certificate.py` | Request a DNS-validated ACM cert (or import a self-signed one) and record it under `.deploy/` |
 | `.deploy/` | Deployment output files: one per stack (gitignored) |

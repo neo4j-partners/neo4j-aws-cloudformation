@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - 'neo4j-ee/templates/**'
+      - 'neo4j-ee/tests/**'
+      - 'neo4j-ee/src/**'
+
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -16,11 +21,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install cfn-lint
-        run: pip install cfn-lint
+      - name: Install cfn-lint and test dependencies
+        run: pip install cfn-lint pyyaml boto3 python-dotenv
 
       - name: Verify template output is up to date
         run: python neo4j-ee/templates/build.py --verify
+
+      - name: Run unit tests
+        run: python -m unittest discover -s neo4j-ee/tests
 
       - name: Lint neo4j-private.template.yaml
         run: cfn-lint neo4j-ee/templates/neo4j-private.template.yaml
@@ -32,4 +40,4 @@ jobs:
         # W1030 is suppressed: PrivateSubnet2Id/3Id default to '' for 1-node
         # deploys but are only used inside !If [CreateCluster, ...], making the
         # "not a valid subnet ID" warning a false positive.
-        run: cfn-lint --ignore-checks W1030 neo4j-ee/templates/neo4j-private-existing-vpc.template.yaml
+        run: cfn-lint neo4j-ee/templates/neo4j-private-existing-vpc.template.yaml --ignore-checks W1030

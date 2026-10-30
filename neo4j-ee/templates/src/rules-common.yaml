@@ -1,0 +1,18 @@
+  BloomLicenseRequiredWhenInstalled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref InstallBloom, 'false']
+          - !Not [!Equals [!Ref BloomLicenseSecretArn, '']]
+        AssertDescription: >-
+          BloomLicenseSecretArn must be provided when InstallBloom is true.
+          This Rule fires during CloudFormation stack create and update
+          parameter validation.
+  GdsLicenseRequiredWhenInstalled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref InstallGDS, 'false']
+          - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
+        AssertDescription: >-
+          GdsLicenseSecretArn must be provided when InstallGDS is true.
+          This Rule fires during CloudFormation stack create and update
+          parameter validation.

@@ -58,11 +58,18 @@
                   - logs:DescribeLogStreams
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
               - !If
-                - BoltTLSEnabled
+                - BloomEnabledAndLicensed
                 - Effect: Allow
                   Action:
                     - secretsmanager:GetSecretValue
-                  Resource: !Ref BoltCertificateSecretArn
+                  Resource: !Ref BloomLicenseSecretArn
+                - !Ref AWS::NoValue
+              - !If
+                - GdsEnabledAndLicensed
+                - Effect: Allow
+                  Action:
+                    - secretsmanager:GetSecretValue
+                  Resource: !Ref GdsLicenseSecretArn
                 - !Ref AWS::NoValue
               - Effect: Allow
                 Action:
@@ -97,13 +104,6 @@
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/*'
-              - !If
-                - BoltTLSEnabled
-                - Effect: Allow
-                  Action:
-                    - secretsmanager:GetSecretValue
-                  Resource: !Ref BoltCertificateSecretArn
-                - !Ref AWS::NoValue
 
   Neo4jBastionInstanceProfile:
     Type: AWS::IAM::InstanceProfile

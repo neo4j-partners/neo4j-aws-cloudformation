@@ -18,12 +18,33 @@ Metadata:
           - DataDiskSize
           - DataVolumeKmsKeyId
       - Label:
+          default: "Plugin licensing (Bloom, GDS)"
+        Parameters:
+          - InstallBloom
+          - BloomLicenseSecretArn
+          - InstallGDS
+          - GdsLicenseSecretArn
+      - Label:
+          default: "Optional Public TLS"
+        Parameters:
+          - EnableTLS
+          - CertificateArn
+          - AdvertisedDNS
+      - Label:
           default: "Security & Monitoring"
         Parameters:
           - AllowedCIDR
           - AlertEmail
-          - BoltCertificateSecretArn
-          - BoltAdvertisedDNS
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -37,14 +58,38 @@ Metadata:
         default: Data Disk Size (GB)
       DataVolumeKmsKeyId:
         default: Data Volume KMS Key ID
+      InstallBloom:
+        default: Install Bloom Plugin
+      BloomLicenseSecretArn:
+        default: Bloom License Secret ARN
+      InstallGDS:
+        default: Install Graph Data Science Plugin
+      GdsLicenseSecretArn:
+        default: GDS License Secret ARN
       AlertEmail:
         default: Alert Email Address
       AllowedCIDR:
         default: Allowed CIDR
-      BoltCertificateSecretArn:
-        default: Bolt TLS Certificate Secret ARN
-      BoltAdvertisedDNS:
-        default: Bolt Advertised DNS Name
+      EnableTLS:
+        default: Enable TLS
+      CertificateArn:
+        default: ACM Certificate ARN
+      AdvertisedDNS:
+        default: Advertised DNS Name
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group
 
 Parameters:
   ImageId:
@@ -93,7 +138,8 @@ Parameters:
     Type: Number
     Default: 100
     MinValue: 100
-    MaxValue: 65536
+    MaxValue: 16384
+    ConstraintDescription: DataDiskSize must be between 100 and 16,384 GiB.
   DataVolumeKmsKeyId:
     Description: >-
       Optional. KMS key ID or ARN for data volume encryption. Leave blank to
@@ -107,13 +153,52 @@ Parameters:
     Default: ''
   InstallGDS:
     Description: >-
-      Install the Graph Data Science plugin at deploy time. Intended for testing
-      with deploy.py only; leave false for Marketplace deployments.
+      Install the Graph Data Science plugin at deploy time. Requires a matching
+      GdsLicenseSecretArn pointing to a Secrets Manager secret holding the GDS
+      license file contents. The JAR is staged in the AMI and copied to the
+      plugins directory when this is true; leaving this false skips the copy.
     Type: String
     Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
+  InstallBloom:
+    Description: >-
+      Install the Neo4j Bloom plugin at deploy time. Requires a matching
+      BloomLicenseSecretArn pointing to a Secrets Manager secret holding the
+      Bloom license file contents. The JAR is staged in the AMI and copied to
+      the plugins directory when this is true; leaving this false skips the copy.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  BloomLicenseSecretArn:
+    Description: >-
+      ARN of a Secrets Manager secret whose SecretString is the Neo4j Bloom
+      license file contents. Required when InstallBloom is true; ignored
+      otherwise. The instance role is granted secretsmanager:GetSecretValue
+      scoped to this ARN only. Leave blank if not installing Bloom.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+    ConstraintDescription: >-
+      Must be empty or a valid AWS Secrets Manager secret ARN. The secret-name
+      segment must be literal characters only — wildcards (* or ?) are rejected
+      because they would broaden the IAM grant beyond a single secret.
+  GdsLicenseSecretArn:
+    Description: >-
+      ARN of a Secrets Manager secret whose SecretString is the Neo4j Graph
+      Data Science license file contents. Required when InstallGDS is true;
+      ignored otherwise. The instance role is granted secretsmanager:GetSecretValue
+      scoped to this ARN only. Leave blank if not installing GDS.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+    ConstraintDescription: >-
+      Must be empty or a valid AWS Secrets Manager secret ARN. The secret-name
+      segment must be literal characters only — wildcards (* or ?) are rejected
+      because they would broaden the IAM grant beyond a single secret.
   Node1SnapshotId:
     Description: >-
       Optional. Snapshot ID to restore Node 1's data volume from. Leave blank
@@ -121,23 +206,29 @@ Parameters:
     Type: String
     Default: ''
 
-  BoltCertificateSecretArn:
+  CertificateArn:
+    Description: >-
+      ARN of an ACM certificate for the NLB TLS listeners on ports 7473 (HTTPS)
+      and 7687 (Bolt). The certificate's SAN must match AdvertisedDNS. Both
+      ACM-issued and ACM Private CA certificates are accepted. Required for
+      Private and ExistingVpc deployments; required for Public only when TLS is
+      enabled.
     Type: String
     Default: ''
+    AllowedPattern: (^$)|(^arn:aws[a-zA-Z-]*:acm:[a-z0-9-]+:[0-9]+:certificate/.+$)
+    ConstraintDescription: Must be blank or a valid ACM certificate ARN.
+  AdvertisedDNS:
     Description: >-
-      ARN of a Secrets Manager secret whose SecretString is JSON with
-      "certificate" (PEM) and "private_key" (PEM) fields. When set, Neo4j
-      enables TLS on Bolt port 7687 (server.bolt.tls_level=REQUIRED). Leave
-      blank to run Bolt without TLS (suitable for dev/test inside a private VPC).
-      ACM Private CA-issued certs are accepted here — no separate parameter needed.
-  BoltAdvertisedDNS:
+      Advertised DNS name that resolves to this NLB. Used as the certificate SAN
+      and as the host placed in server.https.advertised_address. Bolt advertises
+      it only when the stack's private DNS record resolves it inside the VPC;
+      otherwise Bolt advertises the NLB DNS. Map this name to the NLB DNS via Route 53
+      or operator-managed DNS before clients connect. Required for Private and
+      ExistingVpc deployments; required for Public only when TLS is enabled.
     Type: String
     Default: ''
-    Description: >-
-      Optional. DNS name placed in server.bolt.advertised_address and used as
-      the cert SAN. Provide a stable alias (e.g. a Route53 CNAME → NLB) when
-      deploying in production so certs do not pin the NLB DNS. When blank, the
-      NLB DNS is used (test-rig default; two-phase deploy required).
+    AllowedPattern: (^$)|(^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$)
+    ConstraintDescription: Must be blank or a valid DNS name.
 
   AllowedCIDR:
     Description: >-
@@ -146,6 +237,148 @@ Parameters:
     Type: String
     AllowedPattern: ^(?!0\.0\.0\.0\/0)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
     ConstraintDescription: Must be a valid CIDR range. 0.0.0.0/0 is not accepted.
+  EnableTLS:
+    Description: >-
+      Set to true to enable TLS on public Browser (7473) and Bolt (7687).
+      Requires CertificateArn and AdvertisedDNS. When false, Browser uses HTTP
+      on 7474 and Bolt uses plaintext on 7687.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  OidcIssuerUri:
+    Description: >-
+      Optional. Issuer URL of an OpenID Connect identity provider, for example
+      https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
+      the provider's discovery document at <issuer>/.well-known/openid-configuration.
+      When set, users can sign in with an ID token from this provider. Password
+      login always stays enabled. Leave blank for password login only.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%/-]*)?$'
+    ConstraintDescription: Must be blank or an https URL with no query string.
+  OidcClientId:
+    Description: >-
+      Client ID that Neo4j accepts as the ID token audience. Use a
+      comma-separated list to accept tokens issued to several clients. Required
+      when OidcIssuerUri is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+(,[A-Za-z0-9._:/-]+)*$'
+    ConstraintDescription: >-
+      Must be blank or a comma-separated list of client IDs with no spaces.
+  OidcBrowserClientId:
+    Description: >-
+      Client ID that Neo4j Browser and Bloom use for interactive sign-in. Must
+      be one of the IDs in OidcClientId, and the identity provider must allow
+      the Browser address as a redirect URL for it. Leave blank to use the
+      first ID in OidcClientId.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._:/-]+$'
+    ConstraintDescription: Must be blank or a single client ID.
+  OidcPrincipalClaim:
+    Description: >-
+      ID token claim that becomes the Neo4j username, for example email or
+      cognito:username. Leave blank to use the Neo4j default, sub.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcGroupsClaim:
+    Description: >-
+      ID token claim that lists the user's groups, for example cognito:groups
+      or groups. This is a claim name, not a JSONPath. Required when
+      OidcAdminGroup or OidcReaderGroup is set.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
+    ConstraintDescription: Must be blank or a single claim name.
+  OidcAdminGroup:
+    Description: >-
+      Identity provider group whose members get the Neo4j admin role. Leave
+      blank to map no group to admin.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.
+  OidcReaderGroup:
+    Description: >-
+      Identity provider group whose members get the built-in Neo4j reader role.
+      Signed-in users with no mapped group get only the PUBLIC role and see an
+      empty graph. Leave blank to map no group to reader.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x1f\x7f]+$'
+    ConstraintDescription: >-
+      Must be blank or a group name without double quotes, equals signs,
+      semicolons, commas, backslashes or control characters.
+
+Rules:
+  BloomLicenseRequiredWhenInstalled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref InstallBloom, 'false']
+          - !Not [!Equals [!Ref BloomLicenseSecretArn, '']]
+        AssertDescription: >-
+          BloomLicenseSecretArn must be provided when InstallBloom is true.
+          This Rule fires during CloudFormation stack create and update
+          parameter validation.
+  GdsLicenseRequiredWhenInstalled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref InstallGDS, 'false']
+          - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
+        AssertDescription: >-
+          GdsLicenseSecretArn must be provided when InstallGDS is true.
+          This Rule fires during CloudFormation stack create and update
+          parameter validation.
+
+  PublicTlsRequiresCertificateAndDns:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref EnableTLS, 'false']
+          - !And
+              - !Not [!Equals [!Ref CertificateArn, '']]
+              - !Not [!Equals [!Ref AdvertisedDNS, '']]
+        AssertDescription: >-
+          CertificateArn and AdvertisedDNS are both required when EnableTLS is
+          true. Without both, the NLB listeners and the Neo4j TLS configuration
+          would disagree about whether TLS is on. This Rule fires during
+          CloudFormation stack create and update parameter validation.
+  PublicTlsDnsOnlyWhenEnabled:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref EnableTLS, 'true']
+          - !Equals [!Ref AdvertisedDNS, '']
+        AssertDescription: >-
+          AdvertisedDNS must be blank when EnableTLS is false. Neo4j enables TLS
+          whenever AdvertisedDNS is set, while the NLB stays plaintext, so a
+          stray value would leave the cluster unreachable. This Rule fires
+          during CloudFormation stack create and update parameter validation.
+
+  OidcClientIdRequiredWithIssuer:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref OidcIssuerUri, '']
+          - !Not [!Equals [!Ref OidcClientId, '']]
+        AssertDescription: >-
+          OidcClientId must be provided when OidcIssuerUri is set. Neo4j
+          rejects every ID token whose audience it cannot check.
+  OidcGroupsClaimRequiredWithGroupMapping:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref OidcAdminGroup, '']
+            - !Equals [!Ref OidcReaderGroup, '']
+          - !Not [!Equals [!Ref OidcGroupsClaim, '']]
+        AssertDescription: >-
+          OidcGroupsClaim must be provided when OidcAdminGroup or
+          OidcReaderGroup is set. Neo4j reads group membership from that claim.
 
 Conditions:
   CreateCluster: !Not
@@ -156,9 +389,17 @@ Conditions:
     - !Equals
       - !Ref AlertEmail
       - ''
-  BoltTLSEnabled: !Not [!Equals [!Ref BoltCertificateSecretArn, '']]
   HasDataVolumeCmk: !Not [!Equals [!Ref DataVolumeKmsKeyId, '']]
   HasNode1Snapshot: !Not [!Equals [!Ref Node1SnapshotId, '']]
+  UsePublicTLS: !And
+    - !Equals [!Ref EnableTLS, 'true']
+    - !Not [!Equals [!Ref CertificateArn, '']]
+  BloomEnabledAndLicensed: !And
+    - !Equals [!Ref InstallBloom, 'true']
+    - !Not [!Equals [!Ref BloomLicenseSecretArn, '']]
+  GdsEnabledAndLicensed: !And
+    - !Equals [!Ref InstallGDS, 'true']
+    - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
 
 Resources:
   Neo4jInstanceProfile:
@@ -221,11 +462,18 @@ Resources:
                   - logs:DescribeLogStreams
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
               - !If
-                - BoltTLSEnabled
+                - BloomEnabledAndLicensed
                 - Effect: Allow
                   Action:
                     - secretsmanager:GetSecretValue
-                  Resource: !Ref BoltCertificateSecretArn
+                  Resource: !Ref BloomLicenseSecretArn
+                - !Ref AWS::NoValue
+              - !If
+                - GdsEnabledAndLicensed
+                - Effect: Allow
+                  Action:
+                    - secretsmanager:GetSecretValue
+                  Resource: !Ref GdsLicenseSecretArn
                 - !Ref AWS::NoValue
               - Effect: Allow
                 Action:
@@ -235,13 +483,20 @@ Resources:
   Neo4jNLBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow external traffic to Neo4j NLB on ports 7474 and 7687
+      GroupDescription: Allow external traffic to Neo4j NLB on Browser and Bolt ports
       VpcId: !Ref Neo4jVPC
+      SecurityGroupEgress: []
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
-          CidrIp: !Ref AllowedCIDR
+        - !If
+          - UsePublicTLS
+          - IpProtocol: tcp
+            FromPort: 7473
+            ToPort: 7473
+            CidrIp: !Ref AllowedCIDR
+          - IpProtocol: tcp
+            FromPort: 7474
+            ToPort: 7474
+            CidrIp: !Ref AllowedCIDR
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
@@ -250,17 +505,41 @@ Resources:
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7474 and 7687
+      GroupDescription: Allow Neo4j traffic from NLB to instances on Browser and Bolt ports
       VpcId: !Ref Neo4jVPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 7474
-          ToPort: 7474
-          SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+        - !If
+          - UsePublicTLS
+          - IpProtocol: tcp
+            FromPort: 7473
+            ToPort: 7473
+            SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          - IpProtocol: tcp
+            FromPort: 7474
+            ToPort: 7474
+            SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
         - IpProtocol: tcp
           FromPort: 7687
           ToPort: 7687
           SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBrowser:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !If [UsePublicTLS, 7473, 7474]
+      ToPort: !If [UsePublicTLS, 7473, 7474]
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
+
+  Neo4jNLBEgressToBolt:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7687
+      ToPort: 7687
+      DestinationSecurityGroupId: !GetAtt Neo4jExternalSecurityGroup.GroupId
 
   Neo4jInternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -444,7 +723,7 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -453,11 +732,11 @@ Resources:
       MaxSize: 1
       DesiredCapacity: 1
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 600
+      HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet1
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
       Tags:
         - Key: StackID
@@ -484,7 +763,7 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -493,11 +772,11 @@ Resources:
       MaxSize: 1
       DesiredCapacity: 1
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 600
+      HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet2
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
       Tags:
         - Key: StackID
@@ -524,7 +803,7 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT15M
+        Timeout: PT20M
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref Neo4jLaunchTemplate
@@ -533,11 +812,11 @@ Resources:
       MaxSize: 1
       DesiredCapacity: 1
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 600
+      HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet3
       TargetGroupARNs:
-        - Ref: Neo4jHTTPTargetGroup
+        - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
       Tags:
         - Key: StackID
@@ -558,6 +837,529 @@ Resources:
 
   Neo4jLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            /opt/neo4j/bin/neo4j-bootstrap.sh:
+              mode: '000700'
+              owner: root
+              group: root
+              content: |
+                #!/bin/bash
+                set -euo pipefail
+
+                # Template-owned bootstrap. Delivered to /opt/neo4j/bin/neo4j-bootstrap.sh by
+                # cfn-init from the shared LaunchTemplate's AWS::CloudFormation::Init metadata,
+                # then invoked by UserData. Runtime values arrive as named, exported
+                # environment variables; this script reads no ambient global and takes no
+                # positional arguments. cfn-signal is owned solely by UserData: this fail()
+                # prints and exits non-zero, and the non-zero exit trips UserData's ERR trap.
+                fail() {
+                  echo "ERROR: $*" >&2
+                  exit 1
+                }
+
+                # Fail closed if any required runtime variable is unset. The value is never
+                # echoed, so the Secrets Manager password cannot leak into the log. Optional
+                # variables (advertisedDNS, boltAdvertiseDns, bloomLicenseSecretArn,
+                # gdsLicenseSecretArn) are intentionally absent: they are legitimately empty
+                # when the corresponding feature is off (advertisedDNS is empty only for Public
+                # without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
+                for _required in stackName region nodeCount loadBalancerDNSName \
+                  installGDS installBloom password _stack_id _instance_id _az; do
+                  [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
+                done
+
+                initialPassword="${password}"
+                unset password
+                isFirstBoot=false
+
+                # The optional OIDC values arrive base64-encoded so that no parameter value
+                # can run as shell code in the UserData assignments. Blank decodes to blank.
+                oidcIssuerUri=$(printf '%s' "${oidcIssuerUriB64:-}" | base64 -d)
+                oidcClientId=$(printf '%s' "${oidcClientIdB64:-}" | base64 -d)
+                oidcBrowserClientId=$(printf '%s' "${oidcBrowserClientIdB64:-}" | base64 -d)
+                oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
+                oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
+                oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
+                oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+
+                set_neo4j_conf() {
+                  local key="$1"
+                  local value="$2"
+                  local conf="${NEO4J_CONF:-/etc/neo4j/neo4j.conf}"
+                  local key_pattern replacement
+                  key_pattern=$(printf '%s' "${key}" | sed 's/[][\\.^$*]/\\&/g')
+                  replacement=$(printf '%s=%s' "${key}" "${value}" | sed 's/[\\&|]/\\&/g')
+                  sed -i.bak "s|^#\{0,1\}${key_pattern}=.*|${replacement}|" "$conf"
+                  rm -f "${conf}.bak"
+                  if ! awk -v key="${key}" 'index($0, key "=") == 1 { found = 1 } END { exit found ? 0 : 1 }' "$conf"; then
+                    echo "${key}=${value}" >> "$conf"
+                  fi
+                }
+                attach_and_mount_data_volume() {
+                  local region="$1"
+                  local _stack_id="$2"
+                  local _az="$3"
+                  local _instance_id="$4"
+                  local first_boot_var="$5"
+                  printf -v "${first_boot_var}" "%s" "false"
+                  echo "Attaching data volume..."
+                  local data_dir="${NEO4J_DATA_DIR:-/var/lib/neo4j/data}"
+                  local fstab_path="${FSTAB_PATH:-/etc/fstab}"
+                  local nvme_device_glob="${NVME_DEVICE_GLOB:-/dev/nvme?n1}"
+                  local allow_regular_devices="${ALLOW_REGULAR_NVME_DEVICES:-false}"
+                  local vols vc vid uuid
+                  local dev=""
+                  vols=$(aws ec2 describe-volumes --region "$region" \
+                    --filters "Name=tag:StackID,Values=${_stack_id}" "Name=tag:Role,Values=neo4j-cluster-data" "Name=availability-zone,Values=${_az}" \
+                    --query "Volumes[*].VolumeId" --output text)
+                  vc=$(echo "${vols}" | wc -w | xargs)
+                  [[ "${vc}" -eq 1 ]] || fail "Expected 1 data volume in ${_az}, found ${vc}."
+                  vid="${vols}"
+                  echo "Data volume: ${vid}"
+                  local s=0 state=""
+                  while true; do
+                    state=$(aws ec2 describe-volumes --region "$region" --volume-ids "${vid}" --query "Volumes[0].State" --output text 2>/dev/null || echo unknown)
+                    [[ "${state}" != "available" ]] || break
+                    (( s < 600 )) || fail "Volume ${vid} not available after 10m (state=${state})."
+                    echo "  Volume state: ${state}, waiting..."
+                    sleep 10; s=$(( s + 10 ))
+                  done
+                  local ok=false
+                  for t in 1 2 3; do
+                    if aws ec2 attach-volume --region "$region" --volume-id "${vid}" --instance-id "${_instance_id}" --device /dev/sdf >/dev/null 2>&1; then
+                      ok=true; break
+                    fi
+                    sleep 5
+                  done
+                  [[ "${ok}" == "true" ]] || fail "attach-volume failed for ${vid}."
+                  local astate=""
+                  for i in $(seq 1 24); do
+                    astate=$(aws ec2 describe-volumes --region "$region" --volume-ids "${vid}" --query "Volumes[0].Attachments[0].State" --output text 2>/dev/null || true)
+                    [[ "${astate}" != "attached" ]] || break
+                    sleep 5
+                  done
+                  [[ "${astate}" == "attached" ]] || fail "Volume ${vid} not attached in 2m."
+                  local vid_serial
+                  vid_serial=$(echo "${vid}" | tr -d '-')
+                  udevadm settle --timeout=30 || true
+                  for t in $(seq 1 15); do
+                    for d in ${nvme_device_glob}; do
+                      [[ -b "$d" || ( "${allow_regular_devices}" == "true" && -e "$d" ) ]] || continue
+                      local d_serial
+                      d_serial=$(lsblk -no SERIAL "$d" 2>/dev/null | tr -d ' ')
+                      if [[ "$d_serial" == "$vid_serial" ]]; then
+                        dev="$d"; break 2
+                      fi
+                    done
+                    sleep 2
+                  done
+                  [[ -n "${dev}" && ( -b "${dev}" || ( "${allow_regular_devices}" == "true" && -e "${dev}" ) ) ]] || fail "Could not resolve NVMe device for ${vid}."
+                  if ! blkid "${dev}" > /dev/null 2>&1; then
+                    mkfs.xfs "${dev}"
+                    printf -v "${first_boot_var}" "%s" "true"
+                  fi
+                  uuid=$(blkid -s UUID -o value "${dev}")
+                  [[ -n "${uuid}" ]] || fail "No UUID on ${dev}."
+                  mkdir -p "${data_dir}"
+                  echo "UUID=${uuid}  ${data_dir}  xfs  defaults,nofail,noatime,x-systemd.device-timeout=30  0 2" >> "${fstab_path}"
+                  mount "${data_dir}"
+                  [[ "${!first_boot_var}" != "true" ]] || chown neo4j:neo4j "${data_dir}"
+                }
+                fetch_and_install_license() {
+                  local _arn="$1"
+                  local _dest="$2"
+                  local _label="$3"
+                  local _region="$4"
+                  local _dir
+                  _dir=$(dirname "$_dest")
+                  mkdir -p "$_dir"
+                  local _secret
+                  if ! _secret=$(aws secretsmanager get-secret-value --region "${_region}" \
+                        --secret-id "$_arn" --query SecretString --output text \
+                        --cli-connect-timeout 10 --cli-read-timeout 30); then
+                    fail "Failed to fetch ${_label} license secret ${_arn} (network, IAM denial, or secret not found in this region)."
+                  fi
+                  if [ -z "$_secret" ] || [ "$_secret" = "None" ]; then
+                    fail "${_label} license secret ${_arn} returned an empty SecretString payload."
+                  fi
+                  umask 077
+                  printf '%s' "$_secret" > "$_dest"
+                  umask 022
+                  unset _secret
+                  chown neo4j:neo4j "$_dir" "$_dest"
+                  chmod 600 "$_dest"
+                  echo "Installed ${_label} license at $_dest"
+                }
+                install_neo4j_from_yum() {
+                  echo "Installing Graph Database..."
+                  export NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+                  yum -y install neo4j-enterprise
+                  systemctl enable neo4j
+                }
+                start_neo4j() {
+                  local initialPassword="$1"
+                  local isFirstBoot="$2"
+                  echo "Starting Neo4j..."
+                  service neo4j start
+                  if [[ "${isFirstBoot}" == "true" ]]; then
+                    neo4j-admin dbms set-initial-password "${initialPassword}"
+                  fi
+                }
+                install_apoc() {
+                  local neo4j_home="${NEO4J_HOME:-/var/lib/neo4j}"
+                  local jar
+                  jar=$(ls "${neo4j_home}"/labs/apoc-*-core.jar 2>/dev/null | head -1 || true)
+                  if [ -z "$jar" ]; then
+                    fail "APOC core JAR not found in ${neo4j_home}/labs after installing neo4j-enterprise."
+                  fi
+                  echo "Installing APOC plugin..."
+                  cp "$jar" "${neo4j_home}/plugins/"
+                  chown neo4j:neo4j "${neo4j_home}/plugins/$(basename "$jar")"
+                }
+                install_plugin() {
+                  local neo4j_home="${NEO4J_HOME:-/var/lib/neo4j}"
+                  local label="$1" pattern="$2"
+                  local jar
+                  jar=$(ls "${neo4j_home}"/products/${pattern} 2>/dev/null | head -1 || true)
+                  if [ -z "$jar" ]; then
+                    fail "${label} JAR not found in ${neo4j_home}/products/; rebuild AMI or disable Install${label}."
+                  fi
+                  echo "Installing ${label} plugin from $jar..."
+                  cp "$jar" "${neo4j_home}/plugins/"
+                  chown neo4j:neo4j "${neo4j_home}/plugins/$(basename "$jar")"
+                }
+                apply_base_conf() {
+                  local base="${NEO4J_BASE_CONF:-/opt/neo4j/conf/neo4j-base.conf}"
+                  echo "Applying static base configuration..."
+                  # `|| [[ -n "${line}" ]]` processes a final line with no trailing newline.
+                  while IFS= read -r line || [[ -n "${line}" ]]; do
+                    [[ -z "${line}" || "${line}" == \#* ]] && continue
+                    if [[ "${line}" != *=* || "${line}" == =* ]]; then
+                      fail "Malformed line in neo4j-base.conf: '${line}'"
+                    fi
+                    set_neo4j_conf "${line%%=*}" "${line#*=}"
+                  done < "${base}"
+                }
+
+                assert_security_invariant() {
+                  local conf="${NEO4J_CONF:-/etc/neo4j/neo4j.conf}"
+                  local value
+                  value=$(awk -F= '/^internal\.dbms\.cypher_ip_blocklist=/ {sub(/^[^=]*=/, ""); print; exit}' "${conf}")
+                  if [[ -z "${value}" ]]; then
+                    fail "Security invariant missing: internal.dbms.cypher_ip_blocklist is absent or empty in ${conf}."
+                  fi
+                }
+
+                configure_memory_recommendation() {
+                  local recommendation line
+                  local applied=false
+                  recommendation=$(neo4j-admin server memory-recommendation)
+                  while IFS= read -r line || [[ -n "${line}" ]]; do
+                    [[ -z "${line}" || "${line}" == \#* ]] && continue
+                    [[ "${line}" == *=* && "${line}" != =* ]] || continue
+                    set_neo4j_conf "${line%%=*}" "${line#*=}"
+                    applied=true
+                  done <<< "${recommendation}"
+                  [[ "${applied}" == "true" ]] || fail "Neo4j memory recommendation returned no configuration keys."
+                }
+
+                configure_cluster() {
+                  local nodeCount="$1"
+                  local region="$2"
+                  local _stack_id="$3"
+                  if [[ ${nodeCount} == 1 ]]; then
+                    echo "Running on a single node."
+                    return 0
+                  fi
+                  echo "Running on multiple nodes.  Configuring membership in neo4j.conf..."
+                  local -r privateIP="$(hostname -i | awk '{print $NF}')"
+                  set_neo4j_conf server.cluster.listen_address 0.0.0.0:6000
+                  set_neo4j_conf server.cluster.advertised_address "${privateIP}:6000"
+                  set_neo4j_conf server.cluster.raft.listen_address 0.0.0.0:7000
+                  set_neo4j_conf server.cluster.raft.advertised_address "${privateIP}:7000"
+                  set_neo4j_conf server.routing.listen_address 0.0.0.0:7688
+                  set_neo4j_conf server.routing.advertised_address "${privateIP}:7688"
+                  set_neo4j_conf initial.dbms.default_primaries_count 3
+                  set_neo4j_conf initial.dbms.default_secondaries_count "$(expr ${nodeCount} - 3)"
+                  set_neo4j_conf dbms.cluster.minimum_initial_system_primaries_count "${nodeCount}"
+                  coreMembers=""
+                  for attempt in $(seq 1 30); do
+                    asgNames=$(aws autoscaling describe-auto-scaling-groups --region "$region" --query "AutoScalingGroups[?Tags[?Key=='StackID' && Value=='${_stack_id}'] && Tags[?Key=='Role' && Value=='neo4j-cluster-node']].AutoScalingGroupName" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | xargs || true)
+                    if [[ -n "${asgNames}" ]]; then
+                      instanceIds=$(aws autoscaling describe-auto-scaling-groups --region "$region" --auto-scaling-group-names ${asgNames} --query "AutoScalingGroups[].Instances[].InstanceId" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | xargs || true)
+                      if [[ -n "${instanceIds}" ]]; then
+                        coreMembers=$(aws ec2 describe-instances --region "$region" --instance-ids ${instanceIds} --query "Reservations[].Instances[].PrivateIpAddress" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | awk '{print $1":6000"}' | paste -sd, - || true)
+                      fi
+                    fi
+                    foundCount=0
+                    [[ -n "${coreMembers}" ]] && foundCount=$(echo "${coreMembers}" | awk -F, '{print NF}')
+                    [[ ${foundCount} -ge ${nodeCount} ]] && break
+                    echo "Peer discovery attempt ${attempt}/30: found ${foundCount}/${nodeCount} members, retrying in 10s..."
+                    sleep 10
+                  done
+                  foundCount=0
+                  [[ -n "${coreMembers}" ]] && foundCount=$(echo "${coreMembers}" | awk -F, '{print NF}')
+                  if [[ -z "${coreMembers}" || ${foundCount} -lt ${nodeCount} ]]; then
+                    fail "Peer discovery failed after 5 minutes."
+                  fi
+                  echo "CoreMembers = ${coreMembers}"
+                  set_neo4j_conf dbms.cluster.discovery.resolver_type LIST
+                  set_neo4j_conf dbms.cluster.endpoints "${coreMembers}"
+                }
+
+                configure_plugin_settings() {
+                  local installBloom="$1"
+                  local bloomLicenseSecretArn="$2"
+                  local installGDS="$3"
+                  local gdsLicenseSecretArn="$4"
+                  echo "Configuring plugin settings in neo4j.conf..."
+                  if [[ "${installBloom}" == "true" ]]; then
+                    set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom,semantics.extension=/rdf"
+                    if [[ -n "${bloomLicenseSecretArn}" ]]; then
+                      set_neo4j_conf dbms.bloom.license_file /var/lib/neo4j/licenses/neo4j-bloom.license
+                    fi
+                  fi
+                  if [[ "${installGDS}" == "true" && -n "${gdsLicenseSecretArn}" ]]; then
+                    set_neo4j_conf gds.enterprise.license_file /var/lib/neo4j/licenses/neo4j-gds.license
+                  fi
+                }
+
+                remove_jdwp_default() {
+                  local conf="${NEO4J_CONF:-/etc/neo4j/neo4j.conf}"
+                  sed -i.bak '/jdwp/d' "${conf}"
+                  rm -f "${conf}.bak"
+                }
+                configure_tls() {
+                  local advertisedDNS="$1"
+                  local loadBalancerDNSName="$2"
+                  local boltAdvertiseDns="${3:-false}"
+                  local certsBase="${NEO4J_CERTS_DIR:-/var/lib/neo4j/certificates}"
+
+                  # Opt-out path (Public without TLS only — Private/ExistingVpc always pass a
+                  # non-empty AdvertisedDNS). Browser stays HTTP/7474, Bolt stays plaintext,
+                  # both advertised via the NLB DNS so in-VPC clients can still connect.
+                  if [[ -z "${advertisedDNS}" ]]; then
+                    echo "TLS disabled (no AdvertisedDNS); leaving Browser and Bolt plaintext."
+                    set_neo4j_conf server.default_advertised_address "${loadBalancerDNSName}"
+                    set_neo4j_conf server.bolt.advertised_address "${loadBalancerDNSName}:7687"
+                    set_neo4j_conf server.http.enabled true
+                    set_neo4j_conf server.http.listen_address 0.0.0.0:7474
+                    set_neo4j_conf server.http.advertised_address "${loadBalancerDNSName}:7474"
+                    set_neo4j_conf server.https.enabled false
+                    return 0
+                  fi
+
+                  echo "Configuring TLS for Bolt and HTTPS..."
+                  # openssl is baked into the AMI by marketplace/create-ami.sh (Placement
+                  # Decision Rule branch 3). It is intentionally not dnf-installed here: a
+                  # package install on the boot path adds a mirror dependency that would turn
+                  # ASG self-heal into an availability failure with no template fix.
+                  command -v openssl >/dev/null 2>&1 || fail "openssl not found; it must be baked into the AMI."
+                  local _proto _dir _key _crt
+                  for _proto in bolt https; do
+                    _dir="${certsBase}/${_proto}"
+                    _key="${_dir}/private.key"
+                    _crt="${_dir}/public.crt"
+                    if [[ -f "${_key}" && -f "${_crt}" ]]; then
+                      echo "  Reusing existing self-signed cert in ${_dir}"
+                    else
+                      echo "  Generating self-signed cert in ${_dir}..."
+                      mkdir -p "${_dir}"
+                      umask 077
+                      # SAN/CN must be AdvertisedDNS: the NLB re-encrypts to this instance and
+                      # Neo4j's Jetty enforces sniHostCheck, so the served cert must match the
+                      # browser's Host (AdvertisedDNS) or HTTPS fails with 400 Invalid SNI.
+                      openssl req -x509 -newkey rsa:2048 -nodes \
+                        -keyout "${_key}" -out "${_crt}" -days 3650 \
+                        -subj "/CN=${advertisedDNS}" \
+                        -addext "subjectAltName=DNS:${advertisedDNS}" >/dev/null 2>&1
+                      umask 022
+                    fi
+                    chown -R neo4j:neo4j "${_dir}"
+                    chmod 600 "${_key}"
+                    chmod 644 "${_crt}"
+                  done
+
+                  # default_advertised_address MUST stay AdvertisedDNS: it is Jetty's no-SNI
+                  # fallback host, and the NLB HTTPS health check on 7473 connects without
+                  # sending SNI. If this is not the cert SAN (AdvertisedDNS), Jetty answers
+                  # the health check with 400 Invalid SNI and every 7473 target goes
+                  # unhealthy. Only Bolt is overridden below.
+                  set_neo4j_conf server.default_advertised_address "${advertisedDNS}"
+                  # Bolt is a routed protocol: the cluster publishes server.bolt.advertised_address
+                  # in its routing table and every neo4j://-style client must resolve it. The
+                  # template sets boltAdvertiseDns=true only when AdvertisedDNS has an in-VPC
+                  # record: on Private when the stack creates the zone, on ExistingVpc when
+                  # CreatePrivateDns=true. Bolt then advertises it, and a neo4j+s:// client that
+                  # sends no routing address still gets a name inside the cert SAN. Otherwise
+                  # AdvertisedDNS may be only a synthetic cert SAN with no in-VPC record, so
+                  # Bolt advertises the always-resolvable NLB DNS instead. Bolt has no
+                  # sniHostCheck, so a non-cert-SAN host is safe there for neo4j+ssc:// clients.
+                  if [[ "${boltAdvertiseDns}" == "true" ]]; then
+                    set_neo4j_conf server.bolt.advertised_address "${advertisedDNS}:7687"
+                  else
+                    set_neo4j_conf server.bolt.advertised_address "${loadBalancerDNSName}:7687"
+                  fi
+                  set_neo4j_conf server.http.enabled false
+                  set_neo4j_conf server.https.enabled true
+                  set_neo4j_conf server.https.listen_address 0.0.0.0:7473
+                  set_neo4j_conf server.https.advertised_address "${advertisedDNS}:7473"
+                  set_neo4j_conf dbms.ssl.policy.bolt.enabled true
+                  set_neo4j_conf dbms.ssl.policy.bolt.base_directory "${certsBase}/bolt"
+                  set_neo4j_conf dbms.ssl.policy.bolt.private_key private.key
+                  set_neo4j_conf dbms.ssl.policy.bolt.public_certificate public.crt
+                  set_neo4j_conf dbms.ssl.policy.bolt.client_auth NONE
+                  set_neo4j_conf server.bolt.tls_level REQUIRED
+                  set_neo4j_conf dbms.ssl.policy.https.enabled true
+                  set_neo4j_conf dbms.ssl.policy.https.base_directory "${certsBase}/https"
+                  set_neo4j_conf dbms.ssl.policy.https.private_key private.key
+                  set_neo4j_conf dbms.ssl.policy.https.public_certificate public.crt
+                  set_neo4j_conf dbms.ssl.policy.https.client_auth NONE
+                }
+                configure_oidc() {
+                  local issuerUri="$1"
+                  local clientIds="$2"
+                  local browserClientId="$3"
+                  local principalClaim="$4"
+                  local groupsClaim="$5"
+                  local adminGroup="$6"
+                  local readerGroup="$7"
+                  local provider="dbms.security.oidc.sso"
+                  local mappings=()
+
+                  if [[ -z "${issuerUri}" ]]; then
+                    echo "OIDC disabled (no OidcIssuerUri); password login only."
+                    return 0
+                  fi
+                  [[ -n "${clientIds}" ]] || fail "OidcIssuerUri is set but OidcClientId is empty."
+                  if [[ -z "${browserClientId}" ]]; then
+                    browserClientId="${clientIds%%,*}"
+                  fi
+                  # Browser and Bloom present an ID token issued to this client, so it must
+                  # pass the audience check.
+                  if [[ ",${clientIds}," != *",${browserClientId},"* ]]; then
+                    fail "OidcBrowserClientId is not one of the IDs in OidcClientId."
+                  fi
+                  if [[ -n "${adminGroup}" ]]; then
+                    mappings+=("\"${adminGroup}\"=admin")
+                  fi
+                  if [[ -n "${readerGroup}" ]]; then
+                    mappings+=("\"${readerGroup}\"=reader")
+                  fi
+                  if (( ${#mappings[@]} > 0 )) && [[ -z "${groupsClaim}" ]]; then
+                    fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
+                  fi
+
+                  # native stays in both lists so password login (operator tooling and
+                  # service accounts) keeps working next to single sign-on.
+                  set_neo4j_conf dbms.security.authentication_providers "oidc-sso,native"
+                  set_neo4j_conf dbms.security.authorization_providers "oidc-sso,native"
+                  set_neo4j_conf "${provider}.display_name" "SSO"
+                  set_neo4j_conf "${provider}.auth_flow" pkce
+                  set_neo4j_conf "${provider}.well_known_discovery_uri" \
+                    "${issuerUri%/}/.well-known/openid-configuration"
+                  set_neo4j_conf "${provider}.audience" "${clientIds}"
+                  set_neo4j_conf "${provider}.params" \
+                    "client_id=${browserClientId};response_type=code;scope=openid profile email"
+                  # Validate the ID token: some providers (Cognito) put no aud claim in the
+                  # access token, so the audience check can only pass on the ID token.
+                  set_neo4j_conf "${provider}.config" \
+                    "token_type_principal=id_token;token_type_authentication=id_token"
+                  if [[ -n "${principalClaim}" ]]; then
+                    set_neo4j_conf "${provider}.claims.username" "${principalClaim}"
+                  fi
+                  if [[ -n "${groupsClaim}" ]]; then
+                    set_neo4j_conf "${provider}.claims.groups" "${groupsClaim}"
+                  fi
+                  if (( ${#mappings[@]} > 0 )); then
+                    local joined
+                    joined=$(IFS=';'; echo "${mappings[*]}")
+                    set_neo4j_conf "${provider}.authorization.group_to_role_mapping" "${joined}"
+                  fi
+                  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s))."
+                }
+                install_cloudwatch_agent() {
+                  local stackName="$1"
+                  local config_path="${CW_AGENT_CONFIG:-/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json}"
+                  local ctl_path="${CW_AGENT_CTL:-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl}"
+                  echo "Configuring CloudWatch agent..."
+                  cat > "${config_path}" <<CWCONFIG
+                {
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [
+                          {
+                            "file_path": "/var/log/neo4j/security.log",
+                            "log_group_name": "/neo4j/${stackName}/application",
+                            "log_stream_name": "{instance_id}/security",
+                            "retention_in_days": 90
+                          },
+                          {
+                            "file_path": "/var/log/neo4j/debug.log",
+                            "log_group_name": "/neo4j/${stackName}/application",
+                            "log_stream_name": "{instance_id}/debug",
+                            "retention_in_days": 90
+                          },
+                          {
+                            "file_path": "/var/log/cloud-init-output.log",
+                            "log_group_name": "/neo4j/${stackName}/application",
+                            "log_stream_name": "{instance_id}/cloud-init-output",
+                            "retention_in_days": 90
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+                CWCONFIG
+                  "${ctl_path}" -a fetch-config -m ec2 -s -c "file:${config_path}"
+                }
+                install_cloudwatch_agent "${stackName}"
+                attach_and_mount_data_volume "${region}" "${_stack_id}" "${_az}" "${_instance_id}" isFirstBoot
+                install_neo4j_from_yum
+                install_apoc
+                if [[ "${installBloom}" == "true" ]]; then
+                  install_plugin Bloom "bloom-plugin-*.jar"
+                  [[ -n "${bloomLicenseSecretArn}" ]] || fail "InstallBloom=true requires BloomLicenseSecretArn to be set."
+                  fetch_and_install_license "${bloomLicenseSecretArn}" /var/lib/neo4j/licenses/neo4j-bloom.license "Bloom" "${region}"
+                fi
+                if [[ "${installGDS}" == "true" ]]; then
+                  install_plugin GDS "neo4j-graph-data-science-*.jar"
+                  [[ -n "${gdsLicenseSecretArn}" ]] || fail "InstallGDS=true requires GdsLicenseSecretArn to be set."
+                  fetch_and_install_license "${gdsLicenseSecretArn}" /var/lib/neo4j/licenses/neo4j-gds.license "GDS" "${region}"
+                fi
+                apply_base_conf
+                configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}" "${boltAdvertiseDns:-false}"
+                configure_memory_recommendation
+                configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
+                configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
+                remove_jdwp_default
+                configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
+                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
+                assert_security_invariant
+                start_neo4j "${initialPassword}" "${isFirstBoot}"
+            /opt/neo4j/conf/neo4j-base.conf:
+              mode: '000644'
+              owner: root
+              group: root
+              content: |
+                server.default_listen_address=0.0.0.0
+                server.bolt.listen_address=0.0.0.0:7687
+                dbms.routing.default_router=SERVER
+                server.metrics.enabled=true
+                server.metrics.jmx.enabled=true
+                server.metrics.prefix=neo4j
+                server.metrics.filter=*
+                server.metrics.csv.interval=5s
+                internal.dbms.cypher_ip_blocklist=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.169.0/24,fc00::/7,fe80::/10,ff00::/8
+                dbms.security.procedures.unrestricted=gds.*,apoc.*,bloom.*
+                dbms.security.http_auth_allowlist=/,/browser.*,/bloom.*
+                dbms.security.procedures.allowlist=apoc.*,gds.*,bloom.*
+                dbms.databases.seed_from_uri_providers=CloudSeedProvider,ServerSeedProvider
     Properties:
       LaunchTemplateData:
         ImageId: !Ref ImageId
@@ -603,359 +1405,84 @@ Resources:
               - "installGDS="
               - Ref: InstallGDS
               - "\n"
-              - "boltCertArn="
-              - Ref: BoltCertificateSecretArn
+              - "installBloom="
+              - Ref: InstallBloom
               - "\n"
-              - "boltAdvertisedDNS="
-              - Ref: BoltAdvertisedDNS
+              - "bloomLicenseSecretArn="
+              - Ref: BloomLicenseSecretArn
+              - "\n"
+              - "gdsLicenseSecretArn="
+              - Ref: GdsLicenseSecretArn
+              - "\n"
+              - "advertisedDNS="
+              - Ref: AdvertisedDNS
+              - "\n"
+              - "oidcIssuerUriB64="
+              - Fn::Base64: {Ref: OidcIssuerUri}
+              - "\n"
+              - "oidcClientIdB64="
+              - Fn::Base64: {Ref: OidcClientId}
+              - "\n"
+              - "oidcBrowserClientIdB64="
+              - Fn::Base64: {Ref: OidcBrowserClientId}
+              - "\n"
+              - "oidcPrincipalClaimB64="
+              - Fn::Base64: {Ref: OidcPrincipalClaim}
+              - "\n"
+              - "oidcGroupsClaimB64="
+              - Fn::Base64: {Ref: OidcGroupsClaim}
+              - "\n"
+              - "oidcAdminGroupB64="
+              - Fn::Base64: {Ref: OidcAdminGroup}
+              - "\n"
+              - "oidcReaderGroupB64="
+              - Fn::Base64: {Ref: OidcReaderGroup}
               - "\n"
               - |
-                export IS_FIRST_BOOT=false
-
                 _token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
                 _instance_id=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/instance-id)
+                _az=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+                # ERR traps do not run for explicit `exit 1`, so fail() signals CloudFormation
+                # before exiting to avoid waiting for the ASG signal timeout.
+                fail() {
+                  echo "ERROR: $*" >&2
+                  if [[ -n "${logicalId:-}" ]]; then
+                    cfn-signal --success false --stack "$stackName" --resource "$logicalId" --region "$region" || true
+                  fi
+                  exit 1
+                }
+
+                [[ -n "${_instance_id}" && -n "${_az}" ]] || fail "IMDSv2 metadata unavailable."
                 logicalId=$(aws ec2 describe-tags --region "$region" --filters "Name=resource-id,Values=${_instance_id}" "Name=key,Values=aws:cloudformation:logical-id" --query "Tags[0].Value" --output text 2>/dev/null || true)
                 trap 'if [[ -n "${logicalId:-}" ]]; then cfn-signal --success false --stack "$stackName" --resource "$logicalId" --region "$region"; fi' ERR
+                _stack_id=$(aws ec2 describe-tags --region "$region" \
+                  --filters "Name=resource-id,Values=${_instance_id}" "Name=key,Values=aws:cloudformation:stack-id" \
+                  --query "Tags[0].Value" --output text 2>/dev/null || true)
+                [[ -n "${_stack_id}" && "${_stack_id}" != "None" ]] || fail "stack-id tag missing."
 
                 password=$(aws secretsmanager get-secret-value \
                   --secret-id "neo4j/${stackName}/password" \
                   --query SecretString --output text \
                   --region "${region}")
 
-                set_neo4j_conf() {
-                  local conf=/etc/neo4j/neo4j.conf
-                  sed -i "s|^#\?$1=.*|$1=$2|" "$conf"
-                  if ! grep -q "^$1=" "$conf"; then
-                    echo "$1=$2" >> "$conf"
-                  fi
-                }
+                # cfn-init writes the template-owned bootstrap and base conf from the shared
+                # LaunchTemplate's AWS::CloudFormation::Init metadata. A non-zero exit trips
+                # the ERR trap and signals failure before reaching cfn-signal --success true,
+                # per NFR-9. The instance role already grants cloudformation:DescribeStack*.
+                cfn-init --stack "$stackName" --resource Neo4jLaunchTemplate --region "$region"
 
-                pin_neo4j_user() {
-                  getent group neo4j >/dev/null || groupadd -g 500 neo4j
-                  getent passwd neo4j >/dev/null || useradd -u 500 -g 500 -r -s /sbin/nologin -d /var/lib/neo4j neo4j
-                }
+                # Hand every runtime value to the bootstrap as named, exported environment
+                # variables. The Secrets Manager password travels by env, never on argv, so it
+                # is not exposed in the process list or cloud-init logs.
+                export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
+                export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
+                export password _stack_id _instance_id _az
+                export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
+                export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
 
-                attach_and_mount_data_volume() {
-                  echo "Attaching and mounting data volume..."
-                  local _token
-                  _token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-                  local _instance_id
-                  _instance_id=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/instance-id)
-                  local _az
-                  _az=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/placement/availability-zone)
-                  if [[ -z "${_instance_id}" || -z "${_az}" ]]; then
-                    echo "ERROR: Could not read instance metadata from IMDSv2. Exiting."
-                    exit 1
-                  fi
-                  local _stack_id
-                  _stack_id=$(aws ec2 describe-tags --region "$region" \
-                    --filters "Name=resource-id,Values=${_instance_id}" \
-                              "Name=key,Values=aws:cloudformation:stack-id" \
-                    --query "Tags[0].Value" --output text)
-                  if [[ -z "${_stack_id}" || "${_stack_id}" == "None" ]]; then
-                    echo "ERROR: Could not read aws:cloudformation:stack-id tag. Exiting."
-                    exit 1
-                  fi
-                  local _vols _vol_count _data_vol_id
-                  _vols=$(aws ec2 describe-volumes --region "$region" \
-                    --filters "Name=tag:StackID,Values=${_stack_id}" \
-                              "Name=tag:Role,Values=neo4j-cluster-data" \
-                              "Name=availability-zone,Values=${_az}" \
-                    --query "Volumes[*].VolumeId" --output text)
-                  _vol_count=$(echo "${_vols}" | wc -w | xargs)
-                  if [[ "${_vol_count}" -ne 1 ]]; then
-                    echo "ERROR: Expected 1 data volume in AZ ${_az}, found ${_vol_count}. Exiting."
-                    exit 1
-                  fi
-                  _data_vol_id="${_vols}"
-                  echo "Data volume: ${_data_vol_id} in ${_az}"
-                  echo "  Waiting for volume ${_data_vol_id} to reach 'available' state (up to 10 min)..."
-                  local _vol_top_state _wait_s=0
-                  while true; do
-                    _vol_top_state=$(aws ec2 describe-volumes --region "$region" \
-                      --volume-ids "${_data_vol_id}" \
-                      --query "Volumes[0].State" --output text 2>/dev/null || echo "unknown")
-                    [[ "${_vol_top_state}" == "available" ]] && break
-                    if (( _wait_s >= 600 )); then
-                      echo "ERROR: Volume ${_data_vol_id} did not become available after 10 min (state=${_vol_top_state}). Exiting."
-                      exit 1
-                    fi
-                    echo "  Volume state: ${_vol_top_state}, waiting 10s... (${_wait_s}s elapsed)"
-                    sleep 10
-                    _wait_s=$(( _wait_s + 10 ))
-                  done
-                  local _attach_ok=false
-                  for _attach_try in $(seq 1 3); do
-                    if aws ec2 attach-volume --region "$region" \
-                        --volume-id "${_data_vol_id}" \
-                        --instance-id "${_instance_id}" \
-                        --device /dev/sdf >/dev/null 2>&1; then
-                      _attach_ok=true
-                      break
-                    fi
-                    echo "  attach-volume attempt ${_attach_try}/3 failed, retrying in 5s..."
-                    sleep 5
-                  done
-                  if [[ "${_attach_ok}" != "true" ]]; then
-                    echo "ERROR: Could not attach volume ${_data_vol_id} to ${_instance_id}. Exiting."
-                    exit 1
-                  fi
-                  echo "Waiting for volume ${_data_vol_id} to reach 'attached' state (up to 2 min)..."
-                  local _vol_state=""
-                  for _i in $(seq 1 24); do
-                    _vol_state=$(aws ec2 describe-volumes --region "$region" \
-                      --volume-ids "${_data_vol_id}" \
-                      --query "Volumes[0].Attachments[0].State" --output text 2>/dev/null || true)
-                    [[ "${_vol_state}" == "attached" ]] && break
-                    echo "  volume state: ${_vol_state} (${_i}/24)..."
-                    sleep 5
-                  done
-                  if [[ "${_vol_state}" != "attached" ]]; then
-                    echo "ERROR: Volume ${_data_vol_id} did not reach 'attached' within 2 minutes. Exiting."
-                    exit 1
-                  fi
-                  local _vol_serial="${_data_vol_id//-/}"
-                  local _data_dev=""
-                  for _nvme_try in $(seq 1 6); do
-                    for _dev in /dev/nvme*n1; do
-                      [[ -b "$_dev" ]] || continue
-                      if /sbin/ebsnvme-id -u "$_dev" 2>/dev/null | grep -q "${_data_vol_id}"; then
-                        _data_dev="$_dev"
-                        break 2
-                      fi
-                    done
-                    if [[ -L /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${_vol_serial} ]]; then
-                      _data_dev=$(readlink -f /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${_vol_serial})
-                      break
-                    fi
-                    sleep 2
-                  done
-                  if [[ -z "${_data_dev}" || ! -b "${_data_dev}" ]]; then
-                    echo "ERROR: Could not resolve NVMe device for volume ${_data_vol_id} after retries. Exiting."
-                    exit 1
-                  fi
-                  echo "NVMe device: ${_data_dev}"
-                  if ! blkid "${_data_dev}" > /dev/null 2>&1; then
-                    echo "First boot: formatting ${_data_dev} with xfs..."
-                    mkfs.xfs "${_data_dev}"
-                    IS_FIRST_BOOT=true
-                  fi
-                  local _uuid
-                  _uuid=$(blkid -s UUID -o value "${_data_dev}")
-                  if [[ -z "${_uuid}" ]]; then
-                    echo "ERROR: Could not read UUID from ${_data_dev}. Exiting."
-                    exit 1
-                  fi
-                  mkdir -p /var/lib/neo4j/data
-                  echo "UUID=${_uuid}  /var/lib/neo4j/data  xfs  defaults,nofail,noatime,x-systemd.device-timeout=30  0 2" >> /etc/fstab
-                  mount /var/lib/neo4j/data
-                  echo "Data volume mounted at /var/lib/neo4j/data"
-                  if [[ "${IS_FIRST_BOOT}" == "true" ]]; then
-                    chown neo4j:neo4j /var/lib/neo4j/data
-                  fi
-                }
+                /opt/neo4j/bin/neo4j-bootstrap.sh
 
-                install_neo4j_from_yum() {
-                  echo "Installing Graph Database..."
-                  rpm --import https://debian.neo4j.com/neotechnology.gpg.key
-                  echo "[neo4j]
-                name=Neo4j RPM Repository
-                baseurl=https://yum.neo4j.com/stable/latest
-                enabled=1
-                gpgcheck=1
-                " > /etc/yum.repos.d/neo4j.repo
-                  export NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
-                  yum -y install neo4j-enterprise
-                  systemctl enable neo4j
-                }
-                install_apoc() {
-                  echo "Installing APOC plugin..."
-                  cp /var/lib/neo4j/labs/apoc-*-core.jar /var/lib/neo4j/plugins/ 2>/dev/null || \
-                  cp /var/lib/neo4j/products/apoc-*-core.jar /var/lib/neo4j/plugins/ 2>/dev/null || true
-                }
-                install_bloom() {
-                  echo "Installing Bloom plugin..."
-                  cp /var/lib/neo4j/products/bloom-plugin-*.jar /var/lib/neo4j/plugins/
-                  chown neo4j:neo4j /var/lib/neo4j/plugins/bloom-plugin-*.jar
-                }
-                install_gds() {
-                  echo "Installing Graph Data Science plugin..."
-                  cp /var/lib/neo4j/products/neo4j-graph-data-science-*.jar /var/lib/neo4j/plugins/
-                }
-                extension_config() {
-                  echo Configuring extensions and security in neo4j.conf...
-                  set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom,semantics.extension=/rdf"
-                  # Bloom and GDS Enterprise do not auto-discover their licence files.
-                  # Without these settings, bloom.checkLicenseCompliance() returns "missing"
-                  # and gds.isLicensed() returns false even when the licence files are on disk.
-                  # Matches the canonical config keys used by neo4j/docker-neo4j and
-                  # neo4j/helm-charts (examples/bloom-gds-license/gds-bloom-with-license.yaml).
-                  set_neo4j_conf dbms.bloom.license_file /var/lib/neo4j/licenses/neo4j-bloom.license
-                  if [[ "${installGDS}" == "true" ]]; then
-                    set_neo4j_conf gds.enterprise.license_file /var/lib/neo4j/licenses/neo4j-gds.license
-                  fi
-                  set_neo4j_conf dbms.security.procedures.unrestricted "gds.*,apoc.*,bloom.*"
-                  set_neo4j_conf dbms.security.http_auth_allowlist "/,/browser.*,/bloom.*"
-                  set_neo4j_conf dbms.security.procedures.allowlist "apoc.*,gds.*,bloom.*"
-                  sed -i '/jdwp/d' /etc/neo4j/neo4j.conf
-                }
-                build_neo4j_conf_file() {
-                  local -r privateIP="$(hostname -i | awk '{print $NF}')"
-                  echo "Configuring network in neo4j.conf..."
-                  set_neo4j_conf server.default_listen_address 0.0.0.0
-                  set_neo4j_conf server.default_advertised_address "${loadBalancerDNSName}"
-                  set_neo4j_conf server.bolt.listen_address 0.0.0.0:7687
-                  set_neo4j_conf server.bolt.advertised_address "${boltAdvertisedDNS:-${loadBalancerDNSName}}:7687"
-                  set_neo4j_conf server.http.listen_address 0.0.0.0:7474
-                  set_neo4j_conf server.http.advertised_address "${loadBalancerDNSName}:7474"
-                  neo4j-admin server memory-recommendation >> /etc/neo4j/neo4j.conf
-                  set_neo4j_conf server.metrics.enabled true
-                  set_neo4j_conf server.metrics.jmx.enabled true
-                  set_neo4j_conf server.metrics.prefix neo4j
-                  set_neo4j_conf server.metrics.filter "*"
-                  set_neo4j_conf server.metrics.csv.interval 5s
-                  set_neo4j_conf dbms.routing.default_router SERVER
-                  if [[ ${nodeCount} == 1 ]]; then
-                    echo "Running on a single node."
-                  else
-                    echo "Running on multiple nodes.  Configuring membership in neo4j.conf..."
-                    set_neo4j_conf server.cluster.listen_address 0.0.0.0:6000
-                    set_neo4j_conf server.cluster.advertised_address "${privateIP}:6000"
-                    set_neo4j_conf server.cluster.raft.listen_address 0.0.0.0:7000
-                    set_neo4j_conf server.cluster.raft.advertised_address "${privateIP}:7000"
-                    set_neo4j_conf server.routing.listen_address 0.0.0.0:7688
-                    set_neo4j_conf server.routing.advertised_address "${privateIP}:7688"
-                    set_neo4j_conf initial.dbms.default_primaries_count 3
-                    set_neo4j_conf initial.dbms.default_secondaries_count "$(expr ${nodeCount} - 3)"
-                    set_neo4j_conf dbms.cluster.minimum_initial_system_primaries_count "${nodeCount}"
-                    TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-                    instanceId=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
-                    if [[ -z "${instanceId}" ]]; then
-                      echo "ERROR: Could not read instance ID from IMDSv2. Exiting."
-                      exit 1
-                    fi
-                    stackId=$(aws ec2 describe-tags --region "$region" --filters "Name=resource-id,Values=${instanceId}" "Name=key,Values=aws:cloudformation:stack-id" --query "Tags[0].Value" --output text)
-                    if [[ -z "${stackId}" || "${stackId}" == "None" ]]; then
-                      echo "ERROR: Could not read aws:cloudformation:stack-id tag from instance ${instanceId}. Exiting."
-                      exit 1
-                    fi
-                    coreMembers=""
-                    for attempt in $(seq 1 30); do
-                      asgNames=$(aws autoscaling describe-auto-scaling-groups --region "$region" --query "AutoScalingGroups[?Tags[?Key=='StackID' && Value=='${stackId}'] && Tags[?Key=='Role' && Value=='neo4j-cluster-node']].AutoScalingGroupName" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | xargs || true)
-                      if [[ -n "${asgNames}" ]]; then
-                        instanceIds=$(aws autoscaling describe-auto-scaling-groups --region "$region" --auto-scaling-group-names ${asgNames} --query "AutoScalingGroups[].Instances[].InstanceId" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | xargs || true)
-                        if [[ -n "${instanceIds}" ]]; then
-                          coreMembers=$(aws ec2 describe-instances --region "$region" --instance-ids ${instanceIds} --query "Reservations[].Instances[].PrivateIpAddress" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | grep -v '^None$' | awk '{print $1":6000"}' | paste -sd, || true)
-                        fi
-                      fi
-                      foundCount=0
-                      [[ -n "${coreMembers}" ]] && foundCount=$(echo "${coreMembers}" | awk -F, '{print NF}')
-                      [[ ${foundCount} -ge ${nodeCount} ]] && break
-                      echo "Peer discovery attempt ${attempt}/30: found ${foundCount}/${nodeCount} members, retrying in 10s..."
-                      sleep 10
-                    done
-                    if [[ -z "${coreMembers}" ]]; then
-                      echo "ERROR: Peer discovery failed after 5 minutes. Exiting."
-                      exit 1
-                    fi
-                    echo "CoreMembers = ${coreMembers}"
-                    set_neo4j_conf dbms.cluster.discovery.resolver_type LIST
-                    set_neo4j_conf dbms.cluster.endpoints "${coreMembers}"
-                  fi
-                  if [ -n "${boltCertArn}" ]; then
-                    command -v jq >/dev/null || dnf install -y jq
-                    mkdir -p /var/lib/neo4j/certificates/bolt
-                    local _secret_json
-                    _secret_json=$(aws secretsmanager get-secret-value --region "${region}" \
-                      --secret-id "${boltCertArn}" --query SecretString --output text)
-                    if ! echo "${_secret_json}" | jq -e 'has("certificate") and has("private_key")' >/dev/null; then
-                      echo "ERROR: Secret ${boltCertArn} must be JSON with fields 'certificate' (PEM) and 'private_key' (PEM). Exiting." >&2
-                      exit 1
-                    fi
-                    umask 077
-                    echo "${_secret_json}" | jq -r '.private_key' > /var/lib/neo4j/certificates/bolt/private.key
-                    echo "${_secret_json}" | jq -r '.certificate' > /var/lib/neo4j/certificates/bolt/public.crt
-                    umask 022
-                    unset _secret_json
-                    chown -R neo4j:neo4j /var/lib/neo4j/certificates
-                    chmod 600 /var/lib/neo4j/certificates/bolt/private.key
-                    chmod 644 /var/lib/neo4j/certificates/bolt/public.crt
-                    set_neo4j_conf dbms.ssl.policy.bolt.enabled true
-                    set_neo4j_conf dbms.ssl.policy.bolt.base_directory /var/lib/neo4j/certificates/bolt
-                    set_neo4j_conf dbms.ssl.policy.bolt.private_key private.key
-                    set_neo4j_conf dbms.ssl.policy.bolt.public_certificate public.crt
-                    set_neo4j_conf dbms.ssl.policy.bolt.client_auth NONE
-                    set_neo4j_conf server.bolt.tls_level REQUIRED
-                  fi
-                }
-                add_cypher_ip_blocklist() {
-                  set_neo4j_conf internal.dbms.cypher_ip_blocklist "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.169.0/24,fc00::/7,fe80::/10,ff00::/8"
-                }
-                start_neo4j() {
-                  echo "Starting Neo4j..."
-                  service neo4j start
-                  # IS_FIRST_BOOT gates this: on replacement boots the auth DB already
-                  # exists on the retained volume, so skipping preserves any post-deploy
-                  # password changes the customer made.
-                  if [[ "${IS_FIRST_BOOT}" == "true" ]]; then
-                    neo4j-admin dbms set-initial-password "${password}"
-                  fi
-                }
-                install_cloudwatch_agent() {
-                  echo "Installing CloudWatch agent..."
-                  yum install -y amazon-cloudwatch-agent
-                  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONFIG
-                {
-                  "logs": {
-                    "logs_collected": {
-                      "files": {
-                        "collect_list": [
-                          {
-                            "file_path": "/var/log/neo4j/security.log",
-                            "log_group_name": "/neo4j/${stackName}/application",
-                            "log_stream_name": "{instance_id}/security",
-                            "retention_in_days": 90
-                          },
-                          {
-                            "file_path": "/var/log/neo4j/debug.log",
-                            "log_group_name": "/neo4j/${stackName}/application",
-                            "log_stream_name": "{instance_id}/debug",
-                            "retention_in_days": 90
-                          },
-                          {
-                            "file_path": "/var/log/cloud-init-output.log",
-                            "log_group_name": "/neo4j/${stackName}/application",
-                            "log_stream_name": "{instance_id}/cloud-init-output",
-                            "retention_in_days": 90
-                          }
-                        ]
-                      }
-                    }
-                  }
-                }
-                CWCONFIG
-                  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-                }
-                install_cloudwatch_agent
-                dnf install -y python3.11 unzip
-                dnf remove -y awscli 2>/dev/null || true
-                ARCH=$(uname -m)
-                curl -s "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip
-                unzip -q /tmp/awscliv2.zip -d /tmp/
-                /tmp/aws/install
-                rm -rf /tmp/awscliv2.zip /tmp/aws
-                pin_neo4j_user
-                attach_and_mount_data_volume
-                install_neo4j_from_yum
-                install_apoc
-                install_bloom
-                if [[ "${installGDS}" == "true" ]]; then
-                  install_gds
-                fi
-                extension_config
-                build_neo4j_conf_file
-                add_cypher_ip_blocklist
-                start_neo4j
                 # cfn-signal shebang (#!/usr/bin/python3 -s) requires cfnbootstrap under python3.9;
                 # switch the default only after signaling so cfn-signal can find its dependencies.
                 cfn-signal --success true --stack "$stackName" --resource "$logicalId" --region "$region"
@@ -1126,15 +1653,23 @@ Resources:
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       Type: network
 
-  Neo4jHTTPListener:
+  Neo4jBrowserListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
-        - TargetGroupArn: !Ref Neo4jHTTPTargetGroup
+        - TargetGroupArn: !Ref Neo4jBrowserTargetGroup
           Type: forward
       LoadBalancerArn: !Ref Neo4jNetworkLoadBalancer
-      Port: 7474
-      Protocol: TCP
+      Port: !If [UsePublicTLS, 7473, 7474]
+      Protocol: !If [UsePublicTLS, TLS, TCP]
+      Certificates: !If
+        - UsePublicTLS
+        - - CertificateArn: !Ref CertificateArn
+        - !Ref 'AWS::NoValue'
+      SslPolicy: !If
+        - UsePublicTLS
+        - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
+        - !Ref 'AWS::NoValue'
 
   Neo4jBoltListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -1144,23 +1679,41 @@ Resources:
           Type: forward
       LoadBalancerArn: !Ref Neo4jNetworkLoadBalancer
       Port: 7687
-      Protocol: TCP
+      Protocol: !If [UsePublicTLS, TLS, TCP]
+      Certificates: !If
+        - UsePublicTLS
+        - - CertificateArn: !Ref CertificateArn
+        - !Ref 'AWS::NoValue'
+      SslPolicy: !If
+        - UsePublicTLS
+        - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
+        - !Ref 'AWS::NoValue'
 
-  Neo4jHTTPTargetGroup:
+  Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Join
         - '-'
         - - !Ref 'AWS::StackName'
-          - 'http'
+          - !If [UsePublicTLS, 'https', 'http']
           - 'tg'
-      Port: 7474
-      Protocol: TCP
-      HealthCheckProtocol: HTTP
-      HealthCheckPath: /
+      Port: !If [UsePublicTLS, 7473, 7474]
+      Protocol: !If [UsePublicTLS, TLS, TCP]
+      # No TLS: L7 HTTP GET / so a target is healthy only when Neo4j actually
+      # serves. With TLS (UsePublicTLS): TCP, not HTTPS, because the NLB health
+      # checker opens the TLS connection without SNI and Neo4j's Jetty
+      # sniHostCheck answers an HTTPS GET / probe 400 Invalid SNI, so the
+      # target would never go healthy and (HealthCheckType=ELB on the node
+      # ASGs) the cluster would enter a self-heal kill loop. HealthCheckPath
+      # and Matcher are invalid for a TCP check, so they are present only in
+      # the HTTP branch.
+      HealthCheckProtocol: !If [UsePublicTLS, TCP, HTTP]
+      HealthCheckPath: !If [UsePublicTLS, !Ref 'AWS::NoValue', /]
       HealthCheckIntervalSeconds: 10
-      Matcher:
-        HttpCode: '200'
+      Matcher: !If
+        - UsePublicTLS
+        - !Ref 'AWS::NoValue'
+        - HttpCode: '200'
       TargetGroupAttributes:
         - Key: preserve_client_ip.enabled
           Value: "false"
@@ -1182,7 +1735,10 @@ Resources:
           - 'bolt'
           - 'tg'
       Port: 7687
-      Protocol: TCP
+      Protocol: !If [UsePublicTLS, TLS, TCP]
+      # Bolt is a binary protocol, not HTTP, so no L7 health check exists; a
+      # TCP connect is the strongest check NLB can run for this target group.
+      HealthCheckProtocol: TCP
       HealthCheckIntervalSeconds: 10
       TargetGroupAttributes:
         - Key: preserve_client_ip.enabled
@@ -1207,6 +1763,94 @@ Resources:
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jConfigNlbDnsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/nlb-dns'
+      Type: String
+      Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Public NLB DNS name. Off-VPC clients connect to this host on 7687 (Bolt) and 7474/7473 (Browser).
+
+  Neo4jConfigPasswordSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/password-secret-arn'
+      Type: String
+      Value: !Ref Neo4jPasswordSecret
+      Description: Secrets Manager ARN for the Neo4j admin password. Off-VPC clients fetch the password from this secret.
+
+  Neo4jConfigAdvertisedDnsParameter:
+    Type: AWS::SSM::Parameter
+    Condition: UsePublicTLS
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/advertised-dns'
+      Type: String
+      Value: !Ref AdvertisedDNS
+      Description: Advertised DNS name that resolves to the public NLB and matches the ACM cert SAN. Published only when public TLS is enabled; clients connect via neo4j+s://<advertised-dns>:7687.
+
+  Neo4jConfigBoltUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/bolt-url'
+      Type: String
+      Value: !If
+        - UsePublicTLS
+        - !Sub 'neo4j+s://${AdvertisedDNS}:7687'
+        - !If
+          - CreateCluster
+          - !Sub
+            - 'neo4j://${NlbDns}:7687'
+            - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+          - !Sub
+            - 'bolt://${NlbDns}:7687'
+            - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Bolt connection URL with the scheme matching the deployed TLS and cluster mode. Clients use this directly; no scheme derivation required.
+
+  Neo4jConfigHttpsUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/https-url'
+      Type: String
+      Value: !If
+        - UsePublicTLS
+        - !Sub 'https://${AdvertisedDNS}:7473'
+        - !Sub
+          - 'http://${NlbDns}:7474'
+          - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+      Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
+
+  Neo4jConfigTlsSelfSignedParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/tls-self-signed'
+      Type: String
+      Value: 'false'
+      Description: Always 'false' on Public. Public stacks use either a real ACM cert (UsePublicTLS=true) or no TLS at all, so there is never a self-signed cert to skip-verify. Published for contract uniformity with the Private and ExistingVpc templates.
+
+  Neo4jConfigNumberOfServersParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/number-of-servers'
+      Type: String
+      Value: !Ref NumberOfServers
+      Description: Number of Neo4j servers in the cluster (1 for single-node, 3 for cluster). Determines whether clients use the bolt:// or neo4j:// scheme when TLS is off.
+
+  Neo4jConfigRegionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/region'
+      Type: String
+      Value: !Ref 'AWS::Region'
+      Description: AWS region for the Neo4j EE stack.
+
+  Neo4jConfigStackNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/stack-name'
+      Type: String
+      Value: !Ref 'AWS::StackName'
+      Description: CloudFormation stack name.
 
   Neo4jFlowLogsGroup:
     Type: AWS::Logs::LogGroup
@@ -1256,16 +1900,44 @@ Resources:
       LogGroupName: !Sub '/neo4j/${AWS::StackName}/application'
       RetentionInDays: 90
 
+  Neo4jAlertTopicKey:
+    Type: AWS::KMS::Key
+    Condition: HasAlertEmail
+    Properties:
+      Description: !Sub 'KMS key for Neo4j alert topic ${AWS::StackName}'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
+      KmsMasterKeyId: !Ref Neo4jAlertTopicKey
       Subscription:
-        Fn::If:
-          - HasAlertEmail
-          - - Protocol: email
-              Endpoint: !Ref AlertEmail
-          - !Ref AWS::NoValue
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
 
   Neo4jFailedAuthMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -1280,6 +1952,7 @@ Resources:
 
   Neo4jFailedAuthAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
     Properties:
       AlarmName: !Sub 'Neo4j-FailedAuth-${AWS::StackName}'
       AlarmDescription: 'Neo4j authentication failures exceeded 10 in a 5-minute window'
@@ -1295,22 +1968,18 @@ Resources:
       TreatMissingData: notBreaching
 
 Outputs:
-  Neo4jBrowserURL:
-    Description: URL for Neo4j Browser
-    Value: !Join
-      - ''
-      - - 'http://'
-        - !GetAtt Neo4jNetworkLoadBalancer.DNSName
-        - ':'
-        - '7474'
-  Neo4jURI:
-    Description: Neo4j URI
-    Value: !Join
-      - ''
-      - - 'neo4j://'
-        - !GetAtt Neo4jNetworkLoadBalancer.DNSName
-        - ':'
-        - '7687'
+  Neo4jInternalDNS:
+    Description: NLB DNS name (canonical host across all EE templates)
+    Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+  Neo4jHttpsUrl:
+    Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
+    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
+  Neo4jBoltUrl:
+    Description: Bolt connection URL with the scheme matching the deployed TLS and cluster mode.
+    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+  Neo4jTlsSelfSigned:
+    Description: Always 'false' on Public. Public stacks use either a real ACM cert (UsePublicTLS=true) or no TLS at all. Published for contract uniformity with the Private and ExistingVpc templates.
+    Value: !GetAtt Neo4jConfigTlsSelfSignedParameter.Value
   Neo4jDataVolumeIds:
     Description: >-
       Comma-separated list of persistent data volume IDs. Retained across
@@ -1335,11 +2004,13 @@ Outputs:
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
   Neo4jAlertTopicArn:
+    Condition: HasAlertEmail
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic
   VpcFlowLogGroupName:
     Description: CloudWatch Logs log group for VPC flow logs
     Value: !Ref Neo4jFlowLogsGroup
   FailedAuthAlarmName:
+    Condition: HasAlertEmail
     Description: CloudWatch alarm name for Neo4j failed authentication events
     Value: !Ref Neo4jFailedAuthAlarm

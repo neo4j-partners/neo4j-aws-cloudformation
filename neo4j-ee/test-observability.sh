@@ -88,7 +88,7 @@ STACK_NAME=$(read_field "${OUTPUTS_FILE}" "StackName")
 REGION=$(read_field "${OUTPUTS_FILE}" "Region")
 LOG_GROUP=$(read_field "${OUTPUTS_FILE}" "Neo4jAppLogGroupName")
 ALERT_TOPIC_ARN=$(read_field "${OUTPUTS_FILE}" "Neo4jAlertTopicArn")
-BROWSER_URL=$(read_field "${OUTPUTS_FILE}" "Neo4jBrowserURL")
+BROWSER_URL=$(read_field "${OUTPUTS_FILE}" "Neo4jHttpsUrl")
 PASSWORD=$(read_field "${OUTPUTS_FILE}" "Password")
 NUMBER_OF_SERVERS=$(read_field "${OUTPUTS_FILE}" "NumberOfServers")
 
@@ -106,8 +106,15 @@ if [ -z "${ALARM_NAME}" ]; then
   echo "  (FailedAuthAlarmName not in deploy file — derived from stack name)"
 fi
 
-# Extract hostname from the browser URL (http://hostname:7474)
-NEO4J_HOST=$(echo "${BROWSER_URL}" | sed 's|http://||; s|:.*||')
+# Neo4jHttpsUrl is http://<nlb>:7474 on plaintext stacks and
+# https://<advertised-dns>:7473 on TLS stacks. Probe the URL as published.
+# -k is added for https because the NLB cert may be self-signed and these
+# probes carry deliberately wrong credentials.
+BROWSER_URL="${BROWSER_URL%/}"
+CURL_INSECURE=""
+if [[ "${BROWSER_URL}" == https://* ]]; then
+  CURL_INSECURE="-k"
+fi
 
 echo ""
 echo "============================================="
@@ -268,13 +275,13 @@ fi
 
 # Send 12 authentication requests with the wrong password to trigger the metric filter.
 # The Neo4j HTTP transactional API returns 401 and writes "Failed to log in" to security.log.
-info "Sending 12 failed authentication requests to ${NEO4J_HOST}:7474..."
+info "Sending 12 failed authentication requests to ${BROWSER_URL}..."
 for i in $(seq 1 12); do
-  curl -s -o /dev/null \
+  curl -s -o /dev/null ${CURL_INSECURE} \
     -u "obstest_${i}_${RANDOM}:WrongPassword" \
     -H "Content-Type: application/json" \
     -d '{"statements":[{"statement":"RETURN 1"}]}' \
-    "http://${NEO4J_HOST}:7474/db/neo4j/tx" \
+    "${BROWSER_URL}/db/neo4j/tx" \
     --connect-timeout 5 \
     --max-time 10 \
     2>/dev/null || true

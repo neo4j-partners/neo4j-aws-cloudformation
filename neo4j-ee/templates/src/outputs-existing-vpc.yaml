@@ -6,6 +6,26 @@
   Neo4jInternalDNS:
     Description: Internal NLB DNS name (not internet-reachable; use SSM port-forwarding to connect)
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+  Neo4jBoltUrl:
+    Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+  Neo4jHttpsUrl:
+    Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
+    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
+  Neo4jTlsSelfSigned:
+    Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use. HTTPS Query API consumers key TLS skip-verify off this flag.
+    Value: !GetAtt Neo4jConfigTlsSelfSignedParameter.Value
+  Neo4jPrivateDnsHostedZoneId:
+    Condition: CreatePrivateDns
+    Description: Route 53 private hosted zone ID containing AdvertisedDNS.
+    Value: !If
+      - UseExistingPrivateDnsHostedZone
+      - !Ref PrivateDnsHostedZoneId
+      - !Ref Neo4jPrivateDnsHostedZone
+  Neo4jPrivateDnsRecord:
+    Condition: CreatePrivateDns
+    Description: Private DNS record mapped to the internal NLB.
+    Value: !Ref AdvertisedDNS
   Neo4jOperatorBastionId:
     Description: >-
       Operator bastion instance ID. Use this as the SSM --target for port-forwarding
@@ -32,11 +52,11 @@
       - !Sub '${Neo4jNode1DataVolume},${Neo4jNode2DataVolume},${Neo4jNode3DataVolume}'
       - !Ref Neo4jNode1DataVolume
   Neo4jSSMBoltCommand:
-    Description: "SSM port-forward for Bolt via operator bastion: run then connect to neo4j://localhost:7687"
+    Description: "SSM port-forward for Bolt via operator bastion. After mapping AdvertisedDNS to 127.0.0.1 in /etc/hosts, operator tooling connects to neo4j+ssc://<AdvertisedDNS>:7687 (tolerates the self-signed test cert). Production clients with a trusted cert and real DNS use neo4j+s://<AdvertisedDNS>:7687."
     Value: !Sub "aws ssm start-session --target ${Neo4jOperatorBastion} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters 'host=${Neo4jNetworkLoadBalancer.DNSName},portNumber=7687,localPortNumber=7687' --region ${AWS::Region}"
-  Neo4jSSMHTTPCommand:
-    Description: "SSM port-forward for Browser via operator bastion: run then open http://localhost:7474"
-    Value: !Sub "aws ssm start-session --target ${Neo4jOperatorBastion} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters 'host=${Neo4jNetworkLoadBalancer.DNSName},portNumber=7474,localPortNumber=7474' --region ${AWS::Region}"
+  Neo4jSSMHTTPSCommand:
+    Description: "SSM port-forward for Browser via operator bastion. After mapping AdvertisedDNS to 127.0.0.1 in /etc/hosts, open https://<AdvertisedDNS>:7473"
+    Value: !Sub "aws ssm start-session --target ${Neo4jOperatorBastion} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters 'host=${Neo4jNetworkLoadBalancer.DNSName},portNumber=7473,localPortNumber=7473' --region ${AWS::Region}"
   Neo4jPasswordSecretArn:
     Description: >-
       Secrets Manager ARN holding the Neo4j admin password. The plaintext
@@ -49,10 +69,12 @@
   Neo4jConfigParameterPrefix:
     Description: >-
       SSM Parameter Store path prefix for non-secret stack configuration.
-      Entries: vpc-id, nlb-dns, region, stack-name, private-subnet-1-id,
-      private-subnet-2-id, password-secret-arn, external-sg-id, vpc-endpoint-sg-id.
-      In-VPC apps read from here instead of the operator's local
-      .deploy/<stack>.txt file.
+      Entries: vpc-id, nlb-dns, advertised-dns, bolt-url, https-url,
+      tls-self-signed, private-dns-hosted-zone-id, private-dns-record,
+      region, stack-name, private-subnet-1-id, private-route-table-1-id,
+      private-subnet-2-id, password-secret-arn, external-sg-id,
+      vpc-endpoint-sg-id. In-VPC apps read from here instead of the
+      operator's local .deploy/<stack>.txt file.
     Value: !Sub '/neo4j-ee/${AWS::StackName}/'
   Username:
     Description: 'The username is neo4j.'
@@ -61,11 +83,13 @@
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
   Neo4jAlertTopicArn:
+    Condition: HasAlertEmail
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic
   VpcFlowLogGroupName:
     Description: CloudWatch Logs log group for VPC flow logs
     Value: !Ref Neo4jFlowLogsGroup
   FailedAuthAlarmName:
+    Condition: HasAlertEmail
     Description: CloudWatch alarm name for Neo4j failed authentication events
     Value: !Ref Neo4jFailedAuthAlarm

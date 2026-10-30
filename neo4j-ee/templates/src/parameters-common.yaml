@@ -44,7 +44,8 @@
     Type: Number
     Default: 100
     MinValue: 100
-    MaxValue: 65536
+    MaxValue: 16384
+    ConstraintDescription: DataDiskSize must be between 100 and 16,384 GiB.
   DataVolumeKmsKeyId:
     Description: >-
       Optional. KMS key ID or ARN for data volume encryption. Leave blank to
@@ -58,13 +59,52 @@
     Default: ''
   InstallGDS:
     Description: >-
-      Install the Graph Data Science plugin at deploy time. Intended for testing
-      with deploy.py only; leave false for Marketplace deployments.
+      Install the Graph Data Science plugin at deploy time. Requires a matching
+      GdsLicenseSecretArn pointing to a Secrets Manager secret holding the GDS
+      license file contents. The JAR is staged in the AMI and copied to the
+      plugins directory when this is true; leaving this false skips the copy.
     Type: String
     Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
+  InstallBloom:
+    Description: >-
+      Install the Neo4j Bloom plugin at deploy time. Requires a matching
+      BloomLicenseSecretArn pointing to a Secrets Manager secret holding the
+      Bloom license file contents. The JAR is staged in the AMI and copied to
+      the plugins directory when this is true; leaving this false skips the copy.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  BloomLicenseSecretArn:
+    Description: >-
+      ARN of a Secrets Manager secret whose SecretString is the Neo4j Bloom
+      license file contents. Required when InstallBloom is true; ignored
+      otherwise. The instance role is granted secretsmanager:GetSecretValue
+      scoped to this ARN only. Leave blank if not installing Bloom.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+    ConstraintDescription: >-
+      Must be empty or a valid AWS Secrets Manager secret ARN. The secret-name
+      segment must be literal characters only — wildcards (* or ?) are rejected
+      because they would broaden the IAM grant beyond a single secret.
+  GdsLicenseSecretArn:
+    Description: >-
+      ARN of a Secrets Manager secret whose SecretString is the Neo4j Graph
+      Data Science license file contents. Required when InstallGDS is true;
+      ignored otherwise. The instance role is granted secretsmanager:GetSecretValue
+      scoped to this ARN only. Leave blank if not installing GDS.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+    ConstraintDescription: >-
+      Must be empty or a valid AWS Secrets Manager secret ARN. The secret-name
+      segment must be literal characters only — wildcards (* or ?) are rejected
+      because they would broaden the IAM grant beyond a single secret.
   Node1SnapshotId:
     Description: >-
       Optional. Snapshot ID to restore Node 1's data volume from. Leave blank

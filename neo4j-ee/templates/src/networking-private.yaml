@@ -354,7 +354,7 @@
           - 'nlb'
       Scheme: internal
       SecurityGroups:
-        - !Ref Neo4jExternalSecurityGroup
+        - !Ref Neo4jNLBSecurityGroup
       Subnets: !If
         - CreateCluster
         - - !Ref Neo4jPrivateSubnet1
@@ -373,15 +373,18 @@
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       Type: network
 
-  Neo4jHTTPListener:
+  Neo4jBrowserListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
-        - TargetGroupArn: !Ref Neo4jHTTPTargetGroup
+        - TargetGroupArn: !Ref Neo4jBrowserTargetGroup
           Type: forward
       LoadBalancerArn: !Ref Neo4jNetworkLoadBalancer
-      Port: 7474
-      Protocol: TCP
+      Port: 7473
+      Protocol: TLS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
 
   Neo4jBoltListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -391,23 +394,64 @@
           Type: forward
       LoadBalancerArn: !Ref Neo4jNetworkLoadBalancer
       Port: 7687
-      Protocol: TCP
+      Protocol: TLS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
 
-  Neo4jHTTPTargetGroup:
+  Neo4jPrivateDnsHostedZone:
+    Type: AWS::Route53::HostedZone
+    Condition: CreatePrivateDnsHostedZone
+    Properties:
+      Name: !Ref PrivateDnsZoneName
+      HostedZoneConfig:
+        Comment: !Sub 'Private DNS for Neo4j stack ${AWS::StackName}'
+      VPCs:
+        - VPCId: !Ref Neo4jVPC
+          VPCRegion: !Ref 'AWS::Region'
+      HostedZoneTags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jAdvertisedDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreatePrivateDns
+    Properties:
+      HostedZoneId: !If
+        - UseExistingPrivateDnsHostedZone
+        - !Ref PrivateDnsHostedZoneId
+        - !Ref Neo4jPrivateDnsHostedZone
+      Name: !Ref AdvertisedDNS
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+        HostedZoneId: !GetAtt Neo4jNetworkLoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
+  Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Join
         - '-'
         - - !Ref 'AWS::StackName'
-          - 'http'
+          - 'https'
           - 'tg'
-      Port: 7474
-      Protocol: TCP
-      HealthCheckProtocol: HTTP
-      HealthCheckPath: /
+      Port: 7473
+      Protocol: TLS
+      # TCP health check (not HTTPS): the NLB health checker opens the TLS
+      # connection without an SNI server name, and Neo4j's Jetty enforces
+      # sniHostCheck (the cert SAN must be AdvertisedDNS), so an HTTPS GET /
+      # health probe is answered 400 Invalid SNI and the target never goes
+      # healthy. With HealthCheckType=ELB on the node ASGs that turns into a
+      # permanent ~grace-period self-heal kill loop. A TCP connect is the
+      # strongest check NLB can run here without SNI; the L7 "Neo4j actually
+      # serving" assurance is covered by the validate-private conf/TLS audit.
+      HealthCheckProtocol: TCP
       HealthCheckIntervalSeconds: 10
-      Matcher:
-        HttpCode: '200'
       # preserve_client_ip.enabled=false prevents NLB NAT-loopback (hairpin)
       # failures when operator tunnels reach the NLB from a cluster member.
       # See README "Private mode networking" and worklog/FIX_SSM_V7.md §9.
@@ -432,7 +476,10 @@
           - 'bolt'
           - 'tg'
       Port: 7687
-      Protocol: TCP
+      Protocol: TLS
+      # Bolt is a binary protocol, not HTTP, so no L7 health check exists; a
+      # TCP connect is the strongest check NLB can run for this target group.
+      HealthCheckProtocol: TCP
       HealthCheckIntervalSeconds: 10
       TargetGroupAttributes:
         - Key: preserve_client_ip.enabled
@@ -454,7 +501,7 @@
         Timeout: PT10M
     Properties:
       ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
-      InstanceType: t4g.nano
+      InstanceType: t4g.small
       SubnetId: !Ref Neo4jPrivateSubnet1
       SecurityGroupIds:
         - !Ref Neo4jBastionSecurityGroup

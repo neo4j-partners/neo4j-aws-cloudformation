@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEPLOY_DIR = SCRIPT_DIR.parent / ".deploy"
@@ -63,6 +64,7 @@ def main():
     vpc_id = fields["VpcId"]
     region = fields["Region"]
     with_endpoints = fields.get("WithEndpoints", "false") == "true"
+    endpoint_sg_id = fields.get("EndpointSgId", "")
     nat_ids = [fields[f"NatGateway{i}Id"] for i in range(1, 4)]
     eip_alloc_ids = [fields[f"Eip{i}AllocationId"] for i in range(1, 4)]
     subnet_ids = (
@@ -105,6 +107,26 @@ def main():
                 print(f"  Still deleting ({len(remaining)} remaining)...")
                 time.sleep(10)
         print("  Endpoints deleted.")
+
+        if endpoint_sg_id:
+            print(f"Deleting endpoint security group {endpoint_sg_id}...")
+            # Endpoint ENIs can linger for a few seconds after the endpoints
+            # report deleted; delete_security_group fails with
+            # DependencyViolation until they detach, so retry briefly.
+            for _ in range(12):
+                try:
+                    ec2.delete_security_group(GroupId=endpoint_sg_id)
+                    break
+                except ClientError as exc:
+                    if exc.response["Error"]["Code"] != "DependencyViolation":
+                        raise
+                    time.sleep(10)
+            else:
+                sys.exit(
+                    f"ERROR: endpoint SG {endpoint_sg_id} still has dependencies "
+                    f"after retries; delete it manually then re-run."
+                )
+            print("  Endpoint SG deleted.")
 
     # Step 2: NAT gateways
     print("Deleting NAT gateways...")

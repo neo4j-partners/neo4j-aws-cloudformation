@@ -13,12 +13,33 @@
           - DataDiskSize
           - DataVolumeKmsKeyId
       - Label:
+          default: "Plugin licensing (Bloom, GDS)"
+        Parameters:
+          - InstallBloom
+          - BloomLicenseSecretArn
+          - InstallGDS
+          - GdsLicenseSecretArn
+      - Label:
+          default: "Optional Public TLS"
+        Parameters:
+          - EnableTLS
+          - CertificateArn
+          - AdvertisedDNS
+      - Label:
           default: "Security & Monitoring"
         Parameters:
           - AllowedCIDR
           - AlertEmail
-          - BoltCertificateSecretArn
-          - BoltAdvertisedDNS
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -32,11 +53,35 @@
         default: Data Disk Size (GB)
       DataVolumeKmsKeyId:
         default: Data Volume KMS Key ID
+      InstallBloom:
+        default: Install Bloom Plugin
+      BloomLicenseSecretArn:
+        default: Bloom License Secret ARN
+      InstallGDS:
+        default: Install Graph Data Science Plugin
+      GdsLicenseSecretArn:
+        default: GDS License Secret ARN
       AlertEmail:
         default: Alert Email Address
       AllowedCIDR:
         default: Allowed CIDR
-      BoltCertificateSecretArn:
-        default: Bolt TLS Certificate Secret ARN
-      BoltAdvertisedDNS:
-        default: Bolt Advertised DNS Name
+      EnableTLS:
+        default: Enable TLS
+      CertificateArn:
+        default: ACM Certificate ARN
+      AdvertisedDNS:
+        default: Advertised DNS Name
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group

@@ -63,10 +63,11 @@ def _terminate_and_wait(
     session: boto3.Session,
     resource_map: dict[str, str],
     replacement_timeout: int,
+    asg_logical_id: str = "Neo4jAutoScalingGroup",
 ) -> bool:
     """Terminate the current instance and wait for a healthy replacement. Return True on success."""
     original_instance_id = get_asg_instance_id(
-        session, config.stack_name, resource_map
+        session, config.stack_name, resource_map, asg_logical_id=asg_logical_id
     )
     log.info("  Original instance: %s\n", original_instance_id)
 
@@ -86,6 +87,7 @@ def _terminate_and_wait(
                 resource_map,
                 exclude_instance=original_instance_id,
                 timeout=replacement_timeout,
+                asg_logical_id=asg_logical_id,
             )
             ctx.pass_(
                 f"Replacement {new_instance_id} is InService "
@@ -158,8 +160,15 @@ def run_ee_cluster_resilience_tests(
         resource_map = get_stack_resources(session, config.stack_name)
 
     if config.number_of_servers == 1:
-        # Single-node EE: same EBS persistence test as CE
-        run_resilience_tests(config, reporter, session, replacement_timeout, resource_map)
+        # Single-node EE: same EBS persistence flow as CE but with EE
+        # logical IDs (Neo4jNode1ASG / Neo4jNode1DataVolume).
+        from test_neo4j.volume_checks import run_ee_volume_checks  # noqa: PLC0415
+
+        run_resilience_tests(
+            config, reporter, session, replacement_timeout, resource_map,
+            asg_logical_id="Neo4jNode1ASG",
+            volume_check_fn=run_ee_volume_checks,
+        )
         return
 
     test_run_id = uuid.uuid4().hex
@@ -248,6 +257,9 @@ def run_ee_cluster_resilience_tests(
         time.sleep(10)
 
     check_cluster_topology(config, reporter)
+    from test_neo4j.robust_checks import check_license_files_on_disk  # noqa: PLC0415
+
+    check_license_files_on_disk(session, config, reporter, resource_map)
     _verify_sentinel(config, reporter, test_run_id)
     _cleanup_sentinel(config, test_run_id)
 
@@ -258,6 +270,8 @@ def run_resilience_tests(
     session: boto3.Session,
     replacement_timeout: int = 600,
     resource_map: dict[str, str] | None = None,
+    asg_logical_id: str = "Neo4jAutoScalingGroup",
+    volume_check_fn = None,
 ) -> None:
     """EBS persistence test: write data, terminate instance, verify data survived on replacement."""
     test_run_id = uuid.uuid4().hex
@@ -265,7 +279,9 @@ def run_resilience_tests(
     if resource_map is None:
         resource_map = get_stack_resources(session, config.stack_name)
 
-    run_volume_checks(config, reporter, session, resource_map)
+    if volume_check_fn is None:
+        volume_check_fn = run_volume_checks
+    volume_check_fn(config, reporter, session, resource_map)
 
     if not _write_sentinel(config, reporter, test_run_id):
         return
@@ -273,10 +289,16 @@ def run_resilience_tests(
     if not create_movies_dataset(config, reporter):
         return
 
-    if not _terminate_and_wait(config, reporter, session, resource_map, replacement_timeout):
+    if not _terminate_and_wait(
+        config, reporter, session, resource_map, replacement_timeout,
+        asg_logical_id=asg_logical_id,
+    ):
         return
 
     run_simple_tests(config, reporter)
+    from test_neo4j.robust_checks import check_license_files_on_disk  # noqa: PLC0415
+
+    check_license_files_on_disk(session, config, reporter, resource_map)
 
     _verify_sentinel(config, reporter, test_run_id)
     verify_movies_dataset(config, reporter)

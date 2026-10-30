@@ -13,6 +13,13 @@
           - DataDiskSize
           - DataVolumeKmsKeyId
       - Label:
+          default: "Plugin licensing (Bloom, GDS)"
+        Parameters:
+          - InstallBloom
+          - BloomLicenseSecretArn
+          - InstallGDS
+          - GdsLicenseSecretArn
+      - Label:
           default: "Existing VPC"
         Parameters:
           - VpcId
@@ -25,12 +32,28 @@
       - Label:
           default: "TLS"
         Parameters:
-          - BoltCertificateSecretArn
-          - BoltAdvertisedDNS
+          - CertificateArn
+          - AdvertisedDNS
+      - Label:
+          default: "Private DNS"
+        Parameters:
+          - CreatePrivateDns
+          - PrivateDnsZoneName
+          - PrivateDnsHostedZoneId
       - Label:
           default: "Monitoring"
         Parameters:
           - AlertEmail
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -44,6 +67,14 @@
         default: Data Disk Size (GB)
       DataVolumeKmsKeyId:
         default: Data Volume KMS Key ID
+      InstallBloom:
+        default: Install Bloom Plugin
+      BloomLicenseSecretArn:
+        default: Bloom License Secret ARN
+      InstallGDS:
+        default: Install Graph Data Science Plugin
+      GdsLicenseSecretArn:
+        default: GDS License Secret ARN
       VpcId:
         default: VPC ID
       PrivateSubnet1Id:
@@ -60,7 +91,27 @@
         default: Allowed CIDR
       AlertEmail:
         default: Alert Email Address
-      BoltCertificateSecretArn:
-        default: Bolt TLS Certificate Secret ARN
-      BoltAdvertisedDNS:
-        default: Bolt Advertised DNS Name
+      CertificateArn:
+        default: ACM Certificate ARN
+      AdvertisedDNS:
+        default: Advertised DNS Name
+      CreatePrivateDns:
+        default: Create Private DNS
+      PrivateDnsZoneName:
+        default: Private DNS Zone Name
+      PrivateDnsHostedZoneId:
+        default: Private DNS Hosted Zone ID
+      OidcIssuerUri:
+        default: OIDC Issuer URI
+      OidcClientId:
+        default: OIDC Client ID (Audience)
+      OidcBrowserClientId:
+        default: OIDC Browser Client ID
+      OidcPrincipalClaim:
+        default: OIDC Username Claim
+      OidcGroupsClaim:
+        default: OIDC Groups Claim
+      OidcAdminGroup:
+        default: OIDC Admin Group
+      OidcReaderGroup:
+        default: OIDC Reader Group

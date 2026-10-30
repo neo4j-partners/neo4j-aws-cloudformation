@@ -24,7 +24,36 @@
       Name: !Sub '/neo4j-ee/${AWS::StackName}/nlb-dns'
       Type: String
       Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
-      Description: Internal NLB DNS name (connect via neo4j://<dns>:7687 from in-VPC).
+      Description: Internal NLB DNS name. Map AdvertisedDNS to this hostname so TLS clients connect via the cert SAN.
+
+  Neo4jConfigAdvertisedDnsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/advertised-dns'
+      Type: String
+      Value: !Ref AdvertisedDNS
+      Description: Advertised DNS name that resolves to the NLB and matches the ACM cert SAN. Operator tooling connects via neo4j+ssc://<advertised-dns>:7687; production clients with a trusted cert use neo4j+s://<advertised-dns>:7687. Browser is https://<advertised-dns>:7473.
+
+  Neo4jConfigPrivateDnsHostedZoneIdParameter:
+    Type: AWS::SSM::Parameter
+    Condition: CreatePrivateDns
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/private-dns-hosted-zone-id'
+      Type: String
+      Value: !If
+        - UseExistingPrivateDnsHostedZone
+        - !Ref PrivateDnsHostedZoneId
+        - !Ref Neo4jPrivateDnsHostedZone
+      Description: Route 53 private hosted zone ID containing the AdvertisedDNS record.
+
+  Neo4jConfigPrivateDnsRecordParameter:
+    Type: AWS::SSM::Parameter
+    Condition: CreatePrivateDns
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/private-dns-record'
+      Type: String
+      Value: !Ref AdvertisedDNS
+      Description: Route 53 private DNS record mapped to the internal NLB.
 
   Neo4jConfigRegionParameter:
     Type: AWS::SSM::Parameter
@@ -75,13 +104,37 @@
       Value: !Ref Neo4jPasswordSecret
       Description: Secrets Manager ARN for the Neo4j admin password (used by in-VPC Lambda clients).
 
+  Neo4jConfigBoltUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/bolt-url'
+      Type: String
+      Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
+      Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. In-VPC apps use this directly; no scheme derivation required.
+
+  Neo4jConfigTlsSelfSignedParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/tls-self-signed'
+      Type: String
+      Value: !If [IsSelfSignedTls, 'true', 'false']
+      Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use (BoltTlsScheme=neo4j+s). Consumers that hit the HTTPS Query API directly read this to decide whether to skip TLS verification.
+
+  Neo4jConfigHttpsUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/https-url'
+      Type: String
+      Value: !Sub 'https://${AdvertisedDNS}:7473'
+      Description: Browser (HTTPS) URL. Host matches the ACM cert SAN; consumers without private DNS must map AdvertisedDNS to the NLB themselves.
+
   Neo4jConfigExternalSgIdParameter:
     Type: AWS::SSM::Parameter
     Properties:
       Name: !Sub '/neo4j-ee/${AWS::StackName}/external-sg-id'
       Type: String
-      Value: !GetAtt Neo4jExternalSecurityGroup.GroupId
-      Description: Neo4j external security group ID (Lambda egress rule target for port 7687).
+      Value: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      Description: Neo4j NLB security group ID. In-VPC apps add this as the 7473/7687 egress target and add ingress from their SG.
 
   Neo4jConfigVpcEndpointSgParameter:
     Type: AWS::SSM::Parameter

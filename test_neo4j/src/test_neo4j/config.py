@@ -12,6 +12,10 @@ from urllib.parse import urlparse
 
 from neo4j import Driver, GraphDatabase
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "neo4j-ee" / "src"))
+from neo4j_ee.outputs import read_outputs, truthy  # noqa: E402
+
 
 _REQUIRED_FIELDS_CE = (
     "Neo4jBrowserURL",
@@ -41,7 +45,7 @@ class StackConfig:
     """Immutable configuration parsed from deploy.sh output (.deploy/<stack>.txt)."""
 
     browser_url: str  # e.g. http://<host>:7474
-    neo4j_uri: str    # e.g. neo4j://<host>:7687
+    neo4j_uri: str    # e.g. neo4j://<host>:7687 or neo4j+ssc://<host>:7687
     username: str
     password: str
     stack_name: str
@@ -50,6 +54,27 @@ class StackConfig:
     host: str         # bare hostname extracted from browser_url
     edition: str      # "ce" or "ee"
     number_of_servers: int  # 1 or 3 for EE
+    # Set when deploy.py passed a licence ARN via --bloom-license-secret-id /
+    # --gds-license-secret-id; absence means the licence checks are skipped.
+    bloom_licensed: bool
+    gds_licensed: bool
+    # bloom_expected mirrors the InstallBloom template parameter recorded by
+    # deploy.py. The install gate is `InstallBloom=true AND BloomLicenseSecretArn`
+    # non-empty; license-file conf-key and license-on-disk checks key on both
+    # bloom_expected and bloom_licensed.
+    bloom_expected: bool
+    # gds_expected mirrors the InstallGDS template parameter recorded by
+    # deploy.py; the GDS plugin install is gated on this in the UserData.
+    gds_expected: bool
+    # bolt_tls_enabled is True when the stack terminates TLS at the NLB,
+    # signalled by a non-empty AdvertisedDNS output. When True the runner uses
+    # the +ssc Bolt scheme so the Neo4j driver tolerates the self-signed cert.
+    bolt_tls_enabled: bool
+    # AMI used by the running cluster instances; "local" when built by
+    # marketplace/create-ami.sh (Marketplace or iteration mode), "marketplace"
+    # when sourced from the live Marketplace listing via --marketplace.
+    ami_id: str
+    ami_source: str
 
     @contextlib.contextmanager
     def driver(self) -> Iterator[Driver]:
@@ -64,17 +89,6 @@ class StackConfig:
             drv.close()
 
 
-def _parse_outputs(path: Path) -> dict[str, str]:
-    """Read a 'Key = Value' file into a dict, stripping whitespace."""
-    fields: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        fields[key.strip()] = value.strip()
-    return fields
-
-
 def load_config(
     outputs_path: Path,
     password_override: str | None = None,
@@ -84,7 +98,7 @@ def load_config(
             f"{outputs_path} not found. Run deploy.sh first to create a stack."
         )
 
-    fields = _parse_outputs(outputs_path)
+    fields = read_outputs(outputs_path)
 
     edition = fields.get("Edition", "ce").lower()
     number_of_servers = int(fields.get("NumberOfServers", "1"))
@@ -95,23 +109,46 @@ def load_config(
             f"Required field(s) missing from {outputs_path.name}: {', '.join(missing)}"
         )
 
-    if "Neo4jBrowserURL" not in fields or "Neo4jURI" not in fields:
+    # EE publishes Neo4jHttpsUrl / Neo4jBoltUrl; CE still publishes the older
+    # Neo4jBrowserURL / Neo4jURI names.
+    browser_key = "Neo4jHttpsUrl" if edition == "ee" else "Neo4jBrowserURL"
+    uri_key = "Neo4jBoltUrl" if edition == "ee" else "Neo4jURI"
+    if browser_key not in fields or uri_key not in fields:
         if edition == "ee":
             raise ValueError(
                 "This test runner only supports public EE stacks (internet-facing NLB). "
-                "The deploy output is missing Neo4jBrowserURL and Neo4jURI — "
-                "private EE stacks require SSM tunneling and are not supported here."
+                f"The deploy output is missing {browser_key} and {uri_key}. "
+                "Private EE stacks require SSM tunneling and are not supported here."
             )
         raise ValueError(
             f"Required field(s) missing from {outputs_path.name}: "
-            + ", ".join(f for f in ("Neo4jBrowserURL", "Neo4jURI") if f not in fields)
+            + ", ".join(f for f in (browser_key, uri_key) if f not in fields)
         )
 
-    browser_url = fields["Neo4jBrowserURL"]
-    neo4j_uri = fields["Neo4jURI"]
+    # Private and ExistingVpc EE stacks publish the same URL keys, so the
+    # deployment mode is the only thing that keeps them out of this runner.
+    if edition == "ee" and fields.get("DeploymentMode", "Public") != "Public":
+        raise ValueError(
+            "This test runner only supports public EE stacks (internet-facing NLB). "
+            f"Stack {fields['StackName']!r} has "
+            f"DeploymentMode={fields['DeploymentMode']}; private EE stacks "
+            "require SSM tunneling and are not supported here."
+        )
+
+    browser_url = fields[browser_key]
+    neo4j_uri = fields[uri_key]
     host = urlparse(browser_url).hostname or browser_url
 
     install_apoc = fields.get("InstallAPOC", "no").lower() == "yes"
+
+    # TLS is signalled by a non-empty AdvertisedDNS (the NLB terminates TLS and
+    # the stack enforces server.bolt.tls_level=REQUIRED), so the runner uses the
+    # +ssc scheme to tolerate the self-signed cert imported at deploy time. This
+    # mirrors neo4j_ee.outputs.resolve_bolt_scheme. Test-only: +ssc skips
+    # certificate verification, so do not copy it into production clients.
+    bolt_tls_enabled = bool(fields.get("AdvertisedDNS"))
+    if bolt_tls_enabled and neo4j_uri.startswith("neo4j://"):
+        neo4j_uri = "neo4j+ssc://" + neo4j_uri[len("neo4j://"):]
 
     password = (
         password_override
@@ -137,4 +174,11 @@ def load_config(
         host=host,
         edition=edition,
         number_of_servers=number_of_servers,
+        bloom_licensed=bool(fields.get("BloomLicenseSecretArn")),
+        gds_licensed=bool(fields.get("GdsLicenseSecretArn")),
+        bloom_expected=truthy(fields.get("BloomExpected", fields.get("InstallBloom"))),
+        gds_expected=truthy(fields.get("InstallGDS")),
+        bolt_tls_enabled=bolt_tls_enabled,
+        ami_id=fields.get("AmiId", ""),
+        ami_source=fields.get("AmiSource", ""),
     )

@@ -2,7 +2,10 @@ import json
 import logging
 import os
 import random
+import socket
+import ssl
 import time
+import urllib.request
 
 import boto3
 from neo4j import GraphDatabase
@@ -14,14 +17,36 @@ ssm = boto3.client("ssm")
 sm = boto3.client("secretsmanager")
 
 _driver = None
-_BOLT_TLS = os.environ.get("NEO4J_BOLT_TLS") == "true"
-_BOLT_SCHEME = "neo4j+ssc" if _BOLT_TLS else "neo4j"
+
+
+def _base_scheme():
+    return "bolt" if os.environ.get("NEO4J_NUMBER_OF_SERVERS") == "1" else "neo4j"
+
+
+def _bolt_scheme():
+    base = _base_scheme()
+    if os.environ.get("NEO4J_BOLT_TLS") == "true":
+        return f"{base}+ssc"
+    return base
+
+
+def _nlb_dns():
+    return ssm.get_parameter(
+        Name=os.environ["NEO4J_SSM_NLB_PATH"]
+    )["Parameter"]["Value"]
+
+
+def _password():
+    return sm.get_secret_value(
+        SecretId=os.environ["NEO4J_SECRET_ARN"]
+    )["SecretString"]
 
 
 def _init_driver():
-    nlb_dns = ssm.get_parameter(Name=os.environ["NEO4J_SSM_NLB_PATH"])["Parameter"]["Value"]
-    password = sm.get_secret_value(SecretId=os.environ["NEO4J_SECRET_ARN"])["SecretString"]
-    return GraphDatabase.driver(f"{_BOLT_SCHEME}://{nlb_dns}:7687", auth=("neo4j", password))
+    return GraphDatabase.driver(
+        f"{_bolt_scheme()}://{_nlb_dns()}:7687",
+        auth=("neo4j", _password()),
+    )
 
 
 def _get_driver():
@@ -70,16 +95,159 @@ MERGE (t3)-[:AT]->(m3)
 """
 
 
+def _probe_plaintext_bolt_refused(nlb_dns, password):
+    """A non-TLS Bolt connect must fail: NLB listener is TLS and the instance
+    sets server.bolt.tls_level=REQUIRED. Success here is a hard failure."""
+    base = _base_scheme()
+    try:
+        drv = GraphDatabase.driver(
+            f"{base}://{nlb_dns}:7687",
+            auth=("neo4j", password),
+            connection_timeout=8,
+        )
+        try:
+            drv.verify_connectivity()
+        finally:
+            drv.close()
+    except Exception as exc:
+        return True, f"plaintext {base}:// rejected ({type(exc).__name__})"
+    return False, f"plaintext {base}://{nlb_dns}:7687 unexpectedly connected"
+
+
+def _probe_strict_tls(nlb_dns, password):
+    """Informational: strict +s verifies the served cert against the system CA
+    bundle. Pass means a publicly-trusted cert; failure is expected and
+    acceptable for the auto-imported self-signed ACM cert."""
+    base = _base_scheme()
+    try:
+        drv = GraphDatabase.driver(
+            f"{base}+s://{nlb_dns}:7687",
+            auth=("neo4j", password),
+            connection_timeout=8,
+        )
+        try:
+            drv.verify_connectivity()
+        finally:
+            drv.close()
+    except Exception as exc:
+        return False, f"{base}+s:// not CA-trusted ({type(exc).__name__})"
+    return True, f"{base}+s:// verified against system CA bundle"
+
+
+def _unverified_ctx():
+    """NLB re-encrypts to the instance self-signed cert by design (AD-4), so
+    these probes connect with TLS but without trust verification."""
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _probe_https_7473(nlb_dns):
+    """HTTPS Browser endpoint must answer 200; cert trust is intentionally not
+    verified here (the identity check is _probe_cert_identity)."""
+    ctx = _unverified_ctx()
+    req = urllib.request.Request(f"https://{nlb_dns}:7473/")
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            code = resp.status
+    except Exception as exc:
+        return False, f"GET https://{nlb_dns}:7473/ failed ({type(exc).__name__})"
+    return code == 200, f"GET https://{nlb_dns}:7473/ -> {code}"
+
+
+def _probe_plaintext_http_7474_refused(nlb_dns):
+    """No plaintext HTTP listener exists on 7474 in TLS mode; a TCP connect
+    must fail. Success here is a hard failure."""
+    try:
+        with socket.create_connection((nlb_dns, 7474), timeout=5):
+            pass
+    except OSError as exc:
+        return True, f"7474 connect refused ({type(exc).__name__})"
+    return False, f"{nlb_dns}:7474 unexpectedly accepted a plaintext connection"
+
+
+def _probe_cert_identity(nlb_dns, advertised_dns):
+    """The served cert SAN/CN must equal AdvertisedDNS: Jetty enforces
+    sniHostCheck, so a mismatch breaks HTTPS with 400 Invalid SNI. Fetch the
+    cert unverified, then re-handshake trusting only that cert with hostname
+    checking on — ssl enforces the SAN/CN == AdvertisedDNS match for us."""
+    try:
+        fetch_ctx = _unverified_ctx()
+        with socket.create_connection((nlb_dns, 7473), timeout=10) as raw:
+            with fetch_ctx.wrap_socket(
+                raw, server_hostname=advertised_dns
+            ) as tls:
+                der = tls.getpeercert(binary_form=True)
+        pem = ssl.DER_cert_to_PEM_cert(der)
+
+        verify_ctx = ssl.create_default_context(cadata=pem)
+        verify_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        with socket.create_connection((nlb_dns, 7473), timeout=10) as raw:
+            with verify_ctx.wrap_socket(raw, server_hostname=advertised_dns):
+                pass
+    except ssl.CertificateError as exc:
+        return False, f"served cert does not match {advertised_dns}: {exc}"
+    except Exception as exc:
+        return False, f"cert identity probe failed ({type(exc).__name__}: {exc})"
+    return True, f"served cert valid for {advertised_dns}"
+
+
+def _tls_conformance(nlb_dns, password):
+    """End-to-end TLS conformance probe run from inside the VPC.
+
+    Hard checks (fail the probe): plaintext Bolt refused, HTTPS 7473 = 200,
+    plaintext HTTP 7474 refused, served cert identity == AdvertisedDNS.
+    Strict +s is informational (self-signed is a supported mode).
+    """
+    advertised_dns = os.environ.get("NEO4J_ADVERTISED_DNS", "")
+    if not advertised_dns or os.environ.get("NEO4J_BOLT_TLS") != "true":
+        return {
+            "applicable": False,
+            "passed": True,
+            "detail": "plaintext stack (no AdvertisedDNS) — TLS probe skipped",
+        }
+
+    hard = {
+        "plaintext_bolt_refused": _probe_plaintext_bolt_refused(nlb_dns, password),
+        "https_7473_ok": _probe_https_7473(nlb_dns),
+        "plaintext_http_7474_refused": _probe_plaintext_http_7474_refused(nlb_dns),
+        "cert_identity": _probe_cert_identity(nlb_dns, advertised_dns),
+    }
+    strict_passed, strict_detail = _probe_strict_tls(nlb_dns, password)
+
+    return {
+        "applicable": True,
+        "advertised_dns": advertised_dns,
+        "passed": all(passed for passed, _ in hard.values()),
+        "checks": {name: {"passed": p, "detail": d} for name, (p, d) in hard.items()},
+        "strict_tls_info": {"passed": strict_passed, "detail": strict_detail},
+    }
+
+
 def lambda_handler(event, context):
+    # The TLS conformance probe opens extra TLS/Bolt connections (one
+    # intentionally to a closed port up to its timeout), so it runs only when
+    # the caller explicitly asks. deploy-sample-private-app.py sends this as
+    # the post-deploy gate; the Function URL demo path never sets it.
+    run_probe = isinstance(event, dict) and event.get("tls_probe") is True
     try:
         driver = _get_driver()
-        return _run(driver)
+        return _run(driver, run_probe)
     except AuthError:
         driver = _reset_driver()
-        return _run(driver)
+        return _run(driver, run_probe)
+    except Exception as exc:
+        log.exception("lambda_handler failed")
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": type(exc).__name__, "message": str(exc)}),
+        }
 
 
-def _run(driver):
+def _run(driver, run_probe=False):
     with driver.session(database="neo4j") as session:
         result = session.run(_MERGE_FINTECH)
         summary = result.consume()
@@ -91,9 +259,11 @@ def _run(driver):
         ).single()
         edition = edition_row["edition"] if edition_row else "unknown"
 
-        routing_rows = session.run(
-            "CALL dbms.routing.getRoutingTable({}, 'neo4j')"
-        ).data()
+        routing_rows = []
+        if os.environ.get("NEO4J_NUMBER_OF_SERVERS") != "1":
+            routing_rows = session.run(
+                "CALL dbms.routing.getRoutingTable({}, 'neo4j')"
+            ).data()
 
         graph_sample = session.run(
             """
@@ -117,8 +287,8 @@ def _run(driver):
                 readers += len(server.get("addresses", []))
 
     body = {
-        "tls_enabled": _BOLT_TLS,
-        "bolt_scheme": _BOLT_SCHEME,
+        "tls_enabled": os.environ.get("NEO4J_BOLT_TLS") == "true",
+        "bolt_scheme": _bolt_scheme(),
         "edition": edition,
         "nodes_created": nodes_created,
         "relationships_created": rels_created,
@@ -136,6 +306,9 @@ def _run(driver):
             "readers": readers,
         },
     }
+
+    if run_probe:
+        body["tls_conformance"] = _tls_conformance(_nlb_dns(), _password())
 
     return {
         "statusCode": 200,
@@ -202,7 +375,7 @@ def _resilience(driver):
     log.info("Target follower: instance=%s server=%s", target_instance, target_uuid)
 
     t0 = time.time()
-    _ssm_run(target_instance, "systemctl stop neo4j")
+    _ssm_run_document(target_instance, os.environ["SSM_DOC_STOP_NEO4J"], "stop neo4j")
     time_to_stop_issued = round(time.time() - t0, 2)
 
     t1 = time.time()
@@ -210,7 +383,7 @@ def _resilience(driver):
     time_to_unavailable = round(time.time() - t1, 2)
 
     t2 = time.time()
-    _ssm_run(target_instance, "systemctl start neo4j")
+    _ssm_run_document(target_instance, os.environ["SSM_DOC_START_NEO4J"], "start neo4j")
     time_to_start_issued = round(time.time() - t2, 2)
 
     t3 = time.time()
@@ -270,10 +443,7 @@ def _neo4j_instance_ids(ee_stack_id):
 def _read_server_ids(instance_ids):
     cmd_id = _ssm.send_command(
         InstanceIds=instance_ids,
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [
-            "python3 -c \"import uuid; d=open('/var/lib/neo4j/data/server_id','rb').read(); print(str(uuid.UUID(bytes=d[1:])))\""
-        ]},
+        DocumentName=os.environ["SSM_DOC_READ_SERVER_ID"],
     )["Command"]["CommandId"]
 
     mapping = {}
@@ -296,11 +466,10 @@ def _read_server_ids(instance_ids):
     return mapping
 
 
-def _ssm_run(instance_id, command):
+def _ssm_run_document(instance_id, document_name, action):
     cmd_id = _ssm.send_command(
         InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [command]},
+        DocumentName=document_name,
     )["Command"]["CommandId"]
     deadline = time.time() + 60
     while time.time() < deadline:
@@ -312,8 +481,11 @@ def _ssm_run(instance_id, command):
         if inv["Status"] == "Success":
             return
         if inv["Status"] in ("Failed", "Cancelled", "TimedOut"):
-            raise RuntimeError(f"SSM '{command}' on {instance_id} ended {inv['Status']}: {inv.get('StandardErrorContent','')}")
-    raise TimeoutError(f"SSM '{command}' on {instance_id} did not complete in 60s")
+            raise RuntimeError(
+                f"SSM document for {action} on {instance_id} ended {inv['Status']}: "
+                f"{inv.get('StandardErrorContent','')}"
+            )
+    raise TimeoutError(f"SSM document for {action} on {instance_id} did not complete in 60s")
 
 
 def _wait_for_health(driver, server_uuid, wanted, timeout_s):

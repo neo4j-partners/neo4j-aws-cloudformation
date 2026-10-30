@@ -4,25 +4,45 @@ Reference document for the three-template split. Covers the key design decisions
 
 ---
 
-## Network Encryption Requirement
+## Network Security Guidance
 
-AWS Marketplace explicitly requires end-to-end encryption for network traffic. From the official AMI best practices:
+AWS Marketplace AMI policy pages distinguish mandatory product requirements from recommended best practices. The current AMI requirements page does not appear to state a blanket hard rejection rule for every plaintext application protocol, but the official AMI best practices recommend encrypting network traffic with SSL/TLS where possible and using valid, up-to-date certificates.
 
-> "Whenever possible, use end-to-end encryption for network traffic. For example, use Secure Sockets Layer (SSL) to secure HTTP sessions between you and your buyers. Ensure that your service uses only valid and up-to-date certificates."
->
-> — [Best practices for building AMIs for use with AWS Marketplace](https://docs.aws.amazon.com/marketplace/latest/userguide/best-practices-for-building-your-amis.html)
+The same best-practices page also tells sellers to document the minimum required ports and recommended source IP ranges for administrative access. Those controls are necessary, but they are not substitutes for encryption in transit. A security group `AllowedCIDR` restriction controls which source IPs can initiate a connection at the AWS network layer; it does not encrypt traffic. An attacker controlling a permitted client, a routed network segment, a traffic mirror, or a compromised workload in the same reachable private network can read Neo4j credentials, Cypher queries, and query results in plaintext.
 
-A security group `AllowedCIDR` restriction does not satisfy this requirement. It controls which source IPs can initiate a connection at the AWS network layer, but it does not encrypt traffic. An attacker controlling any network hop between the buyer's client and the EC2 instance, including ISPs, corporate routers, and VPN exit nodes, can read Neo4j credentials, Cypher queries, and query results in plaintext. This is true even when `AllowedCIDR` is locked to a single `/32` address.
+The practical consequence for this listing: the templates restrict Neo4j Browser and Bolt access with `AllowedCIDR`, route private operator access through SSM, and retain optional Bolt TLS parameters for customers or local test flows that need encrypted Bolt on port 7687. The current templates do not implement stack-managed Browser HTTPS or a stack-managed public/private DNS alias.
 
-The practical consequence for this listing: plain HTTP on port 7474 and unencrypted `neo4j://` Bolt on port 7687 do not meet the Marketplace standard. TLS must be enabled on both ports for any deployment topology intended for production use.
+Related Marketplace policy points:
+
+- AMIs must comply with the current AWS Marketplace product requirements, and AWS says those policies are regularly updated to align with evolving security guidelines.
+- Password-based authentication for instance services is prohibited, with limited exceptions for non-administrative application access when strong one-time passwords are used and changed immediately after first login.
+- Products with deployment-time external dependencies must disclose those dependencies, and sellers are responsible for their availability and security.
+
+References:
+
+- [AMI-based product requirements for AWS Marketplace](https://docs.aws.amazon.com/marketplace/latest/userguide/product-and-ami-policies.html)
+- [Best practices for building AMIs for use with AWS Marketplace](https://docs.aws.amazon.com/marketplace/latest/userguide/best-practices-for-building-your-amis.html)
 
 ---
 
 ## Key Design Decisions
 
-### TLS availability
+### Bolt TLS availability
 
-TLS parameters (`BoltCertificateSecretArn`, `BoltAdvertisedDNS`) are present in all three templates as optional fields that default to empty. Both private templates highlight TLS in their operator guides because production and regulated workloads commonly require it. The public template includes the same parameters for buyers who choose to enable TLS on an evaluation deployment.
+Private and Private Existing VPC require `CertificateArn` and `AdvertisedDNS`. The NLB terminates TLS on Browser port 7473 and Bolt port 7687 using that ACM certificate. Public is plain TCP on 7474 and 7687 unless TLS is enabled with a certificate, in which case Browser moves to 7473.
+
+### Plugin licenses and default-off contract
+
+Bloom and Graph Data Science are gated behind two CFN parameters each: `InstallBloom` plus `BloomLicenseSecretArn`, and `InstallGDS` plus `GdsLicenseSecretArn`. Both `Install*` parameters default to `false`, and both `*LicenseSecretArn` parameters default to empty, so a default Marketplace launch installs neither plugin and grants no Secrets Manager access for licenses.
+
+Two enforcement layers guard the contract:
+
+- **Parameter-shape failures** are rejected by `AWS::CloudFormation::Rules`. Setting `InstallBloom=true` with an empty `BloomLicenseSecretArn` fails parameter validation before any resource is created, regardless of whether the stack is launched from the console, the API, the CLI, or Service Catalog. The same applies to GDS.
+- **Runtime failures** are rejected by UserData via a `fail()` helper that calls `cfn-signal --success false` directly. Bash's `ERR` trap does not fire on `exit 1`, so any explicit failure path must signal CloudFormation before exiting; without `fail()` the stack would wait out the ASG signal timeout instead of failing fast. Cases covered: ARN pointing at a non-existent secret, ARN in a different region from the stack, secret payload empty or malformed, IAM `secretsmanager:GetSecretValue` denied, plugin JAR missing from the AMI.
+
+The instance role grants `secretsmanager:GetSecretValue` for each license ARN through an `Fn::If` block that resolves to `AWS::NoValue` when the matching `Install*=true AND non-empty *LicenseSecretArn` condition is false. The `AllowedPattern` on each license ARN parameter is `secret:[A-Za-z0-9/_+=.@-]+`, the Secrets Manager secret-name character set; an earlier permissive pattern `secret:.+` admitted `arn:...:secret:*`, which CloudFormation would pass into the IAM `Resource` field and IAM would evaluate as a wildcard, broadening the grant beyond a single secret.
+
+License material is never embedded in template content, parameter values, outputs, metadata, UserData, stack events, or stack drift output. Buyers pass only the ARN; UserData fetches the secret on every boot so license files survive ASG instance replacement on the root volume.
 
 ### AllowedCIDR default
 
@@ -30,7 +50,7 @@ Template 2 defaults `AllowedCIDR` to `10.0.0.0/16` because it creates that VPC. 
 
 ### Operator bastion in private templates
 
-Both Template 2 and Template 3 create a `t4g.nano` bastion instance reachable only through AWS Systems Manager Session Manager. It has no ingress rules. The bastion is not optional: the NLB is internal and cluster nodes have no public IPs, so there is no direct path from an operator's machine without it. Template descriptions must explain that the bastion is created, what it does, and that it uses SSM rather than SSH. Buyers in environments with strict instance provisioning policies need this information before they launch.
+Both Template 2 and Template 3 create a `t4g.small` bastion instance reachable only through AWS Systems Manager Session Manager. It has no ingress rules. The bastion is not optional: the NLB is internal and cluster nodes have no public IPs, so there is no direct path from an operator's machine without it. Template descriptions must explain that the bastion is created, what it does, and that it uses SSM rather than SSH. Buyers in environments with strict instance provisioning policies need this information before they launch.
 
 ### VPC endpoint creation in Template 3
 
@@ -57,7 +77,7 @@ AllowedCIDR:
   ConstraintDescription: The value 0.0.0.0/0 is not permitted.
 ```
 
-The external security group applies this CIDR to Neo4j ports 7474 (HTTP) and 7687 (Bolt). Intra-cluster ports (5000, 6000, 7000, 7688, 2003, 2004, 3637) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
+The NLB security group applies this CIDR to Neo4j Browser and Bolt ports. The current templates use 7474 for Browser and 7687 for Bolt. The instance-facing external security group accepts those ports only from the NLB security group. Intra-cluster ports (5000, 6000, 7000, 7688, 2003, 2004, 3637) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
 
 ### IAM least privilege
 
@@ -66,7 +86,7 @@ EC2 instances must use an IAM role, not long-term access keys. Each permission m
 - CloudFormation signaling: restrict to the current stack ARN using `!Sub`.
 - EBS operations (`ec2:AttachVolume`, `ec2:DescribeVolumes`, `ec2:DescribeInstances`): resource `*` is acceptable because EBS volumes lack ARN-level scoping on all relevant APIs.
 - Auto Scaling discovery (`autoscaling:DescribeAutoScalingGroups`): required for cluster node discovery; resource `*` is unavoidable.
-- Secrets Manager (`secretsmanager:GetSecretValue`): always scoped to the password secret ARN (`!Ref Neo4jPasswordSecret`); additionally scoped to the Bolt TLS cert ARN when TLS is enabled using `!If [BoltTLSEnabled, !Ref BoltCertificateSecretArn, !Ref AWS::NoValue]`.
+- Secrets Manager (`secretsmanager:GetSecretValue`): scoped to the password secret ARN (`!Ref Neo4jPasswordSecret`). When `InstallBloom=true` and `BloomLicenseSecretArn` is non-empty, an `Fn::If` statement adds a grant scoped to that ARN; the same pattern applies to GDS via `GdsLicenseSecretArn`. Each license grant collapses to `AWS::NoValue` when the matching plugin is off or the ARN is empty, so a default Marketplace launch grants no Secrets Manager access for licenses.
 
 ### Auto Scaling groups for all topologies
 
@@ -150,10 +170,17 @@ Metadata:
         Parameters:
           - AllowedCIDR
       - Label:
-          default: "TLS (optional)"
+          default: "Plugin licensing (Bloom, GDS)"
         Parameters:
-          - BoltCertificateSecretArn
-          - BoltAdvertisedDNS
+          - InstallBloom
+          - BloomLicenseSecretArn
+          - InstallGDS
+          - GdsLicenseSecretArn
+      - Label:
+          default: "TLS"
+        Parameters:
+          - CertificateArn
+          - AdvertisedDNS
 ```
 
 ### Architectural diagrams
@@ -164,7 +191,7 @@ Each template requires a separate diagram submitted to the Marketplace seller po
 
 ## References
 
-1. [Best practices for building AMIs for use with AWS Marketplace](https://docs.aws.amazon.com/marketplace/latest/userguide/best-practices-for-building-your-amis.html) — Official Marketplace AMI guidelines. Explicitly requires end-to-end encryption for network traffic; recommends SSL/TLS for HTTP sessions and valid, up-to-date certificates.
+1. [Best practices for building AMIs for use with AWS Marketplace](https://docs.aws.amazon.com/marketplace/latest/userguide/best-practices-for-building-your-amis.html) — Official Marketplace AMI guidelines. Recommends SSL/TLS for network traffic where possible and valid, up-to-date certificates.
 
 2. [CloudFormation Templates 101 for Sellers in AWS Marketplace](https://aws.amazon.com/blogs/awsmarketplace/cloudformation-templates-101-for-sellers-in-aws-marketplace/) — Covers IAM roles, Auto Scaling, password handling, and cluster deployment patterns for Marketplace sellers.
 

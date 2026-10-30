@@ -1,0 +1,15 @@
+  CertificateArnRequired:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref CertificateArn, '']]
+        AssertDescription: >-
+          CertificateArn is required for Private and ExistingVpc deployments;
+          TLS is mandatory for these topologies. This Rule fires during
+          CloudFormation stack create and update parameter validation.
+  AdvertisedDnsRequired:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AdvertisedDNS, '']]
+        AssertDescription: >-
+          AdvertisedDNS is required for Private and ExistingVpc deployments; it
+          is the certificate SAN and the advertised Bolt/HTTPS host. This Rule
+          fires during CloudFormation stack create and update parameter
+          validation.
