@@ -462,8 +462,8 @@ Private Existing VPC.
 ## 7. The Security Invariant and Defense in Depth
 
 `internal.dbms.cypher_ip_blocklist` is the single most protected key in the
-system. Its value in `neo4j-base.conf` covers the IMDS credential range
-`169.254.169.0/24` and the full IPv4 link-local range `169.254.0.0/16`. It
+system. Its value in `neo4j-base.conf` covers the full IPv4 link-local range
+`169.254.0.0/16`, which holds the IMDS credential endpoint `169.254.169.254`. It
 covers the RFC1918 VPC-internal ranges `10.0.0.0/8`, `172.16.0.0/12` and
 `192.168.0.0/16`. It covers loopback `127.0.0.0/8` and `::1/128`, the
 "this network" range `0.0.0.0/8`, and the shared address space

@@ -1395,7 +1395,7 @@ _EXPECTED_BASE_CONF = {
     "server.metrics.csv.interval": "5s",
     "internal.dbms.cypher_ip_blocklist": (
         "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,"
-        "169.254.169.0/24,169.254.0.0/16,127.0.0.0/8,0.0.0.0/8,"
+        "169.254.0.0/16,127.0.0.0/8,0.0.0.0/8,"
         "100.64.0.0/10,::1/128,fc00::/7,fe80::/10,ff00::/8"
     ),
     "dbms.security.procedures.unrestricted": "gds.*,bloom.*",
@@ -2125,7 +2125,6 @@ def _allowed_on_wildcard_resource(action: str) -> bool:
     return local.startswith(("Describe", "List", "Get"))
 
 REQUIRED_BLOCKLIST_CIDRS = (
-    "169.254.169.0/24",
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",

@@ -202,7 +202,6 @@ With no name, `teardown.sh` uses the newest file in `.deploy/` and exits with an
 
 - The stack, including the NLB, NAT Gateways, and VPC endpoints.
 - The SSM parameter `/neo4j-ee/test/<stack-name>/ami-id`.
-- The Secrets Manager secret `neo4j/<stack-name>/password`.
 - The auto-imported ACM certificate. A certificate you passed with `--cert-arn` is never touched.
 - Licence secrets that `deploy.py` created from `.licenses/`.
 - The `.deploy/<stack-name>.txt` file.
@@ -211,9 +210,11 @@ With no name, `teardown.sh` uses the newest file in `.deploy/` and exits with an
 
 - The base AMI.
 - A copied AMI in another region. `teardown.sh` prints its id and does not deregister it.
-- EBS data volumes, unless you pass `--delete-volumes`.
+- The resources the stack retains, unless you pass `--delete-volumes`. They are the EBS data volumes, both password secrets, the NLB access-log bucket and the stack KMS key. With the flag, teardown deletes the volumes, secrets and bucket, and schedules the key for deletion with the 7-day minimum window.
 - A test VPC from `create-test-vpc.py`. Delete the stack first, then run `scripts/teardown-test-vpc.py`.
 - Certificates you supplied.
+
+**Retained resources pile up across test deploys.** Each deploy creates its own secrets, KMS key and log bucket. A teardown without `--delete-volumes` leaves all of them. Each KMS key adds a monthly charge until it is deleted. Pass `--delete-volumes` when you tear down a throwaway test stack.
 
 **If deploy.py fails.** No outputs file is written, so `teardown.sh <stack-name>` cannot find the stack. The stack stays in `CREATE_FAILED` with its resources running. Delete it by hand:
 
@@ -221,4 +222,4 @@ With no name, `teardown.sh` uses the newest file in `.deploy/` and exits with an
 aws cloudformation delete-stack --stack-name <stack-name> --region <region>
 ```
 
-Then remove the retained volumes, the SSM parameter, and the secrets by hand.
+Then remove the retained volumes, the SSM parameter, the secrets and the log bucket by hand, and schedule the stack KMS key for deletion.

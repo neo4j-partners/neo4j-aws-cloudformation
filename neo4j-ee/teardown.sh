@@ -13,6 +13,9 @@
 #   access-log bucket and the stack KMS key. The key is scheduled for deletion
 #   with the 7-day minimum window. Without this flag they are printed but left
 #   intact.
+#   Every deploy creates its own secrets, key and bucket, so test deploys torn
+#   down without this flag leave them behind, and each key is billed monthly
+#   until it is deleted.
 # --expected-account: stop unless the credentials resolve to this 12-digit
 #   account id. Defaults to EXPECTED_AWS_ACCOUNT.
 
@@ -310,6 +313,8 @@ echo ""
 # or ENI in the VPC that this stack does not own blocks the teardown. The
 # default security group and NAT gateway ENIs are exempt, because the VPC and
 # the stack's NAT gateways own them.
+# The guard cannot see a foreign instance whose ENIs carry only this stack's
+# security groups. Such an ENI looks stack-owned and does not block teardown.
 # ---------------------------------------------------------------------------
 STACK_RESOURCES=$(aws cloudformation describe-stack-resources \
   --stack-name "${STACK_NAME}" --region "${REGION}" \

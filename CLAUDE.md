@@ -92,7 +92,7 @@ The `--suite release` run plus `preflight` is the post-release gate; the full pr
 
 ## Security Invariant: `internal.dbms.cypher_ip_blocklist`
 
-The single most protected key. In `templates/src/neo4j-base.conf` it covers `169.254.169.0/24` and `169.254.0.0/16` (IMDS credential exfiltration), `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (VPC SSRF), loopback `127.0.0.0/8` and `::1/128`, `0.0.0.0/8`, and the IPv6 unique-local/link-local/multicast ranges. Removing it lets any Cypher user steal the instance IAM role credentials and pivot into the VPC. Enforced at four independent layers: source file → build-time contract test (`Neo4jBaseConfTests`, `RenderedTemplateContractTests`) → runtime fail-closed `assert_security_invariant` (presence-only; **do not widen to content validation**) → post-deploy G3 conf-key audit in `validate-private`.
+The single most protected key. In `templates/src/neo4j-base.conf` it covers `169.254.0.0/16` (IMDS credential exfiltration), `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (VPC SSRF), loopback `127.0.0.0/8` and `::1/128`, `0.0.0.0/8`, and the IPv6 unique-local/link-local/multicast ranges. Removing it lets any Cypher user steal the instance IAM role credentials and pivot into the VPC. Enforced at four independent layers: source file → build-time contract test (`Neo4jBaseConfTests`, `RenderedTemplateContractTests`) → runtime fail-closed `assert_security_invariant` (presence-only; **do not widen to content validation**) → post-deploy G3 conf-key audit in `validate-private`.
 
 ## AMI Lifecycle Invariant
 
