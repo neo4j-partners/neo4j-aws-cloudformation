@@ -291,10 +291,9 @@ browser's `Host`, which is `AdvertisedDNS`. A mismatch fails HTTPS with
 `400 Invalid SNI`. This is why `AdvertisedDNS` is both the certificate SAN/CN
 and the host placed in `server.https.advertised_address` and
 `server.default_advertised_address`. `server.default_advertised_address` in
-particular must stay `AdvertisedDNS`: it is Jetty's no-SNI fallback host, and
-the NLB HTTPS health check on `7473` connects without SNI; if it is not the
-cert SAN, Jetty answers the health check with `400 Invalid SNI` and every
-`7473` target goes unhealthy.
+particular must stay `AdvertisedDNS`. The NLB health checker sends no SNI,
+and Jetty answers its HTTPS requests with `400 Invalid SNI`. The Browser
+target group therefore uses a TCP health check.
 
 **Bolt advertises `AdvertisedDNS` only when the stack's private DNS record
 resolves it in-VPC; otherwise it advertises the NLB DNS.** Bolt is a routed
@@ -347,14 +346,17 @@ idempotent: an existing cert pair is reused, so ASG self-heal does not depend
 on a package mirror. A `dnf install` on the boot path would. AD-1 removed
 that dependency for Neo4j, and the same rule applies to `openssl`.
 
-**The Browser target group uses an L7 health check.** The Browser target group
-health check is `HTTPS` for TLS topologies and `HTTP` for Public without TLS,
-both against `/` with a `200` matcher, so a target is healthy only when Neo4j
-is actually serving. The NLB does not validate the target certificate, so the
-self-signed instance cert is accepted, and TLS 1.2 is sufficient for an NLB
-HTTPS health check. The Bolt target group stays a `TCP` health check because
-Bolt is a binary protocol with no L7 health check available. A TCP-only
-Browser check is prohibited: it reports a wedged Neo4j as healthy.
+**The Browser target group uses a TCP health check on `7473` when TLS is
+on.** The NLB health checker opens the TLS connection without SNI. Neo4j's
+Jetty enforces `sniHostCheck` and answers that request with
+`400 Invalid SNI`. An L7 check against the Browser listener therefore never
+goes healthy, and the NLB never routes to the target. A TCP connect is the
+strongest check the NLB can run there. Public without TLS has no SNI problem,
+so its Browser check is `HTTP` against `/` with a `200` matcher. The Bolt
+target group uses a `TCP` check because Bolt is a binary protocol with no L7
+check available. The node ASGs use `HealthCheckType: EC2`, so these checks
+govern NLB routing only and never replace an instance. The `validate-private`
+conf and TLS audit covers whether Neo4j is actually serving.
 
 **Private DNS is an optional, stack-owned convenience.** When
 `CreatePrivateDns` is true, the Private and ExistingVpc templates create a
@@ -530,18 +532,18 @@ mapping. The `neo4j` admin password remains the break-glass path when the
 identity provider is down.
 
 **The operator bastion holds no credentials.** The Private and ExistingVpc
-bastion relays SSM port-forward sessions to the load balancer. Its role
-writes Session Manager logs and nothing else. It reads no secret, no SSM
-parameter and no key. The `validate-private` tools read the admin password and
-the `/neo4j-ee/<stack>/` parameters with the operator's own AWS credentials.
-They keep the password in memory. They run the Neo4j driver and `cypher-shell` on the operator machine
-through the tunnel. The bastion UserData installs no package. Its security
-group allows outbound port 443 to the endpoint security group and to the S3
-prefix list. It also allows ports 7473 and 7687 to the load balancer security
-group. The S3 rule leaves the same residual that AD-7 accepts for the nodes.
-Security review finding H3 flagged the old bastion, whose role could read the
-superuser password, as a credential source for anyone able to open a session
-on it.
+bastion relays SSM port-forward sessions to the load balancer. Its role writes
+Session Manager logs and nothing else. It reads no secret, no SSM parameter
+and no key. The `validate-private` tools read the admin password and the
+`/neo4j-ee/<stack>/` parameters with the operator's own AWS credentials. They
+keep the password in memory. They run the Neo4j driver and `cypher-shell` on
+the operator machine through the tunnel. The bastion UserData installs no
+package. Its security group allows outbound port 443 to the endpoint security
+group and to the S3 prefix list. It also allows ports 7473 and 7687 to the
+load balancer security group. The S3 rule leaves the same residual that AD-7
+accepts for the nodes. Security review finding H3 flagged the old bastion,
+whose role could read the superuser password, as a credential source for
+anyone able to open a session on it.
 
 **Interactive sessions are logged to the stack.** The stack creates a Session
 Manager preferences document and publishes its name as the
@@ -562,6 +564,15 @@ the S3 prefix list. They also allow the cluster ports 5000, 6000, 7000 and
 any address. Neo4j needs that rule to fetch the identity provider's discovery
 document and signing keys. Security review finding H2 flagged the old
 allow-all egress as an exfiltration path for a compromised node.
+
+**Private creates the NAT route only on request.** The NAT gateways, their
+Elastic IPs and the private subnets' default routes exist only when
+`EnableInternetEgress` is `true`. The default is `false`, and then a Private
+node has no route out of the VPC. The `OidcRequiresInternetEgress` rule
+rejects a stack that sets `OidcIssuerUri` without `EnableInternetEgress`,
+because Neo4j reaches the issuer through the NAT gateways. A Hume stack that
+shares the VPC also needs the NAT route. ExistingVpc creates no NAT gateway,
+and the customer owns its routing.
 
 **The boot path calls only AWS APIs behind interface endpoints.** The stack
 creates nine interface endpoints: `ssm`, `ssmmessages`, `ec2messages`, `logs`,
@@ -717,8 +728,9 @@ regression, not an improvement.
   pip packages.** Neo4j, `cypher-shell`, `openssl` and every other package
   belong in the AMI. A boot-path install needs a package mirror and an
   internet route on every launch and every ASG self-heal (AD-1).
-- **Do not use a TCP-only health check for the Browser target group.** It
-  reports a wedged Neo4j as healthy. The Browser check is L7 (AD-4).
+- **Do not use an L7 health check against a TLS Browser listener.** The NLB
+  health checker sends no SNI, so Jetty answers `400 Invalid SNI` and the
+  target never goes healthy. The Browser check is TCP on `7473` (AD-4).
 - **Do not key TLS off a secret output.** The TLS signal is a non-empty
   `AdvertisedDNS`. There is no `BoltTlsSecretArn`.
 - **Do not set the certificate SAN or CN to anything but `AdvertisedDNS`.**
@@ -752,7 +764,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-10 | `cfn-init` and `cfn-signal` are present on the built image | `test-ami.sh` CHECK 11 (PATH resolution of both helpers) |
 | NFR-11 | Rendered UserData of every template is well under the 16 KB post-base64 cap | Build-time size guard |
 | NFR-12 | Private and ExistingVpc NLB listeners and target groups are `Protocol: TLS` on `7473`/`7687` with the ACM cert and `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`; no plain `7474` in the data path; Public TLS is gated on `UsePublicTLS` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls`, `test_public_listeners_are_tls_conditional` |
-| NFR-13 | The Browser target group uses an L7 health check (`HTTPS` for TLS, `HTTP` for Public plain) against `/` with a `200` matcher; the Bolt target group uses `TCP` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls` |
+| NFR-13 | With TLS on, the Browser target group uses a `TCP` health check on `7473` and never an L7 check; Public without TLS checks it with `HTTP` against `/` and a `200` matcher; the Bolt target group uses `TCP` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls` |
 | NFR-14 | `openssl` is baked into the AMI and never `dnf`-installed on the boot path (AD-4) | `test_create_ami_bakes_openssl`, `test_configure_tls_does_not_install_packages_at_boot` |
 | NFR-15 | Bolt advertises `AdvertisedDNS` only when `boltAdvertiseDns` is `true`: Private under `CreatePrivateDnsHostedZone`, ExistingVpc under `CreatePrivateDns`, never on Public; otherwise it advertises the NLB DNS (AD-4) | `RenderedTemplateContractTests.test_bolt_advertise_dns_reaches_userdata_on_private_templates_only`, `ShellPartialTests.test_configure_tls_bolt_advertises_advertised_dns_when_resolvable`, `test_configure_tls_generates_certs_and_sets_keys` |
 | NFR-16 | `Neo4jStackKey` is unconditional, rotated and retained; the password secret is retained and encrypted with it; both log groups use it (AD-5) | `SecurityReviewHardeningTests.test_password_secret_is_retained_and_uses_the_stack_key`, `test_log_groups_are_encrypted_with_the_stack_key` |

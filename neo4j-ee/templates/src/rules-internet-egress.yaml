@@ -1,0 +1,8 @@
+  OidcRequiresInternetEgress:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref OidcIssuerUri, '']
+          - !Equals [!Ref EnableInternetEgress, 'true']
+        AssertDescription: >-
+          EnableInternetEgress must be true when OidcIssuerUri is set. Neo4j
+          reaches the issuer through the NAT gateways.

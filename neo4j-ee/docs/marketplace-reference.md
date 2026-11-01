@@ -119,7 +119,7 @@ The `ImageId` parameter must use `AWS::SSM::Parameter::Value<AWS::EC2::Image::Id
 
 ### NAT gateways, not NAT instances
 
-Private subnet outbound internet access must use managed NAT gateways (`AWS::EC2::NatGateway`). NAT instances require patching, do not scale automatically, and represent a single point of failure. NAT gateways are AWS-managed, highly available within an AZ, and support high bandwidth without configuration.
+Private subnet outbound internet access must use managed NAT gateways (`AWS::EC2::NatGateway`). The Private template creates them only when `EnableInternetEgress` is `true`. The default is `false`, and the nodes then reach AWS only through VPC endpoints. NAT instances require patching, do not scale automatically, and represent a single point of failure. NAT gateways are AWS-managed, highly available within an AZ, and support high bandwidth without configuration.
 
 For single-node deployments, one NAT gateway in one public subnet is sufficient. For three-node deployments, one NAT gateway per AZ prevents AZ-level failure from blocking outbound traffic for nodes in other AZs.
 

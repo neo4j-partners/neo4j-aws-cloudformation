@@ -112,6 +112,7 @@ Structurally identical to `neo4j-private.template.yaml`: same operator bastion, 
 - **NLB hairpin fix:** The non-target bastion and `preserve_client_ip.enabled=false` apply identically. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin)
 - **Password security model:** The model is identical. It uses an alphanumeric-only `AllowedPattern`, retrieves the password from Secrets Manager at boot, and never embeds it in UserData. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model)
 - **Bolt advertised address:** This part differs from the Private template. With `CreatePrivateDns=true`, Bolt advertises `AdvertisedDNS` whether the stack creates the hosted zone or you pass one in `PrivateDnsHostedZoneId`. A zone you pass must already be associated with `VpcId`. See [NLB Routing in PRIVATE.md](PRIVATE.md#nlb-routing).
+- **Internet egress:** This part differs from the Private template. The Private template creates NAT gateways only when `EnableInternetEgress` is `true`. This template has no such parameter and creates no NAT gateway. Your VPC provides any outbound route, including the route to an OIDC issuer.
 
 ### VPC Interface Endpoint Design
 

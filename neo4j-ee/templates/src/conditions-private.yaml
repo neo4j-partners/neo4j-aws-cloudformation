@@ -21,3 +21,7 @@
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
   HasAvailabilityZones: !Not [!Equals [!Join ['', !Ref AvailabilityZones], '']]
   OidcEnabled: !Not [!Equals [!Ref OidcIssuerUri, '']]
+  InternetEgressEnabled: !Equals [!Ref EnableInternetEgress, 'true']
+  InternetEgressEnabledAndCluster: !And
+    - !Condition InternetEgressEnabled
+    - !Condition CreateCluster

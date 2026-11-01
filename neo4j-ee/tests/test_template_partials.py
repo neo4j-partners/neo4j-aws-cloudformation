@@ -2838,6 +2838,9 @@ class NlbAndRoutingTests(unittest.TestCase):
         # The IGW default route legitimately exists for the NAT-hosting public
         # subnets. The invariant is narrower: the subnets the Neo4j ASGs launch
         # into must reach the internet only through a NAT gateway, never an IGW.
+        # The NAT default route exists only when EnableInternetEgress is true,
+        # so a missing default route is valid. A present one must carry the
+        # egress condition.
         resources = self.docs["private"]["Resources"]
 
         def ref(value):
@@ -2866,14 +2869,27 @@ class NlbAndRoutingTests(unittest.TestCase):
                 if props.get("DestinationCidrBlock") == "0.0.0.0/0":
                     default_route_target[ref(props.get("RouteTableId"))] = props
 
+        default_route_condition = {}
+        for r in resources.values():
+            if r.get("Type") == "AWS::EC2::Route":
+                props = r["Properties"]
+                if props.get("DestinationCidrBlock") == "0.0.0.0/0":
+                    default_route_condition[ref(props.get("RouteTableId"))] = (
+                        r.get("Condition")
+                    )
+
         for subnet in instance_subnets:
             rt = subnet_to_rt.get(subnet)
             self.assertIsNotNone(
                 rt, f"{subnet} has no route table association"
             )
             props = default_route_target.get(rt)
-            self.assertIsNotNone(
-                props, f"route table {rt} for {subnet} has no default route"
+            if props is None:
+                continue
+            self.assertIn(
+                default_route_condition[rt],
+                ("InternetEgressEnabled", "InternetEgressEnabledAndCluster"),
+                f"{subnet} default route is not gated on EnableInternetEgress",
             )
             self.assertNotIn(
                 "GatewayId",
@@ -2881,6 +2897,81 @@ class NlbAndRoutingTests(unittest.TestCase):
                 f"{subnet} default route targets an IGW",
             )
             self.assertIn("NatGatewayId", props)
+
+    def test_private_nat_exists_only_with_internet_egress(self) -> None:
+        # The nodes reach every AWS API through VPC endpoints. The NAT
+        # gateways, their EIPs and the private default routes exist only when
+        # EnableInternetEgress is true.
+        doc = self.docs["private"]
+        resources = doc["Resources"]
+        conditions = doc["Conditions"]
+        self.assertEqual(
+            conditions["InternetEgressEnabled"],
+            {"Fn::Equals": [{"Ref": "EnableInternetEgress"}, "true"]},
+        )
+        self.assertEqual(
+            conditions["InternetEgressEnabledAndCluster"],
+            {
+                "Fn::And": [
+                    {"Condition": "InternetEgressEnabled"},
+                    {"Condition": "CreateCluster"},
+                ]
+            },
+        )
+        expected = {
+            "Neo4jNatEIP1": "InternetEgressEnabled",
+            "Neo4jNatGateway1": "InternetEgressEnabled",
+            "Neo4jPrivateRoute1": "InternetEgressEnabled",
+        }
+        for n in ("2", "3"):
+            expected[f"Neo4jNatEIP{n}"] = "InternetEgressEnabledAndCluster"
+            expected[f"Neo4jNatGateway{n}"] = "InternetEgressEnabledAndCluster"
+            expected[f"Neo4jPrivateRoute{n}"] = "InternetEgressEnabledAndCluster"
+        for logical_id, condition in expected.items():
+            with self.subTest(resource=logical_id):
+                self.assertEqual(resources[logical_id].get("Condition"), condition)
+        nat_types = ("AWS::EC2::NatGateway", "AWS::EC2::EIP")
+        for logical_id, r in resources.items():
+            if r.get("Type") in nat_types:
+                with self.subTest(resource=logical_id):
+                    self.assertIn(logical_id, expected)
+        # A subnet association never waits on a NAT route, because the
+        # route may not exist.
+        for logical_id, r in resources.items():
+            if r.get("Type") == "AWS::EC2::SubnetRouteTableAssociation":
+                with self.subTest(resource=logical_id):
+                    self.assertNotIn("DependsOn", r)
+
+    def test_internet_egress_parameter_is_private_only_and_off_by_default(
+        self,
+    ) -> None:
+        param = self.docs["private"]["Parameters"]["EnableInternetEgress"]
+        self.assertEqual(param["Type"], "String")
+        self.assertEqual(param["AllowedValues"], ["true", "false"])
+        self.assertEqual(param["Default"], "false")
+        for name in ("public", "existing_vpc"):
+            with self.subTest(template=name):
+                self.assertNotIn(
+                    "EnableInternetEgress", self.docs[name]["Parameters"]
+                )
+
+    def test_oidc_requires_internet_egress_rule(self) -> None:
+        rule = self.docs["private"]["Rules"]["OidcRequiresInternetEgress"]
+        (assertion,) = rule["Assertions"]
+        self.assertEqual(
+            assertion["Assert"],
+            {
+                "Fn::Or": [
+                    {"Fn::Equals": [{"Ref": "OidcIssuerUri"}, ""]},
+                    {"Fn::Equals": [{"Ref": "EnableInternetEgress"}, "true"]},
+                ]
+            },
+        )
+        for name in ("public", "existing_vpc"):
+            with self.subTest(template=name):
+                self.assertNotIn(
+                    "OidcRequiresInternetEgress", self.docs[name]["Rules"]
+                )
 
 
 class BuildVerifyTests(unittest.TestCase):

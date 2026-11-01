@@ -181,7 +181,7 @@ Use the Bolt tunnel when you want to connect a local driver, client tool, or scr
 uv run scripts/bolt-tunnel.py      # localhost:7687 -> NLB:7687  (blocks; Ctrl-C to close)
 ```
 
-Map `AdvertisedDNS` to `127.0.0.1` in `/etc/hosts`, as the script prints, so the certificate SAN matches. Connect with `bolt+s://<AdvertisedDNS>:7687` when the NLB serves a certificate you passed with `--cert-arn`. Connect with `bolt+ssc://<AdvertisedDNS>:7687` when it serves the self-signed certificate that `deploy.py` imports by default. The script prints the right URI. Use direct `bolt` mode rather than `neo4j` routing mode from a laptop tunnel because routed mode returns the NLB's internal DNS name, which is not reachable from your laptop.
+Map `AdvertisedDNS` to `127.0.0.1` in `/etc/hosts`, as the script prints, so the certificate SAN matches. Connect with `bolt+s://<AdvertisedDNS>:7687` when the NLB serves a certificate your laptop trusts. Connect with `bolt+ssc://<AdvertisedDNS>:7687` when it serves the self-signed certificate that `deploy.py` imports by default, or any other certificate your laptop does not trust. The script prints `bolt+ssc` only for the certificate that `deploy.py` imports. For any other untrusted certificate, change the scheme to `bolt+ssc` yourself. Use direct `bolt` mode rather than `neo4j` routing mode from a laptop tunnel because routed mode returns the NLB's internal DNS name, which is not reachable from your laptop.
 
 The Bolt tunnel is also required alongside the Browser Tunnel when using Neo4j Browser.
 
@@ -237,6 +237,7 @@ The step-by-step procedure, including the Hume integration, is in [oidc-run-book
 | Template parameter | `deploy.py` flag | `.env` key | Purpose |
 |---|---|---|---|
 | `OidcIssuerUri` | `--oidc-issuer-uri` | `OIDC_ISSUER_URI` | Turns single sign-on on. Neo4j reads `<issuer>/.well-known/openid-configuration`. |
+| `EnableInternetEgress` | `--enable-internet-egress` | `ENABLE_INTERNET_EGRESS` | Creates the NAT gateways. A Private stack requires `true` when `OidcIssuerUri` is set. |
 | `OidcClientId` | `--oidc-client-id` | `OIDC_CLIENT_ID` | Comma-separated client IDs accepted as the ID token audience. A token from any listed client is accepted. |
 | `OidcBrowserClientId` | `--oidc-browser-client-id` | `OIDC_BROWSER_CLIENT_ID` | The client that Browser and Bloom sign in with. It must be in `OidcClientId`. When it is empty, the first ID in `OidcClientId` is used. |
 | `OidcPrincipalClaim` | `--oidc-principal-claim` | `OIDC_PRINCIPAL_CLAIM` | The ID token claim that becomes the Neo4j username. The default is `sub`. |
@@ -251,7 +252,7 @@ A user in neither group signs in with only the `PUBLIC` role.
 
 Neo4j validates the ID token, not the access token. For Amazon Cognito, set the principal claim to `cognito:username` and the groups claim to `cognito:groups`. The Cognito access token has no `aud` claim, so Neo4j rejects it.
 
-The nodes fetch the provider's signing keys over the internet. A Private stack reaches the internet through the NAT gateway in each private subnet. An ExistingVpc stack must provide that route itself. The node security group allows outbound port 443 to the internet only when `OidcIssuerUri` is set.
+The nodes fetch the provider's signing keys over the internet. A Private stack reaches the internet through the NAT gateways, which exist only when `EnableInternetEgress` is `true`. The stack rejects `OidcIssuerUri` without it, and so does `deploy.py`. An ExistingVpc stack must provide that route itself. The node security group allows outbound port 443 to the internet only when `OidcIssuerUri` is set.
 
 #### Redirect Addresses
 
@@ -351,18 +352,20 @@ cd neo4j-ee
 ### Network Topology
 
 **Three-node cluster:**
-- VPC with three public subnets (one per AZ) hosting NAT Gateways, and three private subnets (one per AZ) hosting the Neo4j instances
+- VPC with three public subnets (one per AZ) for the optional NAT Gateways, and three private subnets (one per AZ) hosting the Neo4j instances
 - Internal NLB with TLS listeners on 7473 (HTTPS Browser) and 7687 (Bolt), targets spread across all three private subnets
 - Three Neo4j EC2 instances in private subnets, forming a Raft cluster
-- Three NAT Gateways for outbound traffic from the cluster members
+- Three NAT Gateways for outbound traffic from the cluster members, only when `EnableInternetEgress` is `true`
 - One `t4g.small` operator bastion in a private subnet, not registered as an NLB target
 - VPC interface endpoints for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`
 
 **Single instance:**
 - VPC with one public subnet (NAT Gateway) and one private subnet (EC2 instance)
 - Internal NLB in the private subnet
-- One NAT Gateway
+- One NAT Gateway, only when `EnableInternetEgress` is `true`
 - One `t4g.small` operator bastion
+
+`EnableInternetEgress` defaults to `false`. Without it, the stack creates no NAT gateway and the nodes have no route out of the VPC. Set it to `true` for OIDC sign-in or for a Hume stack that shares the VPC.
 
 The `AvailabilityZones` parameter is optional. Every deployment, including a single node, needs exactly three zones in it. A shorter list fails stack creation with an `Fn::Select` template error. Leave it blank to use the first three zones that `Fn::GetAZs` returns.
 
@@ -370,8 +373,8 @@ The `AvailabilityZones` parameter is optional. Every deployment, including a sin
 
 | AWS Resource | What it creates |
 |---|---|
-| VPC | New VPC with public subnets (NAT Gateways) and private subnets (Neo4j instances); 3 AZs for a cluster, 1 AZ for a single instance |
-| NAT Gateways | One per AZ for outbound internet access from the cluster nodes |
+| VPC | New VPC with public subnets for the optional NAT Gateways and private subnets for the Neo4j instances; 3 AZs for a cluster, 1 AZ for a single instance |
+| NAT Gateways | One per AZ for outbound internet access from the cluster nodes. Created only when `EnableInternetEgress` is `true` |
 | Internal NLB | TLS listeners on port 7473 (HTTPS Browser) and 7687 (Bolt); routable from inside the VPC only |
 | EC2 instances | 1 or 3 Neo4j nodes in private subnets; no public IPs |
 | ASG per node | One Auto Scaling Group per Neo4j node, fixed at `MinSize=MaxSize=DesiredCapacity=1`, for self-healing |
@@ -463,7 +466,7 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 
 The `vpc-endpoint-sg-id` parameter is the mechanism by which applications opt into reaching these endpoints. Each application adds its own security group to the endpoint SG's ingress on port 443. Opening the endpoint SG to the whole VPC CIDR would allow any workload in the VPC to call SSM and Secrets Manager via PrivateLink. The published SG ID approach requires each application to explicitly opt in, creating an auditable per-application record and a clean removal path.
 
-**Node egress.** The node security groups allow outbound traffic only to the endpoint SG on port 443, to same-region S3 on port 443, and to other cluster members on ports 5000, 6000, 7000, and 7688. A node has no route to the internet unless `OidcIssuerUri` is set. In that case the nodes also allow outbound port 443 to any address so Neo4j can fetch the identity provider's signing keys.
+**Node egress.** The node security groups allow outbound traffic only to the endpoint SG on port 443, to same-region S3 on port 443, and to other cluster members on ports 5000, 6000, 7000, and 7688. A node has no route to the internet unless `EnableInternetEgress` is `true`. When `OidcIssuerUri` is set, the nodes also allow outbound port 443 to any address so Neo4j can fetch the identity provider's signing keys.
 
 **S3 access from nodes.** Nodes reach only same-region S3. The S3 rule targets the region's AWS-managed S3 prefix list, so a URL for a bucket in another region fails. Traffic goes through the S3 gateway endpoint, whose policy allows only the AWS-owned package and agent buckets and buckets in the stack account. This access keeps SSM Agent updates, patch baselines, and Hume seeding from a stack-account bucket working. CloudFormation has no intrinsic that returns a prefix-list ID, so a small Lambda-backed custom resource looks it up at deploy time. The Lambda runs outside the VPC and can call only `ec2:DescribePrefixLists` and write its own log group.
 

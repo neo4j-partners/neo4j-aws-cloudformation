@@ -352,7 +352,12 @@ _PRIVATE_SPEC = TemplateSpec(
         "parameters-private.yaml",
         "parameters-oidc.yaml",
     ),
-    rule_partials=("rules-common.yaml", "rules-tls-required.yaml", "rules-oidc.yaml"),
+    rule_partials=(
+        "rules-common.yaml",
+        "rules-tls-required.yaml",
+        "rules-oidc.yaml",
+        "rules-internet-egress.yaml",
+    ),
     conditions_partial="conditions-private.yaml",
     resource_partials=(
         "iam.yaml",

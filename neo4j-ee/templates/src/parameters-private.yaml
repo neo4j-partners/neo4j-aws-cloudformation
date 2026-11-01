@@ -40,3 +40,14 @@
       error. Leave blank to use the first three zones that Fn::GetAZs returns.
     Type: CommaDelimitedList
     Default: ''
+  EnableInternetEgress:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'false'
+    Description: >-
+      Create one NAT gateway per Availability Zone and a default route from the
+      private subnets through it. OIDC sign-in requires it. A Hume stack that
+      shares this VPC also requires it. When false, the nodes reach AWS only
+      through the VPC endpoints and the S3 prefix list.

@@ -59,6 +59,7 @@ class ParseArgsEnvDefaultTests(unittest.TestCase):
         self.assertIsNone(args.create_private_dns)
         self.assertFalse(args.no_bloom)
         self.assertIsNone(args.region_override)
+        self.assertEqual(args.enable_internet_egress, "false")
 
     def test_env_supplies_oidc_and_dns_settings(self) -> None:
         args = self._parse(
@@ -73,8 +74,10 @@ class ParseArgsEnvDefaultTests(unittest.TestCase):
                 "ADVERTISED_DNS": "neo4j-oidc.neo4j.local",
                 "CREATE_PRIVATE_DNS": "true",
                 "PRIVATE_DNS_ZONE": "neo4j.local",
+                "ENABLE_INTERNET_EGRESS": "true",
             }
         )
+        self.assertEqual(args.enable_internet_egress, "true")
         self.assertEqual(args.oidc_issuer_uri, "https://issuer.example")
         self.assertEqual(args.oidc_client_id, "web,browser")
         self.assertEqual(args.oidc_browser_client_id, "browser")

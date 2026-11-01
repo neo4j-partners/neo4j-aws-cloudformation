@@ -307,6 +307,29 @@ class BuildCfnParametersTests(unittest.TestCase):
             },
         )
 
+    def test_private_passes_internet_egress_default_false(self) -> None:
+        params = _params(
+            deploy.build_cfn_parameters(**self._base_kwargs("Private", self._private_tls()))
+        )
+        self.assertEqual(params["EnableInternetEgress"], "false")
+
+    def test_private_passes_internet_egress_true(self) -> None:
+        kwargs = self._base_kwargs("Private", self._private_tls())
+        kwargs["enable_internet_egress"] = "true"
+        params = _params(deploy.build_cfn_parameters(**kwargs))
+        self.assertEqual(params["EnableInternetEgress"], "true")
+
+    def test_public_omits_internet_egress(self) -> None:
+        tls = deploy.resolve_tls_plan(
+            mode="Public", stack_name="s", cert_arn="", advertised_dns="",
+            enable_public_tls=False, create_private_dns=False,
+            private_dns_zone="", private_dns_hosted_zone_id="",
+        )
+        kwargs = self._base_kwargs("Public", tls)
+        kwargs["enable_internet_egress"] = "true"
+        params = _params(deploy.build_cfn_parameters(**kwargs))
+        self.assertNotIn("EnableInternetEgress", params)
+
 
 if __name__ == "__main__":
     unittest.main()

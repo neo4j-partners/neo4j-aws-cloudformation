@@ -50,7 +50,7 @@ NO_GDS=true
 - **Feedback:** When `deploy.py` takes values from `.env`, it prints their names at the start of the run.
 - **Validation:** A value that is not valid for its flag stops the deploy before any AWS call. The message names the key.
 
-`./deploy.py --help` lists every flag. The single sign-on keys are listed in [Sign-In Settings](PRIVATE.md#sign-in-settings).
+`./deploy.py --help` lists every flag. The single sign-on keys are listed in [Sign-In Settings](PRIVATE.md#sign-in-settings). A Private stack with `OIDC_ISSUER_URI` also needs `ENABLE_INTERNET_EGRESS=true`.
 
 ## Choose an AMI
 
@@ -106,7 +106,7 @@ Run all commands from `neo4j-ee/`.
 ./deploy.py --marketplace --region us-east-1 --no-bloom --no-gds
 ```
 
-Stack creation typically takes 5 to 10 minutes. Private mode creates NAT Gateways that bill hourly. A running stack costs money, so tear it down when you finish.
+Stack creation typically takes 5 to 10 minutes. Private mode with `--enable-internet-egress true` creates NAT Gateways that bill hourly. A running stack costs money, so tear it down when you finish.
 
 The stack name is `test-ee-<unix seconds>`. Do not start two `deploy.py` runs in the same second. They get the same stack name and the same SSM parameter path, so one run overwrites the other's parameter and a teardown of one removes the parameter the other needs. Start the second run at least a second later.
 
@@ -200,7 +200,7 @@ With no name, `teardown.sh` uses the newest file in `.deploy/` and exits with an
 
 **What teardown deletes:**
 
-- The stack, including the NLB, NAT Gateways, and VPC endpoints.
+- The stack, including the NLB, any NAT Gateways, and the VPC endpoints.
 - The SSM parameter `/neo4j-ee/test/<stack-name>/ami-id`.
 - The auto-imported ACM certificate. A certificate you passed with `--cert-arn` is never touched.
 - Licence secrets that `deploy.py` created from `.licenses/`.

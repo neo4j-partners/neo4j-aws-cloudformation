@@ -9,7 +9,7 @@ CloudFormation templates and operator tooling for the Neo4j Enterprise Edition A
 | Template | Topology | Use case | Guide |
 |---|---|---|---|
 | **Public** | New VPC, public subnets, internet-facing NLB | Proof of concept, demos, and evaluation. Instances have public IPs; no bastion required. Direct Bolt and Browser access from `AllowedCIDR`. | [docs/PUBLIC.md](docs/PUBLIC.md) |
-| **Private** | New VPC, private subnets, internal NLB, SSM bastion | Production and staging where AWS manages the VPC. Instances have no public IPs; operator access via SSM Session Manager port forwarding through a dedicated bastion. | [docs/PRIVATE.md](docs/PRIVATE.md) |
+| **Private** | New VPC, private subnets, internal NLB, SSM bastion | Production and staging where AWS manages the VPC. Instances have no public IPs; operator access via SSM Session Manager port forwarding through a dedicated bastion. Nodes have no internet route unless `EnableInternetEgress` is `true`. | [docs/PRIVATE.md](docs/PRIVATE.md) |
 | **Private, Existing VPC** | Your VPC, private subnets, internal NLB, SSM bastion | Production into a pre-existing network: peered VPC, Transit Gateway, or Direct Connect. No VPC or NAT provisioning; requires caller-supplied VPC and subnet IDs. | [docs/PRIVATE-EXISTING-VPC.md](docs/PRIVATE-EXISTING-VPC.md) |
 
 ---
@@ -37,7 +37,7 @@ Once the stack is complete, the guide for your topology covers prerequisites, ac
 
 ### Single Sign-On
 
-A Private stack can add sign-in through OpenID Connect next to the native password. [docs/oidc-run-book.md](docs/oidc-run-book.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On in PRIVATE.md](docs/PRIVATE.md#single-sign-on-oidc) describes each setting and how to fix sign-in problems.
+A Private stack can add sign-in through OpenID Connect next to the native password. Sign-in requires `EnableInternetEgress` set to `true`, which creates the NAT gateways. [docs/oidc-run-book.md](docs/oidc-run-book.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On in PRIVATE.md](docs/PRIVATE.md#single-sign-on-oidc) describes each setting and how to fix sign-in problems.
 
 ---
 

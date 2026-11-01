@@ -215,6 +215,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--private-route-table-1", metavar="RTB_ID", default="",
                    help="Route table ID for PrivateSubnet1Id (required for ExistingVpc).")
     p.add_argument("--create-vpc-endpoints", choices=["true", "false"])
+    p.add_argument("--enable-internet-egress", choices=["true", "false"],
+                   default="false",
+                   help="Private mode only: create one NAT gateway per "
+                        "Availability Zone and a default route from the private "
+                        "subnets (sets EnableInternetEgress). Required with "
+                        "--oidc-issuer-uri and for a Hume stack in the same VPC. "
+                        "Default: false.")
     p.add_argument("--existing-endpoint-sg-id", metavar="SG_ID", default="")
     p.add_argument("--disk-size", type=int, metavar="GB", help="Data volume size in GB (default: 100, min: 100, max: 65536)")
     p.add_argument("--snapshot-id", metavar="SNAPSHOT_ID", help="Snapshot ID to restore Node 1 data volume from (must match --disk-size)")
@@ -492,6 +499,7 @@ def build_cfn_parameters(
     existing_vpc: ExistingVpcInputs | None,
     tls: TlsPlan,
     oidc: OidcInputs | None = None,
+    enable_internet_egress: str = "false",
 ) -> list[dict[str, str]]:
     """Build the CloudFormation parameter list (pure; no AWS calls).
 
@@ -532,6 +540,9 @@ def build_cfn_parameters(
         if existing_vpc.existing_endpoint_sg_id:
             params.append({"ParameterKey": "ExistingEndpointSgId",
                             "ParameterValue": existing_vpc.existing_endpoint_sg_id})
+    if mode == "Private":
+        params.append({"ParameterKey": "EnableInternetEgress",
+                       "ParameterValue": enable_internet_egress})
 
     if mode == "Public":
         if tls.enable_public_tls:
@@ -698,6 +709,16 @@ def main() -> None:
             sys.exit("ERROR: --mode ExistingVpc with 3 servers requires --subnet-2 and --subnet-3.")
         if args.create_vpc_endpoints == "false" and not args.existing_endpoint_sg_id:
             sys.exit("ERROR: --existing-endpoint-sg-id is required when --create-vpc-endpoints false")
+
+    if (
+        args.mode == "Private"
+        and args.oidc_issuer_uri
+        and args.enable_internet_egress != "true"
+    ):
+        sys.exit(
+            "ERROR: --oidc-issuer-uri requires --enable-internet-egress true. "
+            "Neo4j reaches the issuer through the NAT gateways."
+        )
 
     instance_type = args.instance_type
 
@@ -961,6 +982,7 @@ def main() -> None:
         existing_vpc=existing_vpc_inputs,
         tls=tls,
         oidc=oidc_inputs,
+        enable_internet_egress=args.enable_internet_egress,
     )
 
     cfn = boto3.client("cloudformation", region_name=region)
@@ -1046,6 +1068,8 @@ def main() -> None:
     if args.alert_email:
         extra.append(("AlertEmail", args.alert_email))
     extra.extend(oidc_inputs.cfn_values().items())
+    if args.mode == "Private":
+        extra.append(("EnableInternetEgress", args.enable_internet_egress))
     if args.mode == "ExistingVpc":
         extra.append(("CreateVpcEndpoints", args.create_vpc_endpoints))
         if args.existing_endpoint_sg_id:

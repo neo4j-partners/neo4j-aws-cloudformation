@@ -81,6 +81,7 @@ cat >> .env <<'EOF'
 MODE=Private
 REGION=us-east-1
 NUMBER_OF_SERVERS=3
+ENABLE_INTERNET_EGRESS=true
 NO_BLOOM=true
 NO_GDS=true
 EXPECTED_AWS_ACCOUNT=385155106615
@@ -93,6 +94,12 @@ Hume needs three of these values:
 - `NUMBER_OF_SERVERS=3`. A one-node stack has no second private subnet and only one public subnet, and Hume needs both.
 - `CREATE_PRIVATE_DNS=true` with `PRIVATE_DNS_ZONE`. The stack then creates the private hosted zone and the record for the advertised name. Without the record, the Hume instance cannot resolve the advertised name. Each node advertises that name for Bolt only when the stack creates the zone, so do not replace `PRIVATE_DNS_ZONE` with `PRIVATE_DNS_HOSTED_ZONE_ID`. See [NLB Routing](PRIVATE.md#nlb-routing).
 
+### Enable internet egress
+
+`ENABLE_INTERNET_EGRESS=true` sets the `EnableInternetEgress` template parameter. The flag form is `--enable-internet-egress true`. The stack then creates one NAT gateway per Availability Zone and a default route from the private subnets. Neo4j reaches the OIDC issuer through those NAT gateways. Hume also requires `EnableInternetEgress` set to `true` on the Neo4j stack. The default is `false`. With `OIDC_ISSUER_URI` set and the default, `deploy.py` exits before creating the stack, and CloudFormation rejects the template.
+
+### Other settings
+
 `REGION` is required too. Without it, `deploy.py` picks a random region. `NO_BLOOM` and `NO_GDS` skip the two plugins, which otherwise install by default and need licences.
 
 Every other `deploy.py` flag can go in `.env` as well. See [Settings in .env](LOCAL-TESTING.md#settings-in-env).
@@ -103,7 +110,7 @@ Every other `deploy.py` flag can go in `.env` as well. See [Settings in .env](LO
 ./deploy.py
 ```
 
-The first line of output starts with `Loaded` and names the keys read from `.env`. Check that the list includes `MODE`, `REGION`, `NUMBER_OF_SERVERS` and the `OIDC_` keys. Stack creation takes 5 to 10 minutes.
+The first line of output starts with `Loaded` and names the keys read from `.env`. Check that the list includes `MODE`, `REGION`, `NUMBER_OF_SERVERS`, `ENABLE_INTERNET_EGRESS` and the `OIDC_` keys. Stack creation takes 5 to 10 minutes.
 
 When the deploy finishes, it prints the outputs and writes them to `.deploy/<stack-name>.txt`. The stack name has the form `test-ee-<unix seconds>`. Save it, because every later step needs it:
 
@@ -222,7 +229,7 @@ If sign-in fails, see [Troubleshooting sign-in](PRIVATE.md#troubleshooting-sign-
 
 ## Tear down
 
-When the stack serves Hume, delete the Hume stack first. The Neo4j teardown deletes the VPC, load balancer and NAT gateways that Hume uses. The **Tear down** step in the Hume run book, `docs/run-book.md#tear-down`, gives the order.
+When the stack serves Hume, delete the Hume stack first. The Neo4j teardown deletes the VPC, load balancer and NAT gateways that Hume uses. Hume requires `EnableInternetEgress` set to `true` on the Neo4j stack, so those NAT gateways exist. The **Tear down** step in the Hume run book, `docs/run-book.md#tear-down`, gives the order.
 
 Delete the stack and its data volumes:
 

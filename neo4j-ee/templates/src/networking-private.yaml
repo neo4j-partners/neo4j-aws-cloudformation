@@ -133,11 +133,16 @@
       VpcId: !Ref Neo4jVPC
 
   # ---------------------------------------------------------------------------
-  # NAT Gateways — one per AZ in 3-node, one in 1-node
+  # NAT Gateways. The nodes reach every AWS API through VPC endpoints. The
+  # NAT gateways, their EIPs and the private default routes exist only when
+  # EnableInternetEgress is true. OIDC sign-in and a Hume stack in this VPC
+  # need that egress. There is one per AZ in 3-node mode and one in 1-node
+  # mode.
   # ---------------------------------------------------------------------------
 
   Neo4jNatEIP1:
     Type: AWS::EC2::EIP
+    Condition: InternetEgressEnabled
     Properties:
       Domain: vpc
       Tags:
@@ -150,7 +155,7 @@
 
   Neo4jNatEIP2:
     Type: AWS::EC2::EIP
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     Properties:
       Domain: vpc
       Tags:
@@ -163,7 +168,7 @@
 
   Neo4jNatEIP3:
     Type: AWS::EC2::EIP
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     Properties:
       Domain: vpc
       Tags:
@@ -176,6 +181,7 @@
 
   Neo4jNatGateway1:
     Type: AWS::EC2::NatGateway
+    Condition: InternetEgressEnabled
     DependsOn: Neo4jInternetGatewayAttachment
     Properties:
       AllocationId: !GetAtt Neo4jNatEIP1.AllocationId
@@ -190,7 +196,7 @@
 
   Neo4jNatGateway2:
     Type: AWS::EC2::NatGateway
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     DependsOn: Neo4jInternetGatewayAttachment
     Properties:
       AllocationId: !GetAtt Neo4jNatEIP2.AllocationId
@@ -205,7 +211,7 @@
 
   Neo4jNatGateway3:
     Type: AWS::EC2::NatGateway
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     DependsOn: Neo4jInternetGatewayAttachment
     Properties:
       AllocationId: !GetAtt Neo4jNatEIP3.AllocationId
@@ -219,7 +225,9 @@
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   # ---------------------------------------------------------------------------
-  # Private route tables — one per AZ. Tables 2/3 exist only in 3-node mode.
+  # Private route tables, one per AZ. Tables 2 and 3 exist only in 3-node
+  # mode. The tables and their subnet associations are unconditional. Only
+  # the default route to the NAT gateway depends on EnableInternetEgress.
   # ---------------------------------------------------------------------------
 
   Neo4jPrivateRouteTable1:
@@ -262,6 +270,7 @@
 
   Neo4jPrivateRoute1:
     Type: AWS::EC2::Route
+    Condition: InternetEgressEnabled
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable1
       DestinationCidrBlock: 0.0.0.0/0
@@ -269,7 +278,7 @@
 
   Neo4jPrivateRoute2:
     Type: AWS::EC2::Route
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable2
       DestinationCidrBlock: 0.0.0.0/0
@@ -277,7 +286,7 @@
 
   Neo4jPrivateRoute3:
     Type: AWS::EC2::Route
-    Condition: CreateCluster
+    Condition: InternetEgressEnabledAndCluster
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable3
       DestinationCidrBlock: 0.0.0.0/0
@@ -285,7 +294,6 @@
 
   Neo4jPrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: Neo4jPrivateRoute1
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable1
       SubnetId: !Ref Neo4jPrivateSubnet1
@@ -293,7 +301,6 @@
   Neo4jPrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Condition: CreateCluster
-    DependsOn: Neo4jPrivateRoute2
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable2
       SubnetId: !Ref Neo4jPrivateSubnet2
@@ -301,7 +308,6 @@
   Neo4jPrivateSubnet3RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Condition: CreateCluster
-    DependsOn: Neo4jPrivateRoute3
     Properties:
       RouteTableId: !Ref Neo4jPrivateRouteTable3
       SubnetId: !Ref Neo4jPrivateSubnet3

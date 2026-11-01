@@ -25,6 +25,7 @@
         Parameters:
           - AvailabilityZones
           - NlbDeletionProtection
+          - EnableInternetEgress
       - Label:
           default: "TLS"
         Parameters:
@@ -109,3 +110,5 @@
         default: Availability Zones
       NlbDeletionProtection:
         default: NLB Deletion Protection
+      EnableInternetEgress:
+        default: Enable Internet Egress
