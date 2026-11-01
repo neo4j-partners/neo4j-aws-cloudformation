@@ -36,7 +36,17 @@ _CONTRACT_PARAMS = (
     "vpc-endpoint-sg-id",
 )
 _BASE_OPERATIONAL_PARAMS = ("region", "stack-name", "private-subnet-1-id")
-_INTERFACE_ENDPOINTS = ("secretsmanager", "logs", "ssm", "ssmmessages")
+_INTERFACE_ENDPOINTS = (
+    "secretsmanager",
+    "logs",
+    "ssm",
+    "ssmmessages",
+    "ec2messages",
+    "ec2",
+    "cloudformation",
+    "autoscaling",
+    "acm",
+)
 
 
 @dataclass(frozen=True)
@@ -305,7 +315,7 @@ def main() -> None:
             lambda: _contract_params_exist(ctx),
         ),
         (
-            "VPC interface endpoints: secretsmanager, logs, ssm, ssmmessages",
+            f"VPC interface endpoints: {', '.join(_INTERFACE_ENDPOINTS)}",
             lambda: _vpc_endpoints_exist(ctx),
         ),
         (

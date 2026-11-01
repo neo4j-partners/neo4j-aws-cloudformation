@@ -21,3 +21,4 @@
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
   CreateVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'true']
   UseExistingVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'false']
+  OidcEnabled: !Not [!Equals [!Ref OidcIssuerUri, '']]

@@ -24,7 +24,8 @@ def parse_args():
     p.add_argument("--region", required=True, metavar="REGION")
     p.add_argument(
         "--with-endpoints", action="store_true",
-        help="Also create ssm, ssmmessages, logs, secretsmanager interface endpoints "
+        help="Also create ssm, ssmmessages, ec2messages, logs, secretsmanager, ec2, "
+             "cloudformation, autoscaling, acm interface endpoints "
              "with a shared endpoint SG. Required for Path B (CreateVpcEndpoints=false) testing.",
     )
     return p.parse_args()
@@ -253,7 +254,17 @@ def _create_vpc(ec2, args, region, ts, azs, output_file, undo) -> None:
         print(f"  Endpoint SG: {endpoint_sg_id}")
 
         undo.append(("VPC endpoints", lambda: _delete_endpoints(ec2, vpc_id)))
-        for svc in ("ssm", "ssmmessages", "logs", "secretsmanager"):
+        for svc in (
+            "ssm",
+            "ssmmessages",
+            "ec2messages",
+            "logs",
+            "secretsmanager",
+            "ec2",
+            "cloudformation",
+            "autoscaling",
+            "acm",
+        ):
             ep_id = ec2.create_vpc_endpoint(
                 VpcId=vpc_id,
                 ServiceName=f"com.amazonaws.{region}.{svc}",

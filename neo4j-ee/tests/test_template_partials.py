@@ -2315,6 +2315,14 @@ class RenderedTemplateSecurityTests(unittest.TestCase):
                                 {"Ref": "AllowedCIDR"},
                                 f"{name}:{rname} CidrIp is not Ref AllowedCIDR",
                             )
+                            if (
+                                name == "existing_vpc"
+                                and rname == "VpcEndpointSGIngressFromVpc"
+                            ):
+                                # Other workloads in the customer VPC share the
+                                # stack's interface endpoints over HTTPS.
+                                self.assertEqual((from_port, to_port), (443, 443))
+                                continue
                             self.assertIn(
                                 from_port,
                                 (7473, 7474, 7687),
@@ -2978,6 +2986,158 @@ class SecurityReviewBatchBTests(unittest.TestCase):
                 self.assertLess(start, create)
                 guard = body.rindex('if [[ "${isFirstBoot}" == "true" ]]; then', 0, create)
                 self.assertLess(start, guard)
+
+
+
+NODE_SGS = ("Neo4jExternalSecurityGroup", "Neo4jInternalSecurityGroup")
+NODE_ENDPOINT_SERVICES = {
+    "ssm",
+    "ssmmessages",
+    "ec2messages",
+    "logs",
+    "secretsmanager",
+    "ec2",
+    "cloudformation",
+    "autoscaling",
+    "acm",
+}
+
+
+@unittest.skipUnless(yaml is not None, "pyyaml is required")
+class SecurityReviewBatchCTests(unittest.TestCase):
+    """Locks the egress, endpoint and policy fixes from security-review.md batch C."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = _assemble_all_templates()
+        cls.docs = {name: load_cfn(body) for name, body in cls.text.items()}
+
+    def _of_type(self, name: str, cfn_type: str) -> dict[str, dict]:
+        return {
+            rname: r
+            for rname, r in self.docs[name]["Resources"].items()
+            if r.get("Type") == cfn_type
+        }
+
+    def _node_egress_rules(self, name: str) -> list[tuple[str, dict, dict]]:
+        """Return (resource name, resource, rule) for every node SG egress rule."""
+        resources = self.docs[name]["Resources"]
+        rules = []
+        for sg in NODE_SGS:
+            for rule in resources[sg]["Properties"].get("SecurityGroupEgress", []):
+                rules.append((sg, resources[sg], rule))
+        node_ids = {f"{sg}.GroupId" for sg in NODE_SGS}
+        for rname, r in self._of_type(name, "AWS::EC2::SecurityGroupEgress").items():
+            group = r["Properties"]["GroupId"].get("Fn::GetAtt")
+            if group in node_ids:
+                rules.append((rname, r, r["Properties"]))
+        return rules
+
+    def test_no_security_group_has_an_empty_egress_list(self) -> None:
+        # An empty SecurityGroupEgress list leaves the default allow-all rule
+        # in place. A placeholder rule is the only way to declare no egress.
+        for name in self.docs:
+            for rname, r in self._of_type(name, "AWS::EC2::SecurityGroup").items():
+                with self.subTest(template=name, resource=rname):
+                    self.assertNotEqual(
+                        r["Properties"].get("SecurityGroupEgress", None), []
+                    )
+
+    def test_node_security_groups_declare_inline_egress(self) -> None:
+        # H2: an SG without inline egress keeps the default allow-all rule, and
+        # an instance gets the union of its SGs, so both node SGs need it.
+        for name in self.docs:
+            for sg in NODE_SGS:
+                with self.subTest(template=name, sg=sg):
+                    egress = self.docs[name]["Resources"][sg]["Properties"].get(
+                        "SecurityGroupEgress"
+                    )
+                    self.assertTrue(egress, f"{name}:{sg} has no inline egress")
+
+    def test_private_node_egress_is_endpoints_cluster_and_oidc_only(self) -> None:
+        # H2: Private and ExistingVpc nodes reach AWS through the interface
+        # endpoints. The only internet rule is HTTPS for OIDC, under OidcEnabled.
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                internet = []
+                for rname, resource, rule in self._node_egress_rules(name):
+                    if "CidrIp" in rule or "CidrIpv6" in rule:
+                        internet.append(rname)
+                        self.assertEqual(rname, "Neo4jInternalSGEgressOidc")
+                        self.assertEqual(resource.get("Condition"), "OidcEnabled")
+                        self.assertEqual(rule["CidrIp"], "0.0.0.0/0")
+                        self.assertEqual((rule["FromPort"], rule["ToPort"]), (443, 443))
+                        continue
+                    dest = rule.get("DestinationSecurityGroupId")
+                    self.assertIsNotNone(dest, f"{name}:{rname} has no destination")
+                    if rule["FromPort"] == 443:
+                        self.assertIn("VpcEndpointSecurityGroup", json.dumps(dest))
+                    else:
+                        self.assertIn(rule["FromPort"], (5000, 6000, 7000, 7688))
+                        self.assertEqual(
+                            dest, {"Fn::GetAtt": "Neo4jInternalSecurityGroup.GroupId"}
+                        )
+                self.assertEqual(internet, ["Neo4jInternalSGEgressOidc"])
+                self.assertEqual(
+                    self.docs[name]["Conditions"]["OidcEnabled"],
+                    {"Fn::Not": [{"Fn::Equals": [{"Ref": "OidcIssuerUri"}, ""]}]},
+                )
+
+    def test_public_node_egress_is_https_and_cluster_only(self) -> None:
+        # Public has no endpoints. Egress is HTTPS anywhere plus cluster ports.
+        for rname, _resource, rule in self._node_egress_rules("public"):
+            with self.subTest(resource=rname):
+                if "CidrIp" in rule:
+                    self.assertEqual(rule["CidrIp"], "0.0.0.0/0")
+                    self.assertEqual((rule["FromPort"], rule["ToPort"]), (443, 443))
+                else:
+                    self.assertIn(rule["FromPort"], (5000, 6000, 7000, 7688))
+                    self.assertEqual(
+                        rule["DestinationSecurityGroupId"],
+                        {"Fn::GetAtt": "Neo4jInternalSecurityGroup.GroupId"},
+                    )
+
+    def test_interface_endpoints_cover_every_node_service(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                services = set()
+                for r in self._of_type(name, "AWS::EC2::VPCEndpoint").values():
+                    props = r["Properties"]
+                    if props["VpcEndpointType"] != "Interface":
+                        continue
+                    sub = props["ServiceName"]["Fn::Sub"]
+                    services.add(sub.rsplit(".", 1)[1])
+                self.assertEqual(services, NODE_ENDPOINT_SERVICES)
+
+    def test_every_vpc_endpoint_has_an_account_scoped_policy(self) -> None:
+        # M9: no endpoint keeps the default full-access policy.
+        account = {"Ref": "AWS::AccountId"}
+        for name in ("private", "existing_vpc"):
+            for rname, r in self._of_type(name, "AWS::EC2::VPCEndpoint").items():
+                with self.subTest(template=name, resource=rname):
+                    policy = r["Properties"].get("PolicyDocument")
+                    self.assertIsNotNone(policy, f"{name}:{rname} has no policy")
+                    for stmt in policy["Statement"]:
+                        self.assertEqual(stmt["Effect"], "Allow")
+                        if stmt["Action"] == "*":
+                            cond = stmt["Condition"]["StringEquals"]
+                            self.assertEqual(cond["aws:PrincipalAccount"], account)
+                            if r["Properties"]["VpcEndpointType"] == "Gateway":
+                                self.assertEqual(cond["aws:ResourceAccount"], account)
+                        else:
+                            self.assertEqual(stmt["Action"], "s3:GetObject")
+
+    def test_endpoint_sg_ingress_comes_from_nodes_and_bastion(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                sg = self.docs[name]["Resources"]["VpcEndpointSecurityGroup"]
+                self.assertNotIn("SecurityGroupIngress", sg["Properties"])
+                nodes = self.docs[name]["Resources"]["VpcEndpointSGIngressFromNodes"]
+                self.assertEqual(
+                    nodes["Properties"]["SourceSecurityGroupId"],
+                    {"Fn::GetAtt": "Neo4jInternalSecurityGroup.GroupId"},
+                )
+                self.assertIn("VpcEndpointSGIngressFromBastion", self.docs[name]["Resources"])
 
 
 if __name__ == "__main__":

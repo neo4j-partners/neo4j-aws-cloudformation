@@ -486,6 +486,55 @@ alarm is always on. Single sign-on users get roles only through the group
 mapping. The `neo4j` admin password remains the break-glass path when the
 identity provider is down.
 
+### AD-7: Node egress reaches only VPC endpoints, cluster peers and the identity provider
+
+**Private and ExistingVpc nodes have no general internet route.** The node
+security groups allow outbound port 443 to the endpoint security group and the
+cluster ports 5000, 6000, 7000 and 7688 to the Internal security group. When
+`OidcIssuerUri` is set, the `OidcEnabled` condition adds outbound port 443 to
+any address. Neo4j needs that rule to fetch the identity provider's discovery
+document and signing keys. Security review finding H2 flagged the old
+allow-all egress as an exfiltration path for a compromised node.
+
+**The boot path calls only AWS APIs behind interface endpoints.** The stack
+creates nine interface endpoints: `ssm`, `ssmmessages`, `ec2messages`, `logs`,
+`secretsmanager`, `ec2`, `cloudformation`, `autoscaling` and `acm`. The node
+boot path needs each one. An ExistingVpc stack with `CreateVpcEndpoints=false`
+relies on the customer's endpoints, which must cover all nine services. A node
+that cannot reach one of them fails at boot.
+
+**Endpoint policies are account-wide.** Each endpoint policy allows any action
+by any principal in the stack account. Hume and other workloads in the account
+share these endpoints, so a policy scoped to the node role would break them.
+The node IAM role is the control on what a node can call. The S3 gateway
+endpoint allows the AWS-owned package and agent buckets plus buckets owned by
+the stack account, for principals in the stack account.
+
+**Cost.** Interface endpoints bill per hour in each Availability Zone. The
+five endpoints added for H2 are `ec2messages`, `ec2`, `cloudformation`,
+`autoscaling` and `acm`. Across three zones they cost about $110 a month per
+stack, before data processing charges.
+
+**Empty egress lists carry a placeholder rule.** CloudFormation adds an
+allow-all egress rule to a security group whose `SecurityGroupEgress` list is
+empty. The NLB and endpoint security groups therefore carry one rule to
+`127.0.0.1/32`, which removes the default and matches no real traffic.
+
+**In ExistingVpc, the endpoint security group admits `AllowedCIDR`.** Private
+DNS on a created endpoint applies to the whole VPC. Other workloads in the
+customer's VPC resolve the nine service names to these endpoints. Without
+ingress from `AllowedCIDR`, those workloads would lose access to the services.
+
+**Public nodes keep HTTPS egress.** Public stacks have no interface endpoints,
+so nodes reach AWS APIs over the internet. Node egress is port 443 to any
+address plus the cluster ports. HTTPS exfiltration remains possible on Public,
+and `PUBLIC.md` states this.
+
+**Accepted residual: DNS exfiltration.** The VPC resolver answers queries for
+any public name, so a compromised node can encode data in DNS queries. Security
+groups do not filter traffic to the resolver. Route 53 Resolver DNS Firewall is
+the future control for this path.
+
 ---
 
 ## 6. The AMI / Template / UserData / Bootstrap Split
@@ -629,6 +678,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-22 | The initial password is set as `neo4j` from a 0400 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
 | NFR-23 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
 | NFR-24 | Neo4j and `cypher-shell` are baked into the AMI at the pinned version with the repo and service disabled; the node boot path installs no package and fails closed without them (AD-1) | `ShellPartialTests.test_create_ami_bakes_pinned_neo4j_and_never_starts_it`, `test_verify_neo4j_installed_*`; `RenderedTemplateContractTests.test_node_boot_path_installs_no_packages`; `test-ami.sh` CHECK 7, 8, 10 and 12 |
+| NFR-25 | No security group has an empty egress list; Private and ExistingVpc node egress is the endpoint SG on 443, cluster self rules and OIDC-conditional 443 only; Public node egress is 443 and cluster only; the interface endpoints cover the nine node services, each with an account-scoped policy; endpoint SG ingress comes from the nodes and the bastion (AD-7) | `SecurityReviewBatchCTests.test_no_security_group_has_an_empty_egress_list`, `test_node_security_groups_declare_inline_egress`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only`, `test_public_node_egress_is_https_and_cluster_only`, `test_interface_endpoints_cover_every_node_service`, `test_every_vpc_endpoint_has_an_account_scoped_policy`, `test_endpoint_sg_ingress_comes_from_nodes_and_bastion` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

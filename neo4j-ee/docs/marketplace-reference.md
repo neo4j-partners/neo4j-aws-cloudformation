@@ -54,7 +54,7 @@ Both Template 2 and Template 3 create a `t4g.small` bastion instance reachable o
 
 ### VPC endpoint creation in Template 3
 
-Template 2 creates VPC interface endpoints for Systems Manager and Secrets Manager inside the VPC it creates. Template 3 deploys into a buyer-controlled VPC that may already have those endpoints. Creating a duplicate endpoint fails the deployment.
+Template 2 creates VPC interface endpoints for Systems Manager, Secrets Manager, CloudWatch Logs, EC2, CloudFormation, Auto Scaling, and Certificate Manager inside the VPC it creates. Template 3 deploys into a buyer-controlled VPC that may already have those endpoints. Creating a duplicate endpoint fails the deployment.
 
 A single boolean parameter, `CreateVpcEndpoints`, defaults to `true`. When set to `false`, the caller supplies an existing endpoint security group via `ExistingEndpointSgId`. The parameter description states plainly: set this to `false` if your VPC already has these endpoints, otherwise the deployment will fail with a duplicate resource error.
 

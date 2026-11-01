@@ -23,10 +23,13 @@
       - 'false'
     Default: 'true'
     Description: >-
-      Create VPC interface endpoints for SSM, SSM Messages, CloudWatch Logs,
-      and Secrets Manager. Set to false if your VPC already has these endpoints
-      — creating duplicates fails the deployment. When false,
-      ExistingEndpointSgId must be provided.
+      Create VPC interface endpoints for the nine AWS services the Neo4j nodes
+      call: ssm, ssmmessages, ec2messages, logs, secretsmanager, ec2,
+      cloudformation, autoscaling and acm. Node egress reaches AWS only
+      through these endpoints. Set to false if your VPC already has endpoints
+      for these services, because duplicates fail the deployment. With false,
+      your endpoints must cover all nine services or the nodes fail at boot,
+      and ExistingEndpointSgId must be provided.
   ExistingEndpointSgId:
     Type: String
     Default: ''

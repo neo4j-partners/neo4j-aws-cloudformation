@@ -3,7 +3,13 @@
     Properties:
       GroupDescription: Allow client traffic to Neo4j NLB on ports 7473 and 7687
       VpcId: !Ref Neo4jVPC
-      SecurityGroupEgress: []
+      # An explicit egress rule replaces the default allow-all rule. An empty
+      # list does not, so the loopback placeholder below stands in for "no
+      # egress". No real traffic matches it.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder that removes the default allow-all egress rule
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7473
@@ -19,6 +25,16 @@
     Properties:
       GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7473 and 7687
       VpcId: !Ref Neo4jVPC
+      # Node egress is HTTPS to the VPC interface endpoints only (security
+      # review H2). Both node SGs carry it inline, because an SG without an
+      # inline egress rule keeps the default allow-all rule and the instance
+      # gets the union of its SGs.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+          Description: HTTPS to the VPC interface endpoints
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7473
@@ -52,6 +68,16 @@
     Properties:
       GroupDescription: Enable Neo4j Internal Ports
       VpcId: !Ref Neo4jVPC
+      # Node egress is HTTPS to the VPC interface endpoints only (security
+      # review H2). Both node SGs carry it inline, because an SG without an
+      # inline egress rule keeps the default allow-all rule and the instance
+      # gets the union of its SGs.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+          Description: HTTPS to the VPC interface endpoints
 
   Neo4jInternalSGIngress5000:
     Type: AWS::EC2::SecurityGroupIngress
@@ -89,6 +115,60 @@
       ToPort: 7688
       SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
 
+  Neo4jInternalSGEgress5000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5000
+      ToPort: 5000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress6000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 6000
+      ToPort: 6000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress7000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7000
+      ToPort: 7000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress7688:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7688
+      ToPort: 7688
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  # The OIDC issuer is outside the VPC and has no endpoint. Neo4j fetches its
+  # discovery document and signing keys over HTTPS, so this is the one node
+  # egress rule to the internet. It exists only when OIDC is configured.
+  Neo4jInternalSGEgressOidc:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: OidcEnabled
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: HTTPS to the OIDC identity provider
+
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
   # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point
@@ -114,12 +194,12 @@
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   # ---------------------------------------------------------------------------
-  # VPC endpoints for Systems Manager (Private mode only)
-  # Routes SSM control-plane traffic through AWS PrivateLink rather than NAT.
-  # Required: ssm (registration/polling), ssmmessages (Session Manager),
-  #           ec2messages (backward compat with pre-2024 regions).
-  # S3 gateway endpoint is free and prevents SSM Agent update traffic from
-  # consuming NAT Gateway data-processing charges.
+  # VPC interface endpoints (Private mode)
+  # Node egress reaches AWS only through these endpoints (security review H2).
+  # The nine services are every AWS API the node boot path and the SSM agent
+  # call: ssm, ssmmessages, ec2messages, logs, secretsmanager, ec2,
+  # cloudformation, autoscaling and acm. The endpoints are in
+  # networking-private.yaml.
   # ---------------------------------------------------------------------------
 
   VpcEndpointSecurityGroup:
@@ -127,13 +207,32 @@
     Properties:
       GroupDescription: Allow HTTPS from Neo4j instances and operator bastion to VPC interface endpoints
       VpcId: !Ref Neo4jVPC
-      SecurityGroupEgress: []
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref Neo4jExternalSecurityGroup
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref Neo4jBastionSecurityGroup
+      # Ingress is declared as separate resources so the node SGs can name
+      # this SG as their egress target without a dependency cycle.
+      # An explicit egress rule replaces the default allow-all rule. An empty
+      # list does not, so the loopback placeholder below stands in for "no
+      # egress". No real traffic matches it.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder that removes the default allow-all egress rule
+
+  VpcEndpointSGIngressFromNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: HTTPS from the Neo4j nodes
+
+  VpcEndpointSGIngressFromBastion:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt Neo4jBastionSecurityGroup.GroupId
+      Description: HTTPS from the operator bastion

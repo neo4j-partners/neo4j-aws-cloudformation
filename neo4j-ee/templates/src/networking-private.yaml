@@ -584,6 +584,12 @@
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
+  # Interface endpoints for every AWS API the nodes call (security review H2).
+  # Node SG egress reaches AWS only through them. Each endpoint policy allows
+  # any action by a principal in this account. The scope is account-wide on
+  # purpose: in-VPC applications such as Hume share these endpoints. The node
+  # IAM role, not the endpoint policy, controls what a node may call.
+
   SsmVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -599,6 +605,16 @@
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   SsmMessagesVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -615,6 +631,42 @@
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  Ec2MessagesVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcId: !Ref Neo4jVPC
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref Neo4jPrivateSubnet1
+          - !Ref Neo4jPrivateSubnet2
+          - !Ref Neo4jPrivateSubnet3
+        - - !Ref Neo4jPrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   LogsVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -631,6 +683,16 @@
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   SecretsManagerVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -647,11 +709,153 @@
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
+  Ec2VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2'
+      VpcId: !Ref Neo4jVPC
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref Neo4jPrivateSubnet1
+          - !Ref Neo4jPrivateSubnet2
+          - !Ref Neo4jPrivateSubnet3
+        - - !Ref Neo4jPrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  CloudFormationVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.cloudformation'
+      VpcId: !Ref Neo4jVPC
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref Neo4jPrivateSubnet1
+          - !Ref Neo4jPrivateSubnet2
+          - !Ref Neo4jPrivateSubnet3
+        - - !Ref Neo4jPrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  AutoScalingVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.autoscaling'
+      VpcId: !Ref Neo4jVPC
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref Neo4jPrivateSubnet1
+          - !Ref Neo4jPrivateSubnet2
+          - !Ref Neo4jPrivateSubnet3
+        - - !Ref Neo4jPrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  AcmVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.acm'
+      VpcId: !Ref Neo4jVPC
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref Neo4jPrivateSubnet1
+          - !Ref Neo4jPrivateSubnet2
+          - !Ref Neo4jPrivateSubnet3
+        - - !Ref Neo4jPrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  # The S3 gateway endpoint policy allows two kinds of request. The first is
+  # reads from the AWS-owned buckets that AL2023 package updates and the SSM
+  # agent need. The bucket names come from the SSM Agent technical details
+  # page (ssm-agent-technical-details.html) and the AWS MGN AL2023 VPC
+  # endpoint guidance. The second is any request by a principal in this
+  # account to a bucket in this account (security review M9).
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcEndpointType: Gateway
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AwsOwnedPackageAndAgentBuckets
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:s3:::al2023-repos-${AWS::Region}-de612dc2/*'
+              - !Sub 'arn:${AWS::Partition}:s3:::amazon-ssm-${AWS::Region}/*'
+              - !Sub 'arn:${AWS::Partition}:s3:::aws-ssm-${AWS::Region}/*'
+              - !Sub 'arn:${AWS::Partition}:s3:::${AWS::Region}-birdwatcher-prod/*'
+              - !Sub 'arn:${AWS::Partition}:s3:::patch-baseline-snapshot-${AWS::Region}/*'
+          - Sid: ThisAccountOnly
+            Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+                aws:ResourceAccount: !Ref AWS::AccountId
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       VpcId: !Ref Neo4jVPC
       RouteTableIds: !If

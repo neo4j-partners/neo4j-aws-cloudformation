@@ -319,10 +319,13 @@ Parameters:
       - 'false'
     Default: 'true'
     Description: >-
-      Create VPC interface endpoints for SSM, SSM Messages, CloudWatch Logs,
-      and Secrets Manager. Set to false if your VPC already has these endpoints
-      — creating duplicates fails the deployment. When false,
-      ExistingEndpointSgId must be provided.
+      Create VPC interface endpoints for the nine AWS services the Neo4j nodes
+      call: ssm, ssmmessages, ec2messages, logs, secretsmanager, ec2,
+      cloudformation, autoscaling and acm. Node egress reaches AWS only
+      through these endpoints. Set to false if your VPC already has endpoints
+      for these services, because duplicates fail the deployment. With false,
+      your endpoints must cover all nine services or the nodes fail at boot,
+      and ExistingEndpointSgId must be provided.
   ExistingEndpointSgId:
     Type: String
     Default: ''
@@ -530,6 +533,7 @@ Conditions:
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
   CreateVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'true']
   UseExistingVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'false']
+  OidcEnabled: !Not [!Equals [!Ref OidcIssuerUri, '']]
 
 Resources:
   Neo4jInstanceProfile:
@@ -667,7 +671,13 @@ Resources:
     Properties:
       GroupDescription: Allow client traffic to Neo4j NLB on ports 7473 and 7687
       VpcId: !Ref VpcId
-      SecurityGroupEgress: []
+      # An explicit egress rule replaces the default allow-all rule. An empty
+      # list does not, so the loopback placeholder below stands in for "no
+      # egress". No real traffic matches it.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder that removes the default allow-all egress rule
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7473
@@ -680,9 +690,28 @@ Resources:
 
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    # The egress target names ExistingEndpointSgId, an optional String param
+    # (Default ''). cfn-lint resolves the empty default and emits W1030, but
+    # the If selects it only under UseExistingVpcEndpoints, where the
+    # ExistingEndpointSgIdRequired Rule guarantees a real sg- value.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupDescription: Allow Neo4j traffic from NLB to instances on ports 7473 and 7687
       VpcId: !Ref VpcId
+      # Node egress is HTTPS to the VPC interface endpoints only (security
+      # review H2). Both node SGs carry it inline, because an SG without an
+      # inline egress rule keeps the default allow-all rule and the instance
+      # gets the union of its SGs.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !If [UseExistingVpcEndpoints, !Ref ExistingEndpointSgId, !GetAtt VpcEndpointSecurityGroup.GroupId]
+          Description: HTTPS to the VPC interface endpoints
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7473
@@ -713,9 +742,28 @@ Resources:
 
   Neo4jInternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    # The egress target names ExistingEndpointSgId, an optional String param
+    # (Default ''). cfn-lint resolves the empty default and emits W1030, but
+    # the If selects it only under UseExistingVpcEndpoints, where the
+    # ExistingEndpointSgIdRequired Rule guarantees a real sg- value.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupDescription: Enable Neo4j Internal Ports
       VpcId: !Ref VpcId
+      # Node egress is HTTPS to the VPC interface endpoints only (security
+      # review H2). Both node SGs carry it inline, because an SG without an
+      # inline egress rule keeps the default allow-all rule and the instance
+      # gets the union of its SGs.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !If [UseExistingVpcEndpoints, !Ref ExistingEndpointSgId, !GetAtt VpcEndpointSecurityGroup.GroupId]
+          Description: HTTPS to the VPC interface endpoints
 
   Neo4jInternalSGIngress5000:
     Type: AWS::EC2::SecurityGroupIngress
@@ -753,6 +801,60 @@ Resources:
       ToPort: 7688
       SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
 
+  Neo4jInternalSGEgress5000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5000
+      ToPort: 5000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress6000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 6000
+      ToPort: 6000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress7000:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7000
+      ToPort: 7000
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  Neo4jInternalSGEgress7688:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 7688
+      ToPort: 7688
+      DestinationSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: Neo4j cluster traffic to the other nodes
+
+  # The OIDC issuer is outside the VPC and has no endpoint. Neo4j fetches its
+  # discovery document and signing keys over HTTPS, so this is the one node
+  # egress rule to the internet. It exists only when OIDC is configured.
+  Neo4jInternalSGEgressOidc:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: OidcEnabled
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: HTTPS to the OIDC identity provider
+
   Neo4jBastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -772,16 +874,48 @@ Resources:
     Properties:
       GroupDescription: Allow HTTPS from Neo4j instances and operator bastion to VPC interface endpoints
       VpcId: !Ref VpcId
-      SecurityGroupEgress: []
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref Neo4jBastionSecurityGroup
+      # Ingress is declared as separate resources so the node SGs can name
+      # this SG as their egress target without a dependency cycle.
+      # An explicit egress rule replaces the default allow-all rule. An empty
+      # list does not, so the loopback placeholder below stands in for "no
+      # egress". No real traffic matches it.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder that removes the default allow-all egress rule
+
+  VpcEndpointSGIngressFromNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateVpcEndpoints
+    Properties:
+      GroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      Description: HTTPS from the Neo4j nodes
+
+  VpcEndpointSGIngressFromBastion:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateVpcEndpoints
+    Properties:
+      GroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt Neo4jBastionSecurityGroup.GroupId
+      Description: HTTPS from the operator bastion
+
+  VpcEndpointSGIngressFromVpc:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateVpcEndpoints
+    Properties:
+      GroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Ref AllowedCIDR
+      Description: HTTPS from other workloads in the VPC that share these endpoints
 
   ExistingEndpointSgBastionIngress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -1857,6 +1991,12 @@ Resources:
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
+  # Interface endpoints for every AWS API the nodes call (security review H2).
+  # Node SG egress reaches AWS only through them. Each endpoint policy allows
+  # any action by a principal in this account. The scope is account-wide on
+  # purpose: in-VPC applications such as Hume share these endpoints. The node
+  # IAM role, not the endpoint policy, controls what a node may call.
+
   SsmVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Condition: CreateVpcEndpoints
@@ -1873,6 +2013,16 @@ Resources:
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   SsmMessagesVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -1890,6 +2040,43 @@ Resources:
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  Ec2MessagesVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcId: !Ref VpcId
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - - !Ref PrivateSubnet1Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   LogsVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -1907,6 +2094,16 @@ Resources:
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   SecretsManagerVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -1924,6 +2121,124 @@ Resources:
       SecurityGroupIds:
         - !Ref VpcEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  Ec2VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2'
+      VpcId: !Ref VpcId
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - - !Ref PrivateSubnet1Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  CloudFormationVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.cloudformation'
+      VpcId: !Ref VpcId
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - - !Ref PrivateSubnet1Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  AutoScalingVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.autoscaling'
+      VpcId: !Ref VpcId
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - - !Ref PrivateSubnet1Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  AcmVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.acm'
+      VpcId: !Ref VpcId
+      SubnetIds: !If
+        - CreateCluster
+        - - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+          - !Ref PrivateSubnet3Id
+        - - !Ref PrivateSubnet1Id
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
 
   Neo4jNetworkLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer

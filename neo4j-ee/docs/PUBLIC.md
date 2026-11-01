@@ -193,6 +193,7 @@ The `AvailabilityZones` parameter is optional. Every deployment, including a sin
 | IMDSv2 | Enforced | Instance metadata requires session tokens; IMDSv1 requests are rejected |
 | JDWP (port 5005) | Disabled | Remote debug port is closed and the JVM debug flag is stripped from `neo4j.conf` at boot |
 | TLS | Optional | Plain TCP by default, with Browser on 7474 and Bolt on 7687. `--enable-public-tls` with `--cert-arn` and `--advertised-dns` terminates TLS at the NLB, and Browser moves to 7473. |
+| Node egress | HTTPS and cluster ports only | Nodes allow outbound port 443 to any address and the cluster ports 5000, 6000, 7000, and 7688 to other members. All other outbound traffic is blocked. |
 
 ### NLB Routing
 
@@ -217,6 +218,8 @@ Each node has a dedicated GP3 EBS data volume. `DeletionPolicy: Retain` keeps th
 - **`Neo4jExternalSecurityGroup` (on the instances):** sources from `Neo4jNLBSecurityGroup` via `SourceSecurityGroupId` — allows both forwarded client traffic and NLB health checks
 
 This pattern works for any marketplace deployment without knowing the VPC CIDR at template-authoring time.
+
+**Egress residual risk:** Public nodes have no VPC endpoints, so they reach AWS APIs over the internet. Their security groups therefore allow outbound port 443 to any address. A compromised node can still send data out over HTTPS. Use the Private template when the cluster must have no internet egress. The NLB security group carries a single placeholder egress rule to `127.0.0.1/32`, because CloudFormation adds an allow-all egress rule when the list is empty.
 
 ---
 

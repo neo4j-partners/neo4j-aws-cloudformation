@@ -130,7 +130,7 @@ Expected output on a healthy stack:
   [PASS] Secret 'neo4j/test-ee-1776575131/password' exists
   [PASS] TLS params set: CertificateArn, AdvertisedDNS
   [PASS] Contract SSM params: vpc-id, nlb-dns, external-sg-id, password-secret-arn, vpc-endpoint-sg-id
-  [PASS] VPC interface endpoints: secretsmanager, logs, ssm, ssmmessages
+  [PASS] VPC interface endpoints: secretsmanager, logs, ssm, ssmmessages, ec2messages, ec2, cloudformation, autoscaling, acm
   [PASS] Endpoint reachable: secretsmanager.us-east-1.amazonaws.com
   [PASS] Endpoint reachable: logs.us-east-1.amazonaws.com
   [PASS] Endpoint reachable: ssm.us-east-1.amazonaws.com
@@ -233,7 +233,7 @@ A user in neither group signs in with only the `PUBLIC` role.
 
 Neo4j validates the ID token, not the access token. For Amazon Cognito, set the principal claim to `cognito:username` and the groups claim to `cognito:groups`. The Cognito access token has no `aud` claim, so Neo4j rejects it.
 
-The nodes fetch the provider's signing keys over the internet. A Private stack reaches the internet through the NAT gateway in each private subnet. An ExistingVpc stack must provide that route itself.
+The nodes fetch the provider's signing keys over the internet. A Private stack reaches the internet through the NAT gateway in each private subnet. An ExistingVpc stack must provide that route itself. The node security group allows outbound port 443 to the internet only when `OidcIssuerUri` is set.
 
 #### Redirect Addresses
 
@@ -336,7 +336,7 @@ cd neo4j-ee
 - Three Neo4j EC2 instances in private subnets, forming a Raft cluster
 - Three NAT Gateways for outbound traffic from the cluster members
 - One `t4g.small` operator bastion in a private subnet, not registered as an NLB target
-- VPC interface endpoints for `ssm`, `ssmmessages`, `logs`, and `secretsmanager` with `PrivateDnsEnabled: true`
+- VPC interface endpoints for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`
 
 **Single instance:**
 - VPC with one public subnet (NAT Gateway) and one private subnet (EC2 instance)
@@ -357,7 +357,7 @@ The `AvailabilityZones` parameter is optional. Every deployment, including a sin
 | ASG per node | One Auto Scaling Group per Neo4j node, fixed at `MinSize=MaxSize=DesiredCapacity=1`, for self-healing |
 | EBS data volumes | One GP3 volume per node with `DeletionPolicy: Retain`; survives stack deletion |
 | Operator bastion | `t4g.small` in a private subnet, not registered as an NLB target; receives SSM sessions for operator access |
-| VPC interface endpoints | `ssm`, `ssmmessages`, `logs`, `secretsmanager` with `PrivateDnsEnabled: true`; no NAT required for AWS service calls |
+| VPC interface endpoints | `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`. Each endpoint policy limits callers to principals in the stack account. AWS service calls need no NAT |
 | Security groups | NLB SG (AllowedCIDR on 7473/7687 to the NLB); External SG (NLB SG as source on 7473/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
 | SSM parameters | `/neo4j-ee/<stack>/` prefix; publishes VPC ID, NLB DNS, security group IDs, and secret ARN for downstream consumers |
 | Secrets Manager | Neo4j admin password at `neo4j/<stack>/password` |
@@ -438,9 +438,11 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 | `/neo4j-ee/<stack>/app-username` | Application username, `neo4j_app`. The user has the built-in `architect` role. |
 | `/neo4j-ee/<stack>/kms-key-arn` | Full ARN of the stack KMS key that encrypts both password secrets |
 
-**VPC interface endpoints.** The regional service hostnames (`ssm`, `ssmmessages`, `logs`, `secretsmanager`) resolve to private IPs inside the VPC. No endpoint URL overrides are needed in application code, and no NAT data-processing charges apply to AWS service calls.
+**VPC interface endpoints.** The regional service hostnames for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` resolve to private IPs inside the VPC. No endpoint URL overrides are needed in application code, and no NAT data-processing charges apply to AWS service calls.
 
 The `vpc-endpoint-sg-id` parameter is the mechanism by which applications opt into reaching these endpoints. Each application adds its own security group to the endpoint SG's ingress on port 443. Opening the endpoint SG to the whole VPC CIDR would allow any workload in the VPC to call SSM and Secrets Manager via PrivateLink. The published SG ID approach requires each application to explicitly opt in, creating an auditable per-application record and a clean removal path.
+
+**Node egress.** The node security groups allow outbound traffic only to the endpoint SG on port 443 and to other cluster members on ports 5000, 6000, 7000, and 7688. A node has no route to the internet unless `OidcIssuerUri` is set. In that case the nodes also allow outbound port 443 to any address so Neo4j can fetch the identity provider's signing keys. The NLB and endpoint security groups carry a single placeholder egress rule to `127.0.0.1/32`. CloudFormation adds an allow-all egress rule when the list is empty, so the placeholder is what removes it.
 
 **Reading a password secret.** An application that reads `password-secret-arn` or `app-password-secret-arn` needs two grants. The first is `secretsmanager:GetSecretValue` on the secret. The second is `kms:Decrypt` on the key in `kms-key-arn`. Without the KMS grant, `GetSecretValue` fails with `AccessDeniedException`. The key policy allows decryption only through Secrets Manager in the stack's region.
 
