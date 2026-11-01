@@ -1,7 +1,14 @@
-install_neo4j_from_yum() {
-  echo "Installing Graph Database..."
-  export NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
-  yum -y install neo4j-enterprise
+verify_neo4j_installed() {
+  # Neo4j and cypher-shell are baked into the AMI at a pinned version (AD-1).
+  # The boot path installs no package, so a missing package fails closed.
+  local cypherShell="${CYPHER_SHELL_PATH:-/usr/bin/cypher-shell}"
+  echo "Verifying the baked Neo4j install..."
+  if ! rpm -q neo4j-enterprise; then
+    fail "neo4j-enterprise is not installed. The AMI must bake Neo4j."
+  fi
+  if [[ ! -x "${cypherShell}" ]]; then
+    fail "${cypherShell} is missing. The AMI must bake cypher-shell."
+  fi
   systemctl enable neo4j
 }
 set_initial_password() {

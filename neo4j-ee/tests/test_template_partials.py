@@ -730,6 +730,21 @@ class ShellPartialTests(unittest.TestCase):
             r"dnf install -y [^\n]*\bopenssl\b",
         )
 
+    def test_create_ami_bakes_pinned_neo4j_and_never_starts_it(self) -> None:
+        # Security review M1 / AD-1: Neo4j and cypher-shell are baked at one
+        # pinned version, the repo is left disabled, and the service is never
+        # enabled or started in the image.
+        ami = (REPO_ROOT / "neo4j-ee" / "marketplace" / "create-ami.sh").read_text()
+        self.assertRegex(
+            ami,
+            r'dnf install -y \\\s*"neo4j-enterprise-\$\{NEO4J_VERSION\}" '
+            r'"cypher-shell-\$\{NEO4J_VERSION\}"',
+        )
+        self.assertIn("s/^enabled=1$/enabled=0/", ami)
+        self.assertIn("systemctl disable neo4j", ami)
+        self.assertNotRegex(ami, r"systemctl (enable|start) neo4j")
+        self.assertIn("Key=Neo4jVersion", ami)
+
     def test_install_plugins_success_and_missing_jar_failures(self) -> None:
         self.write_stub("chown", "echo \"chown $*\" >> \"$COMMAND_LOG\"\n")
         neo4j_home = self.tmp / "neo4j"
@@ -784,11 +799,80 @@ class ShellPartialTests(unittest.TestCase):
         self.assertEqual(result.returncode, 42, result.stderr)
         self.assertIn("GDS JAR not found", self.fail_log.read_text())
 
+    def write_baked_neo4j_stubs(self, *, rpm_installed: bool = True) -> Path:
+        rpm_exit = 0 if rpm_installed else 1
+        self.write_stub(
+            "rpm", f'echo "rpm $*" >> "$COMMAND_LOG"\nexit {rpm_exit}\n'
+        )
+        return self.write_stub("cypher-shell", "exit 0\n")
+
+    def test_verify_neo4j_installed_installs_nothing(self) -> None:
+        # Security review M1: Neo4j is baked into the AMI, so the boot path
+        # only checks for it and installs no package.
+        cypher_shell = self.write_baked_neo4j_stubs()
+        for tool in ("yum", "dnf", "pip", "pip3"):
+            self.write_stub(tool, f'echo "{tool} $*" >> "$COMMAND_LOG"\n')
+        self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
+
+        result = self.run_shell(
+            f"""
+            set -euo pipefail
+            export CYPHER_SHELL_PATH="{cypher_shell}"
+            source "{PARTIALS / 'install-neo4j.sh'}"
+            {self.fail_function()}
+            verify_neo4j_installed
+            """
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.command_log.read_text()
+        self.assertIn("rpm -q neo4j-enterprise", log)
+        self.assertIn("systemctl enable neo4j", log)
+        for tool in ("yum", "dnf", "pip", "pip3"):
+            self.assertNotRegex(log, rf"(?m)^{tool} ")
+
+    def test_verify_neo4j_installed_fails_closed_without_package(self) -> None:
+        cypher_shell = self.write_baked_neo4j_stubs(rpm_installed=False)
+        self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
+
+        result = self.run_shell(
+            f"""
+            set -euo pipefail
+            export CYPHER_SHELL_PATH="{cypher_shell}"
+            source "{PARTIALS / 'install-neo4j.sh'}"
+            {self.fail_function()}
+            verify_neo4j_installed
+            """
+        )
+
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn("neo4j-enterprise is not installed", self.fail_log.read_text())
+        self.assertNotIn("systemctl enable neo4j", self.command_log.read_text())
+
+    def test_verify_neo4j_installed_fails_closed_without_cypher_shell(self) -> None:
+        self.write_baked_neo4j_stubs()
+        self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
+        missing = self.tmp / "missing-cypher-shell"
+
+        result = self.run_shell(
+            f"""
+            set -euo pipefail
+            export CYPHER_SHELL_PATH="{missing}"
+            source "{PARTIALS / 'install-neo4j.sh'}"
+            {self.fail_function()}
+            verify_neo4j_installed
+            """
+        )
+
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn(f"{missing} is missing", self.fail_log.read_text())
+        self.assertNotIn("systemctl enable neo4j", self.command_log.read_text())
+
     def test_install_neo4j_commands_and_first_boot_password(self) -> None:
         # Security review M5: the initial password is set from an @file
         # before the first start, and never appears in any argv. neo4j-admin
         # runs as the service user, which owns the 0400 file.
-        self.write_stub("yum", "echo \"yum $* accept=${NEO4J_ACCEPT_LICENSE_AGREEMENT:-}\" >> \"$COMMAND_LOG\"\n")
+        cypher_shell = self.write_baked_neo4j_stubs()
         self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("service", "echo \"service $*\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("chown", "echo \"chown $*\" >> \"$COMMAND_LOG\"\n")
@@ -817,16 +901,17 @@ class ShellPartialTests(unittest.TestCase):
             f"""
             set -euo pipefail
             export NEO4J_DATA_DIR="{data_dir}"
+            export CYPHER_SHELL_PATH="{cypher_shell}"
             source "{PARTIALS / 'install-neo4j.sh'}"
             {self.fail_function()}
-            install_neo4j_from_yum
+            verify_neo4j_installed
             start_neo4j Secret123abc true
             """
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         log = self.command_log.read_text()
-        self.assertIn("yum -y install neo4j-enterprise accept=yes", log)
+        self.assertIn("rpm -q neo4j-enterprise", log)
         self.assertIn("systemctl enable neo4j", log)
         self.assertNotIn("Secret123abc", log)
         self.assertRegex(
@@ -1525,7 +1610,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "set_neo4j_conf",
             "attach_and_mount_data_volume",
             "fetch_and_install_license",
-            "install_neo4j_from_yum",
+            "verify_neo4j_installed",
             "start_neo4j",
             "install_apoc",
             "install_plugin",
@@ -1591,6 +1676,19 @@ class RenderedTemplateContractTests(unittest.TestCase):
                     )
 
     @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_node_boot_path_installs_no_packages(self) -> None:
+        # Security review M1 / AD-1: Neo4j and every node tool are baked into
+        # the AMI. The node boot path never reaches a package repository.
+        install = re.compile(r"\b(dnf|yum|pip3?)\s+(-\S+\s+)*install\b")
+        for name, doc in self.docs.items():
+            with self.subTest(template=name):
+                files = self._init_files(doc)
+                boot = files["/opt/neo4j/bin/neo4j-bootstrap.sh"]["content"]
+                self.assertNotRegex(boot, install)
+                self.assertNotRegex(self._userdata_text(doc), install)
+                self.assertIn("verify_neo4j_installed", boot)
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
     def test_cfn_init_metadata_on_launch_template_and_userdata_invokes_it(
         self,
     ) -> None:
@@ -1617,7 +1715,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "apply_base_conf()",
             "configure_cluster()",
             "attach_and_mount_data_volume()",
-            "install_neo4j_from_yum()",
+            "verify_neo4j_installed()",
             "assert_security_invariant()",
         )
         for name, doc in self.docs.items():

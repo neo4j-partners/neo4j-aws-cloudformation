@@ -15,16 +15,18 @@ as built and update this document.
 A Neo4j EE deployment is produced by four layers, each with a single owner:
 
 - **AMI**: a hardened Amazon Linux 2023 base image with OS patches, base
-  packages, the Neo4j yum repo and GPG key, the CloudFormation helpers, and SSH
-  hardening. It contains no Neo4j configuration and no orchestration logic.
+  packages, the CloudFormation helpers, and SSH hardening. It also carries
+  Neo4j Enterprise and `cypher-shell` at one pinned version, with the Neo4j
+  yum repo disabled (AD-1). It contains no project-authored Neo4j
+  configuration and no orchestration logic.
 - **Template**: the rendered CloudFormation YAML. It carries the static Neo4j
   configuration and the orchestration body as `AWS::CloudFormation::Init`
   metadata on the single shared `Neo4jLaunchTemplate`.
 - **UserData**: a thin wrapper. It resolves runtime values, runs `cfn-init`,
   invokes the bootstrap, and is the sole owner of `cfn-signal`.
-- **Bootstrap**: the orchestration body delivered by cfn-init. It installs
-  Neo4j and plugins, applies configuration, asserts the security invariant, and
-  starts the service.
+- **Bootstrap**: the orchestration body delivered by cfn-init. It verifies the
+  baked Neo4j install, installs plugins from the package, applies
+  configuration, asserts the security invariant, and starts the service.
 
 The instability that prompted this design was a recurring oscillation over
 where Neo4j configuration should live. Two goals were in tension:
@@ -48,7 +50,8 @@ owned by a committed `templates/src/neo4j-base.conf`. `build.py` renders that
 file verbatim into the template as cfn-init metadata. At boot the bootstrap
 applies every key through the safe `set_neo4j_conf` primitive. Configuration is
 one readable, version-controlled, test-guarded artifact, and every fix to it
-remains a template update. Nothing config-related goes into the AMI.
+remains a template update. No project-authored configuration goes into the
+AMI.
 
 ---
 
@@ -64,8 +67,9 @@ Three concrete failure modes from earlier iterations are now closed:
 - **Config in the AMI is incoherent with the churn goal.** Baking
   configuration maximizes the exact Marketplace resubmission churn the design
   exists to minimize, and it makes the security invariant the most expensive
-  key to correct. Config in the AMI is only coherent if Neo4j itself is also
-  baked in, which it deliberately is not.
+  key to correct. Neo4j itself is now baked in at a pinned version (AD-1).
+  Its configuration still is not. A config fix stays a template update that
+  reaches new launches and ASG self-heal without an AMI rebuild.
 - **Blind concatenation is unsafe.** The Neo4j package ships a `neo4j.conf`
   with keys already present, some uncommented. Neo4j does not reliably resolve
   duplicate keys. Configuration is applied only through `set_neo4j_conf`, which
@@ -114,7 +118,9 @@ in order. The first match wins.
    `set_neo4j_conf` call.
 3. **Is it OS-level, immutable, and independent of Neo4j** (SSH hardening,
    pinned system user, base packages, OS patches, the cfn helpers)? If yes, it
-   is **baked in the AMI** by `marketplace/create-ami.sh`.
+   is **baked in the AMI** by `marketplace/create-ami.sh`. The pinned Neo4j
+   and `cypher-shell` packages are also baked in the AMI, by AD-1. Their
+   configuration is not.
 4. **Is it CloudFormation signaling or metadata resolution that cannot be
    delegated** (`cfn-signal`, IMDSv2 fetch, tag lookups, `cfn-init`)? If yes,
    it **stays in UserData** (`templates/src/userdata.sh`).
@@ -127,40 +133,63 @@ branches, not by ad hoc judgement, so it does not re-open the debate.
 
 ## 5. Architecture Decisions
 
-### AD-1: Deploy-time install, unpinned, with a release-gated verification
+### AD-1: Neo4j is baked into the AMI at a pinned version
 
-Neo4j Enterprise and its JRE dependency are installed at boot from
-`yum.neo4j.com/stable/latest`. No Neo4j or Java version is pinned in the AMI or
-templates, so the resolved Neo4j version and its Cypher default-language
-behavior track whatever `stable/latest` serves at launch.
+`marketplace/create-ami.sh` installs Neo4j Enterprise, `cypher-shell` and
+their JRE dependency at one pinned version. Marketplace builds require
+`NEO4J_VERSION`. Iteration builds resolve the newest version in the Neo4j repo
+when it is unset. The builder records the version in the AMI description and
+in the `Neo4jVersion` tag. It leaves the Neo4j repo disabled and the service
+disabled. Neo4j never starts in the AMI, so the image holds no database files.
+The package's own `neo4j.conf` is the only Neo4j configuration on the image.
+The bootstrap edits it at boot through `set_neo4j_conf`.
 
-**Rationale.** Pinning forces a Marketplace resubmission for every release
-customers should receive, and it shifts the entire Neo4j security-patch cadence
-onto this project, gated by Marketplace review latency. Within a calendar
-series, patch releases are rarely breaking. The render-from-committed-base
-design makes the most common version break, a renamed or removed or
-default-changed setting, fixable by editing `neo4j-base.conf` with no AMI
-rebuild. The common case is cheap by design and the rare case is expensive,
-not the reverse.
+The node boot path installs no package. `verify_neo4j_installed` fails the
+boot if `neo4j-enterprise` or `/usr/bin/cypher-shell` is missing, then enables
+the service. Plugins are copied from the package's `labs/` and `products/`
+directories, so they always match the server version.
 
-**This decision is sound only while the release-gated verification exists and
-passes.** There is an exposure window between `stable/latest` rolling forward
-and verification catching a break. During that window new launches and ASG
-self-heal use the new version. The dangerous case is ASG self-heal: a broken
-`stable/latest` turns instance replacement into an availability failure with no
-automated recovery. The compensating control is a rigorous release-triggered
-verification run, not version pinning. That window and that risk are the reason
-verification is a required release gate, not an optional step.
+**Rationale.** A boot-time install made every launch and every ASG self-heal
+depend on a package mirror and on whatever version it served that day. A
+mirror outage, a repo restructure or a bad release turned instance replacement
+into an availability failure with no template fix. A boot-time install also
+needed an internet route from every node. Security review findings M1 and H2
+flagged that route as an exfiltration path. Baking removes both problems.
+Every node in a stack runs the version that passed the release gate. Self-heal
+replaces a node with the same version.
+
+**Cost.** Each Neo4j release that customers should receive needs an AMI
+rebuild and a Marketplace submission. The project owns the Neo4j
+security-patch cadence, and Marketplace review latency gates it. A running
+stack moves to a new version only by replacing its instances onto the new AMI.
+
+**Release gate.** The gate runs on the candidate AMI before Marketplace
+submission. `test-ami.sh` checks the baked packages against the `Neo4jVersion`
+tag. A fresh Private deployment from that AMI must then pass `preflight` and
+`validate-private --suite release`. A result from an earlier AMI does not
+count.
 
 **Failure playbook.**
 
 - **Config-shaped break**, such as a renamed, removed, or default-changed
   setting: fix by editing `neo4j-base.conf` and rebuilding templates. No AMI
   rebuild. This is the common case.
-- **Binary-shaped break**, such as an unmet Java requirement, a repo
-  restructure, a GPG key rotation, or `aws-cfn-bootstrap` being dropped: no
-  template fix exists. The only response is an emergency version pin or a
-  base-image fix plus an AMI rebuild and resubmission. This is the rare case.
+- **Binary-shaped break**, such as an unmet Java requirement or a broken
+  package: the release gate catches it on the candidate AMI before customers
+  see it. Fix it in `create-ami.sh` or keep shipping the previous version.
+  Running stacks are unaffected because their AMI does not change.
+
+**What changed.** AD-1 originally installed Neo4j at boot from
+`yum.neo4j.com/stable/latest` with no version pinned. Pinning was rejected
+because it forces a Marketplace submission for every release and moves the
+Neo4j patch cadence onto this project. That design accepted an exposure window.
+Between `stable/latest` rolling forward and verification catching a break, new
+launches and ASG self-heal used the new version. Its playbook said a
+binary-shaped break had no template fix and needed an emergency pin or an AMI
+rebuild. Security review finding M1 replaced the design, because node egress
+is now limited to VPC endpoints (H2) and the boot path can no longer reach a
+package mirror. The project now accepts the Marketplace cost that the old
+design avoided.
 
 ### AD-2: Runtime fail-closed on the security invariant, presence-only
 
@@ -315,8 +344,8 @@ OS-level, immutable, and Neo4j-independent, so it belongs in the AMI
 the per-instance self-signed cert and `fail()`s if it is absent. Generating
 the cert at boot is acceptable because it has no network dependency and is
 idempotent: an existing cert pair is reused, so ASG self-heal does not depend
-on a package mirror. A `dnf install` on the boot path would, which is the
-AD-1 binary-shaped failure class with full ASG-self-heal blast radius.
+on a package mirror. A `dnf install` on the boot path would. AD-1 removed
+that dependency for Neo4j, and the same rule applies to `openssl`.
 
 **The Browser target group uses an L7 health check.** The Browser target group
 health check is `HTTPS` for TLS topologies and `HTTP` for Public without TLS,
@@ -463,14 +492,31 @@ identity provider is down.
 
 | Layer | Owns | Changeable by | Examples |
 |---|---|---|---|
-| **AMI** (`marketplace/create-ami.sh`) | OS-level, immutable, Neo4j-independent concerns | AMI rebuild + Marketplace submission + instance replacement | OS patches; AWS CLI v2; `python3.11`, `jq`, `openssl`; `amazon-cloudwatch-agent`; `aws-cfn-bootstrap` (`cfn-init`, `cfn-signal`); Neo4j yum repo + GPG key; `neo4j` system user (uid/gid 500); SSH hardening; IMDSv2 enforcement |
+| **AMI** (`marketplace/create-ami.sh`) | OS-level, immutable, Neo4j-independent concerns, plus the pinned Neo4j packages (AD-1) | AMI rebuild + Marketplace submission + instance replacement | OS patches; AWS CLI v2; `python3.11`, `jq`, `openssl`; `amazon-cloudwatch-agent`; `aws-cfn-bootstrap` (`cfn-init`, `cfn-signal`); Neo4j yum repo + GPG key, repo disabled; `neo4j-enterprise` and `cypher-shell` at the pinned `NEO4J_VERSION`, service disabled and never started; `neo4j` system user (uid/gid 500); SSH hardening; IMDSv2 enforcement |
 | **Template** (rendered by `build.py`) | Static Neo4j config and orchestration body as cfn-init metadata on `Neo4jLaunchTemplate`; the per-topology CloudFormation resources | Template update, zero Marketplace churn | `neo4j-base.conf` contents; the inlined bootstrap script; NLB TLS listeners and target groups; ACM `CertificateArn` and `AdvertisedDNS` parameters; the mandatory-TLS Rules; the optional Route 53 private DNS resources (AD-4) |
 | **UserData** (`templates/src/userdata.sh`) | CloudFormation signaling and metadata resolution that cannot be delegated | Template update | IMDSv2 token + instance-id/AZ fetch; stack-id and logical-id tag lookups; admin and application password fetch from Secrets Manager; `cfn-init`; export of runtime env vars; bootstrap invocation; unset of both passwords; `cfn-signal`; ERR trap |
-| **Bootstrap** (`templates/src/bootstrap/neo4j-bootstrap.sh` + partials) | Boot-time install, configuration application, security assertion, service start | Template update | `install_neo4j_from_yum`, `install_apoc`, `install_plugin`; `apply_base_conf`; runtime overlay functions including `configure_tls` (AD-4); `assert_security_invariant`; `start_neo4j`; `create_app_user` (AD-6) |
+| **Bootstrap** (`templates/src/bootstrap/neo4j-bootstrap.sh` + partials) | Boot-time install verification, plugin install, configuration application, security assertion, service start | Template update | `verify_neo4j_installed`, `install_apoc`, `install_plugin`; `apply_base_conf`; runtime overlay functions including `configure_tls` (AD-4); `assert_security_invariant`; `start_neo4j`; `create_app_user` (AD-6) |
 
-The AMI carries no Neo4j configuration key, no value, and no conf-mutating
-logic. The same AMI is reused across all three topologies: Public, Private, and
-Private Existing VPC.
+The AMI carries no project-authored Neo4j configuration key, no value, and no
+conf-mutating logic. The only `neo4j.conf` on the image is the package
+default. The same AMI is reused across all three topologies: Public, Private,
+and Private Existing VPC.
+
+### Node tool contract
+
+SSM Run Command runs commands on a node as root without a login `PATH`.
+Callers must use absolute paths. The project promises two tool paths on every
+node:
+
+- `/usr/local/bin/aws` is AWS CLI v2. `create-ami.sh` installs it, and
+  `test-ami.sh` CHECK 6 asserts it.
+- `/usr/bin/cypher-shell` comes from the `cypher-shell` package at the same
+  version as the server. `test-ami.sh` CHECK 7 and CHECK 12 assert it, and
+  `verify_neo4j_installed` fails the boot without it.
+
+Hume's `stack/seed_nodes.py` is a known consumer of both paths. Moving either
+path is a breaking change. It needs a notice to consumers before the AMI
+ships. No other path on the node is part of the contract.
 
 ---
 
@@ -532,9 +578,10 @@ regression, not an improvement.
   orchestration fix an AMI rebuild and Marketplace resubmission.
 - **Do not add a static Neo4j key as an inline `set_neo4j_conf` call.** Fixed
   keys belong in `neo4j-base.conf` (Placement Decision Rule branch 2).
-- **Do not `dnf`- or `yum`-install any package on the boot path.** `openssl`
-  and every other OS package belong in the AMI. A boot-path package install is
-  the AD-1 binary-shaped failure class with full ASG-self-heal blast radius.
+- **Do not install any package on the node boot path, including Neo4j and
+  pip packages.** Neo4j, `cypher-shell`, `openssl` and every other package
+  belong in the AMI. A boot-path install needs a package mirror and an
+  internet route on every launch and every ASG self-heal (AD-1).
 - **Do not use a TCP-only health check for the Browser target group.** It
   reports a wedged Neo4j as healthy. The Browser check is L7 (AD-4).
 - **Do not key TLS off a secret output.** The TLS signal is a non-empty
@@ -581,6 +628,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-21 | The application secret is generated, alphanumeric, retained and encrypted with the stack key; the node role reads it; the stack publishes `app-password-secret-arn` and `app-username`; the bootstrap creates `neo4j_app` with `architect` after start, on first boot only (AD-6) | `SecurityReviewBatchBTests.test_app_password_secret_is_generated_alphanumeric_and_retained`, `test_node_role_reads_both_password_secrets`, `test_app_user_ssm_parameters`, `test_bootstrap_creates_app_user_after_start_on_first_boot`; `ShellPartialTests.test_create_app_user_*` |
 | NFR-22 | The initial password is set as `neo4j` from a 0400 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
 | NFR-23 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
+| NFR-24 | Neo4j and `cypher-shell` are baked into the AMI at the pinned version with the repo and service disabled; the node boot path installs no package and fails closed without them (AD-1) | `ShellPartialTests.test_create_ami_bakes_pinned_neo4j_and_never_starts_it`, `test_verify_neo4j_installed_*`; `RenderedTemplateContractTests.test_node_boot_path_installs_no_packages`; `test-ami.sh` CHECK 7, 8, 10 and 12 |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

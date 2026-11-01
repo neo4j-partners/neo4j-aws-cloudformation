@@ -5,10 +5,13 @@
 # over SSM (no SSH key or port 22 required), reports pass/fail, and
 # cleans up.
 #
-# The EE AMI is a base OS image with SSH hardening, OS patches, and static
-# deployment tooling pre-baked.
-# Neo4j Enterprise is installed at deploy time via CloudFormation UserData,
-# so this script only verifies the base image properties.
+# The EE AMI carries OS patches, SSH hardening, static deployment tooling, and
+# Neo4j Enterprise plus cypher-shell at one pinned version (AD-1). This script
+# verifies the base image properties, the pinned Neo4j packages, and that
+# Neo4j was never configured, enabled or started in the AMI.
+#
+# The expected Neo4j version is the AMI's Neo4jVersion tag, written by
+# create-ami.sh. Set NEO4J_VERSION to override it.
 #
 # Prerequisites:
 #   - AWS CLI configured with the marketplace profile (neo4j-marketplace account)
@@ -84,6 +87,20 @@ if [ "${AMI_STATE}" != "available" ]; then
   exit 1
 fi
 echo "AMI is available."
+
+EXPECTED_NEO4J_VERSION="${NEO4J_VERSION:-}"
+if [ -z "${EXPECTED_NEO4J_VERSION}" ]; then
+  EXPECTED_NEO4J_VERSION=$(aws ec2 describe-images \
+    --region "${REGION}" \
+    --image-ids "${AMI_ID}" \
+    --query "Images[0].Tags[?Key=='Neo4jVersion'].Value | [0]" \
+    --output text 2>/dev/null || true)
+fi
+if [ -z "${EXPECTED_NEO4J_VERSION}" ] || [ "${EXPECTED_NEO4J_VERSION}" == "None" ]; then
+  echo "ERROR: AMI ${AMI_ID} has no Neo4jVersion tag. Set NEO4J_VERSION to the baked version."
+  exit 1
+fi
+echo "Expected Neo4j version: ${EXPECTED_NEO4J_VERSION}"
 
 # ---------------------------------------------------------------------------
 # Step 2: Create a temporary IAM role with SSM permissions
@@ -200,7 +217,7 @@ COMMAND_ID=$(aws ssm send-command \
   --region "${REGION}" \
   --instance-ids "${INSTANCE_ID}" \
   --document-name "AWS-RunShellScript" \
-  --comment "Neo4j EE base AMI verification" \
+  --comment "Neo4j EE AMI verification" \
   --parameters 'commands=[
     "echo \"=== CHECK 1: SSH password authentication ===\"",
     "grep -i PasswordAuthentication /etc/ssh/sshd_config | head -5",
@@ -234,9 +251,11 @@ COMMAND_ID=$(aws ssm send-command \
     "test -d /opt/aws/amazon-cloudwatch-agent/etc && echo PASS: CloudWatch agent etc directory present",
     "command -v openssl && echo PASS: openssl present",
     "command -v find && command -v hostname && echo PASS: findutils and hostname present",
+    "test -x /usr/bin/cypher-shell && echo PASS: cypher-shell at /usr/bin/cypher-shell || echo FAIL: cypher-shell missing",
     "echo \"\"",
     "echo \"=== CHECK 8: Neo4j repo and system user ===\"",
     "test -f /etc/yum.repos.d/neo4j.repo && echo PASS: Neo4j repo present",
+    "grep -qx enabled=0 /etc/yum.repos.d/neo4j.repo && echo PASS: Neo4j repo disabled || echo FAIL: Neo4j repo enabled",
     "rpm -qa --qf \"%{SUMMARY}\\n\" gpg-pubkey* | grep -qi neo4j && echo PASS: Neo4j GPG key imported",
     "getent passwd neo4j",
     "getent group neo4j",
@@ -245,12 +264,22 @@ COMMAND_ID=$(aws ssm send-command \
     "command -v lsblk && echo PASS: lsblk present",
     "command -v mkfs.xfs && echo PASS: mkfs.xfs present",
     "echo \"\"",
-    "echo \"=== CHECK 10: No Neo4j configuration or bootstrap baked in AMI ===\"",
-    "test ! -e /etc/neo4j/neo4j.conf && test ! -e /opt/neo4j/conf/neo4j-base.conf && test ! -e /opt/neo4j/bin/neo4j-bootstrap.sh && echo PASS: No Neo4j config on AMI || echo FAIL: Neo4j config present on AMI",
+    "echo \"=== CHECK 10: No project Neo4j configuration or bootstrap baked in AMI ===\"",
+    "test ! -e /opt/neo4j/conf/neo4j-base.conf && test ! -e /opt/neo4j/bin/neo4j-bootstrap.sh && echo PASS: No Neo4j config on AMI || echo FAIL: Neo4j config present on AMI",
+    "rpm -q neo4j-enterprise > /dev/null && ! rpm -V neo4j-enterprise | grep -q /etc/neo4j/neo4j.conf && echo PASS: neo4j.conf is the package default || echo FAIL: neo4j.conf modified or package missing",
     "echo \"\"",
     "echo \"=== CHECK 11: cfn helpers resolve ===\"",
     "command -v cfn-init && echo PASS: cfn-init resolves || echo FAIL: cfn-init does not resolve",
-    "command -v cfn-signal && echo PASS: cfn-signal resolves || echo FAIL: cfn-signal does not resolve"
+    "command -v cfn-signal && echo PASS: cfn-signal resolves || echo FAIL: cfn-signal does not resolve",
+    "echo \"\"",
+    "echo \"=== CHECK 12: Neo4j baked at a pinned version and never started ===\"",
+    "rpm -q --qf \"neo4j-enterprise-version=%{VERSION}\\n\" neo4j-enterprise",
+    "rpm -q --qf \"cypher-shell-version=%{VERSION}\\n\" cypher-shell",
+    "systemctl is-enabled neo4j 2>/dev/null | grep -qx enabled && echo FAIL: neo4j service enabled || echo PASS: neo4j service not enabled",
+    "test ! -e /var/lib/neo4j/data/databases && echo PASS: Neo4j never started || echo FAIL: Neo4j databases directory present",
+    "ls /var/lib/neo4j/labs/apoc-*-core.jar > /dev/null 2>&1 && echo PASS: APOC core jar in labs || echo FAIL: APOC core jar missing",
+    "ls /var/lib/neo4j/products/bloom-plugin-*.jar > /dev/null 2>&1 && echo PASS: Bloom jar in products || echo FAIL: Bloom jar missing",
+    "ls /var/lib/neo4j/products/neo4j-graph-data-science-*.jar > /dev/null 2>&1 && echo PASS: GDS jar in products || echo FAIL: GDS jar missing"
   ]' \
   --query "Command.CommandId" \
   --output text)
@@ -366,12 +395,20 @@ for expected in \
   "PASS: CloudWatch agent etc directory present" \
   "PASS: openssl present" \
   "PASS: findutils and hostname present" \
+  "PASS: cypher-shell at /usr/bin/cypher-shell" \
   "PASS: Neo4j repo present" \
+  "PASS: Neo4j repo disabled" \
   "PASS: Neo4j GPG key imported" \
   "neo4j:x:500:500" \
   "neo4j:x:500:" \
   "PASS: lsblk present" \
-  "PASS: mkfs.xfs present"; do
+  "PASS: mkfs.xfs present" \
+  "PASS: neo4j.conf is the package default" \
+  "PASS: neo4j service not enabled" \
+  "PASS: Neo4j never started" \
+  "PASS: APOC core jar in labs" \
+  "PASS: Bloom jar in products" \
+  "PASS: GDS jar in products"; do
   if echo "${COMMAND_OUTPUT}" | grep -q "${expected}"; then
     echo "  PASS: ${expected#PASS: }"
   else
@@ -386,6 +423,16 @@ else
   echo "  FAIL: Neo4j config or bootstrap found on the AMI (NFR-3/AD-3 violation)"
   FAILURES=$((FAILURES + 1))
 fi
+
+for pkg in neo4j-enterprise cypher-shell; do
+  baked=$(echo "${COMMAND_OUTPUT}" | sed -n "s/^${pkg}-version=//p")
+  if [ "${baked}" = "${EXPECTED_NEO4J_VERSION}" ]; then
+    echo "  PASS: ${pkg} is ${EXPECTED_NEO4J_VERSION}"
+  else
+    echo "  FAIL: ${pkg} is '${baked}', expected ${EXPECTED_NEO4J_VERSION}"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
 
 for helper in cfn-init cfn-signal; do
   if echo "${COMMAND_OUTPUT}" | grep -q "PASS: ${helper} resolves"; then

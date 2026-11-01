@@ -61,7 +61,7 @@ oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
 
 install_cloudwatch_agent "${stackName}"
 attach_and_mount_data_volume "${region}" "${_stack_id}" "${_az}" "${_instance_id}" isFirstBoot
-install_neo4j_from_yum
+verify_neo4j_installed
 install_apoc
 if [[ "${installBloom}" == "true" ]]; then
   install_plugin Bloom "bloom-plugin-*.jar"
