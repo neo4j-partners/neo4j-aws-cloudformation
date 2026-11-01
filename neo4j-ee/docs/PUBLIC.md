@@ -4,7 +4,7 @@
 
 - **What it deploys:** Neo4j EE cluster (1 or 3 nodes) in public subnets behind an internet-facing NLB
 - **Public exposure:** every instance has a public IP; client traffic gated by `AllowedCIDR` at the NLB security group
-- **Operator access:** direct from your machine — no bastion, no SSM tunneling
+- **Operator access:** You connect directly from your machine. There is no bastion and no SSM tunnel.
 - **When to use:** proof-of-concept, demos, evaluation. Production and regulated workloads should use the [Private template](PRIVATE.md)
 
 > **Marketplace operator** (deployed from AWS Marketplace, running stack):
@@ -86,7 +86,7 @@ Failures are surfaced at two layers:
 
 ### Access
 
-Connect directly from your machine — no SSM tunneling required.
+Connect directly from your machine. No SSM tunnel is required.
 
 - **Neo4j Browser:** `http://<NLB DNS>:7474`
 - **Bolt:** `neo4j://<NLB DNS>:7687`
@@ -128,7 +128,7 @@ uv run sample-public-app                       # most recent EE deploy
 uv run sample-public-app <stack-name>          # specific stack
 ```
 
-The full workflow, the seven-key SSM contract it consumes, the URI selection rules (`bolt://` vs `neo4j://` vs `neo4j+s://`), and the JSON shape it returns are documented in [`sample-public-app/README.md`](../sample-public-app/README.md).
+The full workflow, the six SSM contract keys it requires, the URI selection rules (`bolt://` vs `neo4j://` vs `neo4j+s://`), and the JSON shape it returns are documented in [`sample-public-app/README.md`](../sample-public-app/README.md).
 
 ### Observability Checks
 
@@ -214,8 +214,8 @@ Each node has a dedicated GP3 EBS data volume. `DeletionPolicy: Retain` keeps th
 
 > **Why two SGs?** NLB health checks originate from the NLB's private VPC IPs, not from `AllowedCIDR`. Applying `AllowedCIDR` directly to the instance SG blocks health checks and fails all NLB targets.
 
-- **`Neo4jNLBSecurityGroup` (on the NLB):** allows `AllowedCIDR` on Browser/Bolt ports — filters external client traffic without hardcoding any VPC CIDR
-- **`Neo4jExternalSecurityGroup` (on the instances):** sources from `Neo4jNLBSecurityGroup` via `SourceSecurityGroupId` — allows both forwarded client traffic and NLB health checks
+- **`Neo4jNLBSecurityGroup` (on the NLB):** allows `AllowedCIDR` on Browser/Bolt ports. It filters external client traffic without hardcoding any VPC CIDR.
+- **`Neo4jExternalSecurityGroup` (on the instances):** sources from `Neo4jNLBSecurityGroup` via `SourceSecurityGroupId`. It allows both forwarded client traffic and NLB health checks.
 
 This pattern works for any marketplace deployment without knowing the VPC CIDR at template-authoring time.
 

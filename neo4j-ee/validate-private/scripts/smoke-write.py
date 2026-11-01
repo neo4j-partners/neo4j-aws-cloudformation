@@ -48,7 +48,12 @@ def main() -> None:
     print(f"  Stack:      {config.stack_name}")
     print(f"  Region:     {config.region}")
     print(f"  Bastion:    {config.bastion_id}")
-    print(f"  URI:        {config.bolt_scheme}://{config.nlb_dns}:7687")
+    if config.verify_tls:
+        scheme = config.bolt_scheme.split("+", 1)[0]
+        print(f"  URI:        {scheme}://{config.nlb_dns}:7687")
+        print("  TLS:        verified against the published ca-pem")
+    else:
+        print(f"  URI:        {config.bolt_scheme}://{config.nlb_dns}:7687")
     print(f"  Iterations: {args.iterations}")
     print()
 

@@ -49,12 +49,12 @@
             Resource: '*'
             Condition:
               StringEquals:
-                kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com'
+                kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.${AWS::URLSuffix}'
                 kms:CallerAccount: !Ref AWS::AccountId
           - Sid: AllowCloudWatchLogs
             Effect: Allow
             Principal:
-              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+              Service: !Sub 'logs.${AWS::Region}.${AWS::URLSuffix}'
             Action:
               - kms:Encrypt*
               - kms:Decrypt*

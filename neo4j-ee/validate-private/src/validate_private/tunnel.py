@@ -95,11 +95,11 @@ class PortForward:
             "--region", self.region,
         ]
         # A new process group lets close() stop session-manager-plugin, which
-        # the AWS CLI starts as a child. The group id equals the CLI's pid, so
-        # close() can signal the plugin even after the CLI itself exits. stdin is detached so the plugin
-        # never competes with the caller for the terminal. stderr goes to a
-        # temporary file, because a pipe nobody drains can fill during a
-        # long session and stall the plugin.
+        # the AWS CLI starts as a child. The group id equals the CLI's pid,
+        # so close() can signal the plugin even after the CLI itself exits.
+        # stdin is detached so the plugin never competes with the caller for
+        # the terminal. stderr goes to a temporary file, because a pipe
+        # nobody drains can fill during a long session and stall the plugin.
         self._stderr = tempfile.TemporaryFile()
         self._proc = subprocess.Popen(
             cmd,
@@ -133,6 +133,33 @@ class PortForward:
             f"SSM port-forward to {self.remote_host}:{self.remote_port} via "
             f"{self.bastion_id} did not open 127.0.0.1:{self.local_port} "
             f"within {timeout_s}s"
+        )
+
+    def run_until_interrupted(self, poll_s: float = 1.0) -> None:
+        """Start the tunnel and hold it open until Ctrl-C or SIGTERM.
+
+        SIGTERM is handled like Ctrl-C, so the plugin's process group is
+        stopped on every exit path. A port-forward that exits on its own
+        raises TunnelError.
+        """
+
+        def _interrupt(_signum: int, _frame: object) -> None:
+            raise KeyboardInterrupt
+
+        previous = signal.signal(signal.SIGTERM, _interrupt)
+        try:
+            self.start()
+            while self.alive():
+                time.sleep(poll_s)
+            detail = self._read_stderr()
+        except KeyboardInterrupt:
+            return
+        finally:
+            self.close()
+            signal.signal(signal.SIGTERM, previous)
+        raise TunnelError(
+            f"SSM port-forward to {self.remote_host}:{self.remote_port} via "
+            f"{self.bastion_id} exited: {detail}"
         )
 
     def close(self) -> None:

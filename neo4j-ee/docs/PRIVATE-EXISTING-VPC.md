@@ -3,9 +3,9 @@
 `neo4j-private-existing-vpc.template.yaml` deploys a Neo4j Enterprise cluster into a VPC you supply.
 
 - **What it deploys:** bastion, internal NLB, cluster ASGs, EBS volumes, security groups, SSM contract
-- **What it does not deploy:** VPC, subnets, internet gateway, NAT Gateways — outbound routing is the caller's responsibility
+- **What it does not deploy:** VPC, subnets, internet gateway and NAT Gateways. Outbound routing is the caller's responsibility.
 - **You provide:** `VpcId` and `PrivateSubnet1Id/2Id/3Id` (one subnet per AZ for a 3-node cluster)
-- **When to use:** the cluster must live inside an existing network — peered VPC, Transit Gateway, shared services account, or a VPC managed by a separate infrastructure team
+- **When to use:** the cluster must live inside an existing network, such as a peered VPC, a Transit Gateway, a shared services account, or a VPC managed by a separate infrastructure team.
 
 > **Marketplace operator** (deployed from AWS Marketplace, running stack):
 > Start with [Prerequisites](#prerequisites) and the [Operator Guide](#operator-guide) below.
@@ -107,10 +107,10 @@ The template creates the following inside your VPC. It does **not** create: VPC,
 
 ### Relationship to the Private Template
 
-Structurally identical to `neo4j-private.template.yaml`: same operator bastion, same internal NLB, same cluster ASGs, same SSM platform contract. The only difference is that this template does not provision any VPC or networking infrastructure — it accepts `VpcId` and `PrivateSubnet1Id/2Id/3Id` and deploys into the caller-supplied network.
+Structurally identical to `neo4j-private.template.yaml`: same operator bastion, same internal NLB, same cluster ASGs, same SSM platform contract. The only difference is that this template does not provision any VPC or networking infrastructure. It accepts `VpcId` and `PrivateSubnet1Id/2Id/3Id` and deploys into the caller-supplied network.
 
-- **NLB hairpin fix** (non-target bastion + `preserve_client_ip.enabled=false`) — applies identically. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin)
-- **Password security model** (alphanumeric-only `AllowedPattern`, Secrets Manager retrieval at boot, no UserData embedding) — identical. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model)
+- **NLB hairpin fix:** The non-target bastion and `preserve_client_ip.enabled=false` apply identically. See [Operator Bastion: NLB Hairpin in PRIVATE.md](PRIVATE.md#operator-bastion-nlb-hairpin)
+- **Password security model:** The model is identical. It uses an alphanumeric-only `AllowedPattern`, retrieves the password from Secrets Manager at boot, and never embeds it in UserData. See [Password Security Model in PRIVATE.md](PRIVATE.md#password-security-model)
 - **Bolt advertised address:** This part differs from the Private template. With `CreatePrivateDns=true`, Bolt advertises `AdvertisedDNS` whether the stack creates the hosted zone or you pass one in `PrivateDnsHostedZoneId`. A zone you pass must already be associated with `VpcId`. See [NLB Routing in PRIVATE.md](PRIVATE.md#nlb-routing).
 
 ### VPC Interface Endpoint Design
@@ -268,7 +268,7 @@ uv run validate-private --stack "$STACK" --suite failover
 # 6. Resilience suite
 uv run validate-private --stack "$STACK" --suite resilience
 
-# 7. Tear down — see Tear Down below
+# 7. Tear down. See Tear Down below.
 ```
 
 ### Path B: Pre-Existing Endpoints
@@ -291,7 +291,7 @@ uv run preflight "$STACK"
 # 4. Basic cluster validation (cluster roles: 1 writer for 1-node is PASS)
 uv run validate-private --stack "$STACK"
 
-# 5. Tear down — see Tear Down below
+# 5. Tear down. See Tear Down below.
 ```
 
 ### Tear Down

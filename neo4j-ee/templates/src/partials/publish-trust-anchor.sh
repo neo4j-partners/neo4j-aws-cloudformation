@@ -3,7 +3,7 @@ publish_trust_anchor() {
   local region="$2"
   local stackName="$3"
   local parameterName="/neo4j-ee/${stackName}/ca-pem"
-  local chain pem
+  local chain pem pemFile
 
   # Clients verify the NLB certificate against this value. A self-signed or
   # imported certificate with no chain is its own trust anchor, so the leaf
@@ -24,7 +24,14 @@ publish_trust_anchor() {
   # A malformed ACM response must never overwrite a good anchor.
   [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* ]] \
     || fail "ACM returned no PEM certificate for ${certificateArn}."
-  aws ssm put-parameter --name "${parameterName}" --value "${pem}" \
+  # The chain reaches put-parameter through a file, so it never appears in
+  # the process list. mktemp creates the file with mode 0600. The trap
+  # removes it and then clears itself, so later function returns under
+  # set -u never expand the unset variable.
+  pemFile=$(mktemp) || fail "mktemp failed."
+  trap 'rm -f "${pemFile}"; trap - RETURN' RETURN
+  printf '%s' "${pem}" > "${pemFile}"
+  aws ssm put-parameter --name "${parameterName}" --value "file://${pemFile}" \
     --type String --tier Advanced --overwrite --region "${region}" >/dev/null \
     || fail "ssm put-parameter failed for ${parameterName}."
 }

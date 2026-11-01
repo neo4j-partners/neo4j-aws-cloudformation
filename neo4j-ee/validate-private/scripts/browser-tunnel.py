@@ -1,15 +1,21 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["boto3"]
+# dependencies = ["validate-private"]
+#
+# [tool.uv.sources]
+# validate-private = { path = "..", editable = true }
 # ///
 
-"""Open an SSM port-forward tunnel to Neo4j Browser on port 7473."""
+"""Open an SSM port-forward tunnel to Neo4j Browser on local port 7473.
+
+The tunnel runs until Ctrl-C or SIGTERM. Closing it also stops the Session
+Manager plugin, so local port 7473 is free again.
+"""
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from private_tools import (
@@ -19,6 +25,9 @@ from private_tools import (
     resolve_direct_bolt_scheme,
     resolve_outputs_file,
 )
+from validate_private.tunnel import PortForward, TunnelError
+
+BROWSER_PORT = 7473
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,31 +66,20 @@ def main() -> None:
     print("  Once the tunnel opens:")
     print(f"    Browser: https://{advertised_dns}:7473")
     print(f"    Bolt:    {bolt_scheme}://{advertised_dns}:7687")
-    print("             if the Bolt tunnel is also open")
+    print("             once bolt-tunnel.py is running in a second terminal")
     print()
     print("  Press Ctrl-C to close.")
     print()
-
-    # os.execvp replaces this process without flushing Python's buffers; under
-    # non-TTY (block-buffered) stdout the header above would otherwise be lost.
     sys.stdout.flush()
-    sys.stderr.flush()
-    os.execvp(
-        "aws",
-        [
-            "aws",
-            "ssm",
-            "start-session",
-            "--target",
-            bastion_id,
-            "--region",
-            region,
-            "--document-name",
-            "AWS-StartPortForwardingSessionToRemoteHost",
-            "--parameters",
-            f"host={nlb_dns},portNumber=7473,localPortNumber=7473",
-        ],
+
+    forward = PortForward(
+        region, bastion_id, nlb_dns, BROWSER_PORT, local_port=BROWSER_PORT
     )
+    try:
+        forward.run_until_interrupted()
+    except TunnelError as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
+    print("Tunnel closed.")
 
 
 if __name__ == "__main__":

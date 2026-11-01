@@ -235,7 +235,7 @@ COMMAND_ID=$(aws ssm send-command \
     "uname -r",
     "echo \"\"",
     "echo \"=== CHECK 5B: Installed kernel packages ===\"",
-    "rpm -q kernel 2>&1 || echo FAIL: kernel package not installed",
+    "rpm -qa \"kernel6*\" | grep . || echo FAIL: kernel package not installed",
     "rpm -q kernel-core 2>&1 || echo INFO: kernel-core package not installed separately",
     "echo \"\"",
     "echo \"=== CHECK 6: AWS CLI v2 installed at /usr/local/bin, distro awscli-2 package absent ===\"",

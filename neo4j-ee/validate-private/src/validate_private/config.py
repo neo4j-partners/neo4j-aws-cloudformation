@@ -14,10 +14,11 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from validate_private.trust_anchor import read_ca_pem, read_parameter
+
 _NEO4J_EE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_NEO4J_EE_DIR / "src"))
 from neo4j_ee.outputs import read_outputs, resolve_bolt_scheme, truthy  # noqa: E402
-from validate_private.trust_anchor import read_ca_pem, read_parameter  # noqa: E402
 
 
 _REQUIRED_FIELDS = ("StackName", "Region", "Neo4jOperatorBastionId", "Neo4jInternalDNS")

@@ -3,7 +3,7 @@
 `neo4j-private.template.yaml` deploys a Neo4j Enterprise cluster in private subnets behind an internal Network Load Balancer.
 
 - **What it deploys:** Neo4j EE cluster (1 or 3 nodes) in private subnets behind an internal NLB
-- **Public exposure:** none — no instance has a public IP
+- **Public exposure:** No instance has a public IP.
 - **Operator access:** dedicated `t4g.small` bastion via AWS Systems Manager Session Manager
 - **When to use:** production, staging, and regulated workloads
 
@@ -83,6 +83,7 @@ These are the minimum permissions the operator's local IAM principal (user or as
 | Permission | Resource | Used by |
 |---|---|---|
 | `cloudformation:DescribeStacks`, `cloudformation:DescribeStackResources` | The stack ARN | `uv run preflight`, `deploy.py` (reads stack outputs) |
+| `cloudformation:ListStackResources` | The stack ARN | `uv run validate-private`, which finds the node ASGs, and `teardown.sh` and `recover.sh` |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:StartSession`, `ssm:DescribeInstanceInformation` | The bastion instance | `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`, `admin-shell`, `run-cypher`, `validate-private`, `uv run preflight` (bastion ping check) |
 | `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract. Every `uv run` tool that connects to Neo4j reads `bolt-url`, and on a `neo4j+s` stack it also reads `ca-pem`. The release suite reads `ca-pem` on every stack. |
 | `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight`, and every `uv run` tool that connects to Neo4j. The tools read the password with your credentials and keep it in memory. |
@@ -159,8 +160,8 @@ All operator access goes through the `t4g.small` bastion via SSM. The bastion ho
 | `uv run run-cypher` | Local driver over a port-forward the tool opens | No |
 | `uv run validate-private` | Local driver over a port-forward the tool opens | No |
 | `uv run scripts/smoke-write.py` | Local driver over a port-forward the tool opens | No |
-| Local driver or client tool | Bolt connection from your laptop | Yes — Bolt tunnel (7687) |
-| Neo4j Browser | HTTPS for the web UI + Bolt for queries | Yes — both tunnels (7473 + 7687) |
+| Local driver or client tool | Bolt connection from your laptop | Yes, the Bolt tunnel on 7687 |
+| Neo4j Browser | HTTPS for the web UI + Bolt for queries | Yes, both tunnels on 7473 and 7687 |
 
 #### Session logging
 
@@ -188,7 +189,7 @@ The Bolt tunnel is also required alongside the Browser Tunnel when using Neo4j B
 
 Use this to open the Neo4j Browser web UI. The browser makes two connections: HTTPS to load the UI (port 7473) and Bolt to run queries (port 7687). Both tunnels must be open simultaneously.
 
-**Single-command option** — run from `neo4j-ee/`:
+**Single-command option.** Run from `neo4j-ee/`:
 
 ```bash
 uv run browse.py                   # most recent deployment
@@ -197,7 +198,7 @@ uv run browse.py <stack-name>      # specific deployment
 
 `browse.py` reads `.deploy/<stack-name>.txt`, opens both SSM port-forward tunnels in the same shell, and prints the URL and credentials. Add the `/etc/hosts` line it prints, then open the `https://<AdvertisedDNS>:7473` URL. Press Ctrl+C to close both tunnels.
 
-**Two-terminal option** — run from `neo4j-ee/validate-private/`:
+**Two-terminal option.** Run from `neo4j-ee/validate-private/`:
 
 ```bash
 uv run scripts/browser-tunnel.py   # localhost:7473 -> NLB:7473  (blocks; Ctrl-C to close)
@@ -411,13 +412,13 @@ Every routing table entry points back to the NLB. A driver connecting with `neo4
 
 ### Operator Bastion: NLB Hairpin
 
-> **Why a dedicated bastion?** To prevent NLB hairpin failures where a cluster node tunneling SSM through itself sees its own IP as the source and silently drops the reply — a 1-in-3 connection failure rate.
+> **Why a dedicated bastion?** To prevent NLB hairpin failures where a cluster node tunneling SSM through itself sees its own IP as the source and silently drops the reply. One connection in three fails.
 
 The bastion is `t4g.small`, sits in the same private subnet as the cluster, and is not registered as an NLB target.
 
 **The failure.** When SSM tunnels ran through a Neo4j cluster member instead of a dedicated bastion, every third connection timed out. NLB target health was fine; VPC endpoints, security groups, and routing all checked out.
 
-**Root cause.** NLB target groups default to `preserve_client_ip.enabled=true`. With preservation on, each target sees the real source IP of incoming connections. When a cluster node tunnels an SSM session outward, the source IP of each new connection is that node's own private IP. The NLB flow-hashes across the three registered targets. When the hash selects the same node as the origin — a 1-in-3 probability — the instance receives a packet with source IP equal to its own IP. The kernel treats that as invalid and silently drops the reply.
+**Root cause.** NLB target groups default to `preserve_client_ip.enabled=true`. With preservation on, each target sees the real source IP of incoming connections. When a cluster node tunnels an SSM session outward, the source IP of each new connection is that node's own private IP. The NLB flow-hashes across the three registered targets. One time in three, the hash selects the node that originated the connection. That instance then receives a packet with source IP equal to its own IP. The kernel treats that as invalid and silently drops the reply.
 
 **The fix.** Two layers ship together:
 
@@ -434,7 +435,7 @@ Either mitigation alone closes the observed failure. Both ship together so the t
 
 The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that applications and operator tooling can wire themselves up without knowing stack internals. `uv run preflight` validates both groups on every run.
 
-**Contract parameters** — required; all five must exist:
+**Contract parameters:** All five are required.
 
 | Parameter | Purpose |
 |---|---|
@@ -444,7 +445,7 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 | `/neo4j-ee/<stack>/password-secret-arn` | Secrets Manager ARN for the Neo4j password |
 | `/neo4j-ee/<stack>/vpc-endpoint-sg-id` | Security group attached to the VPC interface endpoints |
 
-**Operational parameters** — informational:
+**Operational parameters:** These parameters are informational.
 
 | Parameter | Purpose |
 |---|---|
@@ -476,11 +477,11 @@ See [`sample-private-app/README.md`](../sample-private-app/README.md) for the fu
 
 ### Password Security Model
 
-- **Allowed characters:** `^[a-zA-Z0-9]{24,}$` — alphanumerics only, 24+ chars. Prevents shell metacharacter injection (e.g. `Test1$(cmd)` executing as root during boot)
+- **Allowed characters:** The pattern `^[a-zA-Z0-9]{12,}$` allows only alphanumerics, 12 or more. It prevents shell metacharacter injection, such as `Test1$(cmd)` executing as root during boot.
 - **Default length:** `deploy.py` generates a 32-character value
 - **Storage:** Secrets Manager at `neo4j/<stack-name>/password`
 - **Never in UserData:** `NoEcho: true` only suppresses values in CloudFormation API responses, not UserData. Any IAM principal with `ec2:DescribeLaunchTemplateVersions` can read UserData
-- **Retrieval at boot:** cluster nodes fetch the password via their IAM role, which has `secretsmanager:GetSecretValue` scoped to the single stack secret
+- **Retrieval at boot:** Cluster nodes fetch the password with their IAM role. Its `secretsmanager:GetSecretValue` grant covers the admin and application password secrets, plus a license secret only when the matching `Install*` flag is set.
 
 ### Bolt TLS
 
@@ -498,13 +499,30 @@ For production, use a stable customer-owned DNS name rather than the generated N
 
 **Consumers fail closed until the anchor is published.** The template creates the parameter with the value `pending`. A value of `pending`, or any value that does not start with `-----BEGIN CERTIFICATE-----`, means no node has published the anchor yet. A consumer must refuse to connect in that case. A stack update that changes the parameter's properties resets the value to `pending` until a node is replaced.
 
-**Certificate rotation.** A `CertificateArn` update changes the NLB listeners at once, but running nodes do not republish the anchor. Rotating the certificate ends with replacing one node: terminate it, and the ASG launches a replacement that republishes the anchor.
-
 **Existing VPC.** Nodes read the certificate through the `acm` interface endpoint. With `CreateVpcEndpoints=false`, your endpoints must include `acm`, as [VPC Interface Endpoint Design](PRIVATE-EXISTING-VPC.md#vpc-interface-endpoint-design) describes.
 
 **Operator tools.** On a `neo4j+s` stack the `uv run` tools verify the NLB chain against `ca-pem`. They skip the hostname check because the SSM tunnel replaces the server name. On a `neo4j+ssc` stack they use `+ssc`. `admin-shell` uses `+ssc` on both.
 
 **Residual risk.** Cluster-internal ports (5000, 6000, 7000, 7688) remain plaintext between cluster members, protected by the cluster security group. An actor with `ec2:RunInstances` permission to launch into the cluster subnet with the cluster security group, `ec2:CreateTrafficMirrorSession` targeting a cluster ENI, or root on any cluster node can observe replication traffic on the wire. For regulated workloads or shared-tenancy accounts where IAM blast radius extends beyond the cluster operator team, request cluster TLS before deploying.
+
+#### Certificate Rotation
+
+TLS terminates at the NLB. A rotation changes the NLB listeners and the published anchor. The nodes keep their own self-signed certificates.
+
+1. Import or issue the new certificate in ACM. Its SAN and CN must equal `AdvertisedDNS`.
+2. Update the stack with the new `CertificateArn`. The NLB listeners serve the new certificate once the update completes. Running nodes do not republish the anchor.
+3. Terminate one node. Its ASG launches a replacement, which publishes the new chain to `/neo4j-ee/<stack>/ca-pem` before it signals. One node is enough, because the NLB holds the certificate and the other nodes need no change.
+4. Confirm that `ca-pem` changed. Its version increases, and its value matches the chain of the new certificate:
+
+   ```bash
+   aws ssm get-parameter --name /neo4j-ee/<stack-name>/ca-pem \
+     --query 'Parameter.[Version,LastModifiedDate]' --region <region>
+   ```
+
+5. Run the release suite from `validate-private/`. Its trust anchor check completes a TLS handshake against the new `ca-pem`.
+6. Retire the old certificate after every consumer has reread `ca-pem`.
+
+> **Warning:** From the `CertificateArn` update until the replacement node publishes, `ca-pem` still holds the old chain. The stack update does not reset it to `pending`, because the parameter's properties do not change. A consumer that verifies against the old chain rejects the new certificate and fails closed. A consumer that pinned the old anchor keeps failing until it rereads `ca-pem`. Terminate the node right after the update to keep this window short.
 
 ---
 
@@ -637,13 +655,18 @@ aws ssm send-command --instance-ids <node-id> --document-name AWS-RunShellScript
     "systemctl start neo4j"
   ]' --region <region>
 
-# 2. Once Neo4j is up, set the password to match Secrets Manager
-PASSWORD=$(./scripts/get-password.sh 2>/dev/null)
+# 2. Once Neo4j is up, set the password to match Secrets Manager.
+#    The node reads the secret with its own role, so the password never
+#    appears in the SSM command. cypher-shell reads it from stdin as a
+#    parameter. The password is alphanumeric by the template's AllowedPattern,
+#    so the double quotes around it are safe.
 aws ssm send-command --instance-ids <node-id> --document-name AWS-RunShellScript \
-  --parameters "commands=[
-    \"for i in \$(seq 1 30); do cypher-shell -a bolt+ssc://localhost:7687 -u neo4j -p \\\"\\\" \\\"RETURN 1\\\" >/dev/null 2>&1 && break || sleep 3; done\",
-    \"cypher-shell -a bolt+ssc://localhost:7687 -u neo4j -p \\\"\\\" \\\"ALTER USER neo4j SET PASSWORD '${PASSWORD}' CHANGE NOT REQUIRED\\\"\"
-  ]" --region <region>
+  --parameters 'commands=[
+    "export NEO4J_PASSWORD=\"\"",
+    "for i in $(seq 1 30); do cypher-shell -a bolt+ssc://localhost:7687 -u neo4j \"RETURN 1\" >/dev/null 2>&1 && break || sleep 3; done",
+    "pw=$(aws secretsmanager get-secret-value --secret-id neo4j/<stack-name>/password --query SecretString --output text --region <region>)",
+    "printf \":param {pw: \\\"%s\\\"}\\nALTER USER neo4j SET PASSWORD \\$pw CHANGE NOT REQUIRED;\\n\" \"$pw\" | cypher-shell -a bolt+ssc://localhost:7687 -u neo4j"
+  ]' --region <region>
 
 # 3. Re-enable auth
 aws ssm send-command --instance-ids <node-id> --document-name AWS-RunShellScript \
@@ -669,7 +692,7 @@ The `<Neo4jNode1ASGName>` value is in `.deploy/<stack-name>.txt`. For a three-no
 
 > **Note:** `dbms.security.auth_enabled` may appear multiple times in `neo4j.conf` if the recovery procedure is run more than once. Neo4j 5 treats duplicate keys as a fatal config error and refuses to start. The `sed -i "/dbms.security.auth_enabled/d"` step above removes all occurrences before adding a single clean entry, which prevents this.
 
-Reference: [Recover admin user and password — Neo4j Operations Manual](https://neo4j.com/docs/operations-manual/current/authentication-authorization/password-and-user-recovery/)
+Reference: [Recover admin user and password, Neo4j Operations Manual](https://neo4j.com/docs/operations-manual/current/authentication-authorization/password-and-user-recovery/)
 
 ---
 

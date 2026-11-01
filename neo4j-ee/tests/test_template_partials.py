@@ -611,7 +611,9 @@ class ShellPartialTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         # The stub answers each --query from the env, so a test can return a
         # chain, the literal None the CLI prints for a missing field, or
-        # garbage. put-parameter records its full argv, one arg per line.
+        # garbage. put-parameter records its full argv, one arg per line. It
+        # also copies the file:// value, its mode, and its path, because the
+        # function removes the file on return.
         self.write_stub(
             "aws",
             """
@@ -626,6 +628,14 @@ class ShellPartialTests(unittest.TestCase):
             fi
             if [[ "$1 $2" == "ssm put-parameter" ]]; then
               printf '%s\\n' "$@" > "$COMMAND_LOG"
+              for _arg in "$@"; do
+                if [[ "${_arg}" == file://* ]]; then
+                  _path="${_arg#file://}"
+                  cat "${_path}" > "$COMMAND_LOG.value"
+                  ls -l "${_path}" | cut -c1-10 > "$COMMAND_LOG.mode"
+                  printf '%s' "${_path}" > "$COMMAND_LOG.path"
+                fi
+              done
               exit 0
             fi
             exit 4
@@ -641,6 +651,9 @@ class ShellPartialTests(unittest.TestCase):
             env={"STUB_CHAIN": chain, "STUB_CERT": certificate},
         )
 
+    def _published_value(self) -> str:
+        return Path(f"{self.command_log}.value").read_text()
+
     def test_publish_trust_anchor_publishes_the_chain(self) -> None:
         result = self._run_publish_trust_anchor(
             chain=self._CHAIN_PEM, certificate=self._LEAF_PEM
@@ -648,8 +661,7 @@ class ShellPartialTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         args = self.command_log.read_text()
         self.assertIn("--name\n/neo4j-ee/demo/ca-pem\n", args)
-        self.assertIn(f"--value\n{self._CHAIN_PEM}\n", args)
-        self.assertNotIn("LEAF", args)
+        self.assertEqual(self._published_value(), self._CHAIN_PEM)
         for flag in ("--type\nString\n", "--tier\nAdvanced\n", "--overwrite\n"):
             self.assertIn(flag, args)
 
@@ -660,7 +672,20 @@ class ShellPartialTests(unittest.TestCase):
             chain="None", certificate=self._LEAF_PEM
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"--value\n{self._LEAF_PEM}\n", self.command_log.read_text())
+        self.assertEqual(self._published_value(), self._LEAF_PEM)
+
+    def test_publish_trust_anchor_keeps_the_pem_out_of_argv(self) -> None:
+        result = self._run_publish_trust_anchor(
+            chain=self._CHAIN_PEM, certificate=self._LEAF_PEM
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.command_log.read_text()
+        self.assertNotIn("BEGIN CERTIFICATE", args)
+        self.assertIn("--value\nfile://", args)
+        mode = Path(f"{self.command_log}.mode").read_text().strip()
+        self.assertEqual(mode, "-rw-------")
+        temp_file = Path(Path(f"{self.command_log}.path").read_text())
+        self.assertFalse(temp_file.exists())
 
     def test_publish_trust_anchor_never_overwrites_with_non_pem(self) -> None:
         result = self._run_publish_trust_anchor(chain="garbage", certificate="garbage")

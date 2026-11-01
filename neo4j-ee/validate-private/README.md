@@ -56,7 +56,7 @@ Run `uv run preflight` first to confirm the stack, the bastion and your local to
 
 The lightweight post-release gate is:
 
-1. Resolve the expected Neo4j version from the same `stable/latest` package source used by the deployment.
+1. Take the expected Neo4j version from the `NEO4J_VERSION` the AMI was built with. The AMI bakes Neo4j at that pinned version.
 2. Confirm the expected Java major version for that Neo4j release.
 3. Deploy a fresh EE Private stack from the rendered templates.
 4. Run `uv run preflight <stack>`.

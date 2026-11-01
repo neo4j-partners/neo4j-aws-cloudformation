@@ -447,8 +447,9 @@ the placeholder before it signals CloudFormation. The bootstrap function
 `publish_trust_anchor` runs right after `configure_tls`. It reads the
 `CertificateArn` certificate from ACM and publishes its chain. When ACM
 returns no chain, as for a self-signed import, it publishes the certificate
-itself. The parameter is a `String` on the Advanced tier, so a long chain
-fits. A failed ACM read, a value that does not start with
+itself. The parameter is a `String` on the Advanced tier. A chain up to the
+8 KB Advanced limit fits. A longer chain fails `put-parameter`, and the node
+fails closed. A failed ACM read, a value that does not start with
 `-----BEGIN CERTIFICATE-----`, or a failed write stops the node before
 `cfn-signal`. A malformed ACM response therefore never overwrites a good
 anchor. The node role holds `acm:GetCertificate` on the certificate and

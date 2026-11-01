@@ -7,7 +7,15 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from validate_private.runner import Neo4jQueryError, bolt_tunnel, run_cypher
+from neo4j import NotificationDisabledClassification, Query
+from neo4j.exceptions import DriverError, Neo4jError
+
+from validate_private.runner import (
+    Neo4jQueryError,
+    bolt_tunnel,
+    open_driver,
+    run_cypher,
+)
 from validate_private.trust_anchor import (
     TrustAnchorError,
     read_ca_pem,
@@ -148,9 +156,12 @@ def _app_user_credentials(config: "StackConfig") -> tuple[str, str]:
 def check_apoc_app_user(config: "StackConfig", reporter: "TestReporter") -> None:
     """Run the APOC calls Hume makes as the application user. Release suite only.
 
-    The queries run on a second driver over the same Bolt tunnel. The
-    expandConfig query creates and deletes its throwaway node in one
-    transaction, so a failed call leaves nothing behind.
+    The queries run on a driver this check opens over the same Bolt tunnel.
+    Its session drops DEPRECATION notifications, because the server marks
+    apoc.text.join and apoc.coll.sum deprecated and Hume still calls them.
+    The shared drivers keep every notification. The expandConfig query
+    creates and deletes its throwaway node in one transaction, so a failed
+    call leaves nothing behind.
     """
     from botocore.exceptions import BotoCoreError, ClientError
 
@@ -172,11 +183,20 @@ def check_apoc_app_user(config: "StackConfig", reporter: "TestReporter") -> None
         return
 
     failed: list[str] = []
-    for call, cypher in _APP_USER_APOC_CALLS:
-        try:
-            run_cypher(config, cypher, auth=auth)
-        except (Neo4jQueryError, TunnelError) as exc:
-            failed.append(f"{call}: {exc}")
+    try:
+        driver = open_driver(config, auth=auth)
+    except TunnelError as exc:
+        failed.append(f"Bolt tunnel: {exc}")
+    else:
+        quiet = [NotificationDisabledClassification.DEPRECATION]
+        with driver, driver.session(
+            notifications_disabled_classifications=quiet
+        ) as session:
+            for call, cypher in _APP_USER_APOC_CALLS:
+                try:
+                    session.run(Query(cypher, timeout=60)).consume()
+                except (Neo4jError, DriverError) as exc:
+                    failed.append(f"{call}: Query failed: {exc}")
     if failed:
         detail = "; ".join(failed)
     else:
