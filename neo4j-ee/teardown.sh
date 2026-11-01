@@ -360,9 +360,13 @@ case "${DEPLOYMENT_MODE}" in
             fi
           done
           [ "${owned}" = true ] || FOREIGN="${FOREIGN} eni:${eni}"
+        # Tab is IFS whitespace, so read collapses an empty text field and
+        # shifts the next column left. The '-' fallbacks keep every field
+        # non-empty. The join separator is a raw string, because a backtick
+        # literal parses as JSON and yields an empty separator.
         done < <(aws ec2 describe-network-interfaces --region "${REGION}" \
               --filters "Name=vpc-id,Values=${GUARD_VPC_ID}" \
-              --query 'NetworkInterfaces[].[NetworkInterfaceId,InterfaceType,Description,join(` `, Groups[].GroupId)]' \
+              --query "NetworkInterfaces[].[NetworkInterfaceId,InterfaceType,Description || '-',join(' ', Groups[].GroupId) || '-']" \
               --output text 2>/dev/null || true)
         if [ -n "${FOREIGN}" ]; then
           echo "ERROR: VPC ${GUARD_VPC_ID} holds resources this stack does not own:" >&2
