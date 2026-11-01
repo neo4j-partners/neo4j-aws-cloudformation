@@ -15,6 +15,7 @@ from neo4j import Driver, GraphDatabase
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "neo4j-ee" / "src"))
 from neo4j_ee.outputs import read_outputs, truthy  # noqa: E402
+from neo4j_ee.password import fetch_admin_password  # noqa: E402
 
 
 _REQUIRED_FIELDS_CE = (
@@ -150,17 +151,21 @@ def load_config(
     if bolt_tls_enabled and neo4j_uri.startswith("neo4j://"):
         neo4j_uri = "neo4j+ssc://" + neo4j_uri[len("neo4j://"):]
 
-    password = (
-        password_override
-        if password_override is not None
-        else fields.get("Password", "")
-    )
+    # EE records hold no password. The runner reads the secret the record
+    # names with the operator's AWS credentials and keeps it in memory. CE
+    # records still carry the Password field.
+    if password_override is not None:
+        password = password_override
+    elif fields.get("Neo4jPasswordSecretArn"):
+        password = fetch_admin_password(fields, outputs_path)
+    else:
+        password = fields.get("Password", "")
     if not password and sys.stdin.isatty():
         password = getpass.getpass("Enter neo4j password: ")
     if not password:
         raise ValueError(
-            "No password available. Provide --password or ensure Password is in "
-            f"{outputs_path.name}."
+            "No password available. Provide --password, or ensure "
+            f"{outputs_path.name} has Neo4jPasswordSecretArn or Password."
         )
 
     return StackConfig(

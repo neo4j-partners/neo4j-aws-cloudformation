@@ -609,20 +609,14 @@ Resources:
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
-        # The bastion holds no Neo4j credentials. Operator tools read the
-        # password with the operator's own AWS credentials and connect
-        # through a port-forward tunnel. The SSM parameters are plain String
-        # values, so no KMS grant is needed.
-        - PolicyName: Neo4jBastionConfigAndSessionLogs
+        # The bastion holds no Neo4j credentials and reads no stack
+        # configuration. Operator tools read the password and the SSM
+        # parameters with the operator's own AWS credentials and connect
+        # through a port-forward tunnel.
+        - PolicyName: Neo4jBastionSessionLogs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                  - ssm:GetParametersByPath
-                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/*'
               # Session Manager streams interactive shell sessions to the
               # session log group. The agent calls DescribeLogGroups to
               # confirm the group is encrypted, and that action takes no
@@ -1166,7 +1160,7 @@ Resources:
       TargetGroupARNs:
         - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
@@ -1207,7 +1201,7 @@ Resources:
       TargetGroupARNs:
         - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
@@ -1248,7 +1242,7 @@ Resources:
       TargetGroupARNs:
         - Ref: Neo4jBrowserTargetGroup
         - Ref: Neo4jBoltTargetGroup
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       Tags:
         - Key: StackID
@@ -2561,8 +2555,9 @@ Resources:
       # connection without an SNI server name, and Neo4j's Jetty enforces
       # sniHostCheck (the cert SAN must be AdvertisedDNS), so an HTTPS GET /
       # health probe is answered 400 Invalid SNI and the target never goes
-      # healthy. With HealthCheckType=ELB on the node ASGs that turns into a
-      # permanent ~grace-period self-heal kill loop. A TCP connect is the
+      # healthy, so the NLB would never route to it. The node ASGs use
+      # HealthCheckType EC2, so this check governs NLB routing only and never
+      # replaces an instance. A TCP connect is the
       # strongest check NLB can run here without SNI; the L7 "Neo4j actually
       # serving" assurance is covered by the validate-private conf/TLS audit.
       HealthCheckProtocol: TCP

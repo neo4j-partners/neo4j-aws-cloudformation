@@ -547,8 +547,7 @@ def _audit_nlb_tls(elbv2, config: "StackConfig", reporter: "TestReporter") -> No
         # 7473 must be a TCP health check, not HTTPS: the NLB health
         # checker opens the TLS connection with no SNI, Jetty's
         # sniHostCheck answers an HTTPS GET / probe 400 Invalid SNI, so
-        # the target never goes ELB-healthy. With HealthCheckType=ELB on
-        # the node ASGs that is a permanent self-heal kill loop. An
+        # the target never goes healthy and the NLB never routes to it. An
         # HTTPS health check here is the bug, not the expectation.
         tg_issues.append(
             f"7473 health check {browser.get('HealthCheckProtocol')} != TCP"

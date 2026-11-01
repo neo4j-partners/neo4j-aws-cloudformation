@@ -100,12 +100,20 @@ def resolve_direct_bolt_scheme(fields: dict[str, str]) -> str:
     connection stays on the forwarded port, but it sends no routing context,
     so server-side routing does not apply. A direct connection is safe for
     reads only. A write that lands on a follower fails with NotALeader, so
-    writes need the routed scheme. TLS handling matches
-    ``resolve_bolt_scheme``.
+    writes need the routed scheme.
+
+    With TLS on, the client connects to AdvertisedDNS mapped to 127.0.0.1 in
+    /etc/hosts, so the certificate SAN matches. The scheme is ``bolt+s``,
+    which verifies the chain and the hostname. A record with
+    AutoImportedCertificateArn means deploy.py imported a self-signed
+    certificate, which no system trust store holds, so the scheme is
+    ``bolt+ssc``. Without AdvertisedDNS the stack serves plain Bolt.
     """
-    if fields.get("AdvertisedDNS", ""):
+    if not fields.get("AdvertisedDNS", ""):
+        return "bolt"
+    if fields.get("AutoImportedCertificateArn", ""):
         return "bolt+ssc"
-    return "bolt"
+    return "bolt+s"
 
 
 def require_private_mode(fields: dict[str, str]) -> None:

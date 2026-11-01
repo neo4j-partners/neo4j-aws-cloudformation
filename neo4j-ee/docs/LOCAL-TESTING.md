@@ -27,7 +27,7 @@ This guide covers deploying a test stack from source with `deploy.py`. It applie
 - **Stack name:** The name is always `test-ee-<unix epoch>`. There is no `--stack-name` flag.
 - **Region:** Without `--region`, the script picks a random supported region. Always pass `--region`.
 - **Outputs file:** Results are written to `.deploy/<stack-name>.txt` only after the stack is created successfully. Operator tooling defaults to the most recently modified file there.
-- **Password in plain text:** The script prints the full outputs block, including a `Password = ...` line, and writes the same text to the outputs file. The `.deploy/` directory is gitignored, and `teardown.sh` removes the file. The password is also stored in Secrets Manager at `neo4j/<stack-name>/password`. Do not share terminal logs or the outputs file.
+- **Password location:** The password lives only in Secrets Manager at `neo4j/<stack-name>/password`. The outputs file records its ARN as `Neo4jPasswordSecretArn` and holds no password. The tools fetch the password with your AWS credentials and keep it in memory. The outputs file is written with mode 0600. The `.deploy/` directory is gitignored, and `teardown.sh` removes the file.
 - **Temporary S3 bucket:** The script uploads the template to a temporary bucket and deletes the bucket when it exits.
 - **Failed creates:** Stack creation runs with rollback disabled, and the wait allows 30 minutes. A failed create leaves the stack in `CREATE_FAILED` with its resources still running. See [Tear down](#tear-down).
 

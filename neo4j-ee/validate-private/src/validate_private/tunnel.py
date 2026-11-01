@@ -9,6 +9,7 @@ process.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -139,8 +140,9 @@ class PortForward:
         """Start the tunnel and hold it open until Ctrl-C or SIGTERM.
 
         SIGTERM is handled like Ctrl-C, so the plugin's process group is
-        stopped on every exit path. A port-forward that exits on its own
-        raises TunnelError.
+        stopped on every exit path. The handler stays installed until cleanup
+        returns, and a second interrupt during cleanup is absorbed. A
+        port-forward that exits on its own raises TunnelError.
         """
 
         def _interrupt(_signum: int, _frame: object) -> None:
@@ -155,12 +157,30 @@ class PortForward:
         except KeyboardInterrupt:
             return
         finally:
-            self.close()
+            self._close_on_exit()
             signal.signal(signal.SIGTERM, previous)
         raise TunnelError(
             f"SSM port-forward to {self.remote_host}:{self.remote_port} via "
             f"{self.bastion_id} exited: {detail}"
         )
+
+    def _close_on_exit(self) -> None:
+        """Close the tunnel, absorbing a second Ctrl-C or SIGTERM.
+
+        An interrupt inside close() can leave the plugin running, so the
+        fallback kills its process group outright.
+        """
+        proc = self._proc
+        try:
+            self.close()
+        except KeyboardInterrupt:
+            log.debug("Interrupted during tunnel cleanup; sending SIGKILL")
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            if self._stderr is not None:
+                self._stderr.close()
+                self._stderr = None
 
     def close(self) -> None:
         proc, self._proc = self._proc, None

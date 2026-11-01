@@ -134,20 +134,14 @@
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
-        # The bastion holds no Neo4j credentials. Operator tools read the
-        # password with the operator's own AWS credentials and connect
-        # through a port-forward tunnel. The SSM parameters are plain String
-        # values, so no KMS grant is needed.
-        - PolicyName: Neo4jBastionConfigAndSessionLogs
+        # The bastion holds no Neo4j credentials and reads no stack
+        # configuration. Operator tools read the password and the SSM
+        # parameters with the operator's own AWS credentials and connect
+        # through a port-forward tunnel.
+        - PolicyName: Neo4jBastionSessionLogs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                  - ssm:GetParametersByPath
-                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/*'
               # Session Manager streams interactive shell sessions to the
               # session log group. The agent calls DescribeLogGroups to
               # confirm the group is encrypted, and that action takes no

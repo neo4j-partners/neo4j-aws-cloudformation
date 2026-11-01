@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEPLOY_DIR = SCRIPT_DIR / ".deploy"
@@ -26,6 +28,7 @@ from neo4j_ee.outputs import (  # noqa: E402
     resolve_direct_bolt_scheme,
     resolve_outputs_file,
 )
+from neo4j_ee.password import fetch_admin_password  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--show-password",
         action="store_true",
-        help="Print the Neo4j password to the terminal (default: print where it is stored).",
+        help=(
+            "Fetch the Neo4j password from Secrets Manager and print it "
+            "(default: print the secret ARN)."
+        ),
     )
     return parser.parse_args()
 
@@ -84,9 +90,12 @@ def main() -> None:
         bastion_id = require_field(fields, "Neo4jOperatorBastionId", outputs_file)
         nlb_host = require_field(fields, "Neo4jInternalDNS", outputs_file)
         advertised_dns = require_field(fields, "AdvertisedDNS", outputs_file)
-        password = require_field(fields, "Password", outputs_file)
+        secret_arn = require_field(fields, "Neo4jPasswordSecretArn", outputs_file)
         stack_name = require_field(fields, "StackName", outputs_file)
-    except (FileNotFoundError, ValueError) as exc:
+        password = (
+            fetch_admin_password(fields, outputs_file) if args.show_password else ""
+        )
+    except (FileNotFoundError, ValueError, BotoCoreError, ClientError) as exc:
         raise SystemExit(f"ERROR: {exc}") from exc
     username = fields.get("Username", "neo4j")
     bolt_scheme = resolve_direct_bolt_scheme(fields)
@@ -101,12 +110,15 @@ def main() -> None:
     print(f"  127.0.0.1 {advertised_dns}")
     print()
     print(f"Then open: https://{advertised_dns}:7473")
-    print(f"Bolt URI:  {bolt_scheme}://localhost:7687")
+    print(f"Bolt URI:  {bolt_scheme}://{advertised_dns}:7687")
     print(f"Username: {username}")
     if args.show_password:
         print(f"Password: {password}")
     else:
-        print(f"Password: stored in {outputs_file} (pass --show-password to print it)")
+        print(
+            f"Password: in Secrets Manager at {secret_arn} "
+            "(pass --show-password to print it)"
+        )
     print()
     print("Press Ctrl-C to stop the tunnels.")
     print()

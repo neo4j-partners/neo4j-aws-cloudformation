@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 from pathlib import Path
+import signal
 import sys
 import tempfile
 import types
@@ -25,7 +26,9 @@ from neo4j_ee.outputs import (
     resolve_outputs_file,
     truthy,
 )
+from neo4j_ee.password import fetch_admin_password
 from validate_private.checks import _java_major, _parse_key_value_lines
+from validate_private.tunnel import PortForward
 
 
 class OutputHelperTests(unittest.TestCase):
@@ -93,14 +96,33 @@ class OutputHelperTests(unittest.TestCase):
         # private DNS name, so the scheme is always direct, 1 node or 3.
         self.assertEqual(resolve_direct_bolt_scheme({"NumberOfServers": "1"}), "bolt")
         self.assertEqual(resolve_direct_bolt_scheme({"NumberOfServers": "3"}), "bolt")
+        # A caller-supplied certificate verifies against the system store.
         self.assertEqual(
             resolve_direct_bolt_scheme(
                 {"NumberOfServers": "3", "AdvertisedDNS": "neo4j.example.com"}
             ),
+            "bolt+s",
+        )
+        # The self-signed certificate deploy.py imports verifies against no
+        # trust store, so the tunnel scheme skips verification.
+        self.assertEqual(
+            resolve_direct_bolt_scheme(
+                {
+                    "NumberOfServers": "1",
+                    "AdvertisedDNS": "neo4j.example.com",
+                    "AutoImportedCertificateArn": "arn:aws:acm:::certificate/x",
+                }
+            ),
             "bolt+ssc",
         )
         self.assertEqual(
-            resolve_direct_bolt_scheme({"NumberOfServers": "3", "AdvertisedDNS": ""}),
+            resolve_direct_bolt_scheme(
+                {
+                    "NumberOfServers": "3",
+                    "AdvertisedDNS": "",
+                    "AutoImportedCertificateArn": "x",
+                }
+            ),
             "bolt",
         )
 
@@ -188,6 +210,58 @@ class AmiHelperTests(unittest.TestCase):
         )
 
         self.assertEqual(info.ami_id, "ami-listing")
+
+
+class FetchAdminPasswordTests(unittest.TestCase):
+    def test_reads_the_secret_the_record_names(self) -> None:
+        fields = {"Neo4jPasswordSecretArn": "arn:secret", "Region": "us-east-2"}
+        client = mock.Mock()
+        client.get_secret_value.return_value = {"SecretString": "pw"}
+        with mock.patch("neo4j_ee.password.boto3.client", return_value=client) as make:
+            self.assertEqual(fetch_admin_password(fields, Path("r.txt")), "pw")
+        make.assert_called_once_with("secretsmanager", region_name="us-east-2")
+        client.get_secret_value.assert_called_once_with(SecretId="arn:secret")
+
+    def test_missing_secret_arn_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Neo4jPasswordSecretArn"):
+            fetch_admin_password({"Region": "us-east-1"}, Path("r.txt"))
+
+
+class RunUntilInterruptedTests(unittest.TestCase):
+    def _forward(self) -> PortForward:
+        forward = PortForward("us-east-1", "i-bastion", "nlb.internal", 7687, 7687)
+        forward._proc = mock.Mock(pid=4242)
+        return forward
+
+    def test_sigterm_handler_stays_installed_until_close_returns(self) -> None:
+        forward = self._forward()
+        before = signal.getsignal(signal.SIGTERM)
+        seen = []
+
+        def close() -> None:
+            seen.append(signal.getsignal(signal.SIGTERM))
+            forward._proc = None
+
+        with (
+            mock.patch.object(forward, "start", side_effect=KeyboardInterrupt),
+            mock.patch.object(forward, "close", side_effect=close),
+        ):
+            self.assertIsNone(forward.run_until_interrupted())
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(seen[0], before)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
+
+    def test_second_interrupt_during_cleanup_is_absorbed(self) -> None:
+        forward = self._forward()
+        before = signal.getsignal(signal.SIGTERM)
+        with (
+            mock.patch.object(forward, "start", side_effect=KeyboardInterrupt),
+            mock.patch.object(forward, "close", side_effect=KeyboardInterrupt),
+            mock.patch("validate_private.tunnel.os.killpg") as killpg,
+        ):
+            self.assertIsNone(forward.run_until_interrupted())
+        killpg.assert_called_once_with(4242, signal.SIGKILL)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
 
 
 class ValidatePrivateHelperTests(unittest.TestCase):

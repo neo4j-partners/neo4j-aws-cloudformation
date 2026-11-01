@@ -1658,6 +1658,21 @@ class RenderedTemplateContractTests(unittest.TestCase):
             else {}
         )
 
+    def test_node_asgs_use_ec2_health_checks(self) -> None:
+        # The NLB health check governs routing only. An ELB health check on
+        # the ASG would replace a node whenever Neo4j restarts for longer
+        # than the NLB tolerates, which breaks the rolling restart runbook.
+        for name, doc in self.docs.items():
+            asgs = {
+                logical_id: r
+                for logical_id, r in doc["Resources"].items()
+                if r.get("Type") == "AWS::AutoScaling::AutoScalingGroup"
+            }
+            self.assertEqual(len(asgs), 3, name)
+            for logical_id, r in asgs.items():
+                with self.subTest(template=name, resource=logical_id):
+                    self.assertEqual(r["Properties"]["HealthCheckType"], "EC2")
+
     @staticmethod
     def _launch_template(doc: dict) -> dict:
         return next(
@@ -2720,8 +2735,8 @@ class NlbAndRoutingTests(unittest.TestCase):
                     # Both target groups use a TCP health check. 7473 cannot
                     # use HTTPS: the NLB health checker sends no SNI and
                     # Jetty's sniHostCheck answers GET / with 400 Invalid
-                    # SNI, so the target would never go healthy (kill loop
-                    # under HealthCheckType=ELB). 7687 Bolt is binary.
+                    # SNI, so the target would never go healthy and the NLB
+                    # would never route to it. 7687 Bolt is binary.
                     self.assertEqual(p["HealthCheckProtocol"], "TCP")
                     self.assertNotIn("HealthCheckPath", p)
                     self.assertNotIn("Matcher", p)
@@ -3317,8 +3332,9 @@ class SecurityReviewBatchDTests(unittest.TestCase):
         return [action] if isinstance(action, str) else action
 
     def test_bastion_role_holds_no_credential_grants(self) -> None:
-        # The bastion relays bytes. Operators read the password with their
-        # own credentials, so the bastion role reads no secret and no key.
+        # The bastion relays bytes. Operators read the password and the stack
+        # parameters with their own credentials, so the bastion role reads no
+        # secret, no key and no SSM parameter.
         for name in self.PRIVATE:
             with self.subTest(template=name):
                 role = self.docs[name]["Resources"]["Neo4jBastionRole"]
@@ -3328,14 +3344,15 @@ class SecurityReviewBatchDTests(unittest.TestCase):
                     for action in self._actions(stmt)
                 }
                 self.assertFalse(
-                    {a for a in actions if a.startswith(("secretsmanager:", "kms:"))}
+                    {
+                        a
+                        for a in actions
+                        if a.startswith(("secretsmanager:", "kms:", "ssm:"))
+                    }
                 )
                 self.assertEqual(
                     actions,
                     {
-                        "ssm:GetParameter",
-                        "ssm:GetParameters",
-                        "ssm:GetParametersByPath",
                         "logs:CreateLogStream",
                         "logs:PutLogEvents",
                         "logs:DescribeLogStreams",

@@ -820,7 +820,7 @@ Resources:
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet1
@@ -860,7 +860,7 @@ Resources:
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet2
@@ -900,7 +900,7 @@ Resources:
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet3
@@ -1953,8 +1953,9 @@ Resources:
       # serves. With TLS (UsePublicTLS): TCP, not HTTPS, because the NLB health
       # checker opens the TLS connection without SNI and Neo4j's Jetty
       # sniHostCheck answers an HTTPS GET / probe 400 Invalid SNI, so the
-      # target would never go healthy and (HealthCheckType=ELB on the node
-      # ASGs) the cluster would enter a self-heal kill loop. HealthCheckPath
+      # target would never go healthy and the NLB would never route to it.
+      # The node ASGs use HealthCheckType EC2, so this check governs NLB
+      # routing only and never replaces an instance. HealthCheckPath
       # and Matcher are invalid for a TCP check, so they are present only in
       # the HTTP branch.
       HealthCheckProtocol: !If [UsePublicTLS, TCP, HTTP]

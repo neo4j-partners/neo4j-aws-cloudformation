@@ -27,7 +27,7 @@
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet1
@@ -67,7 +67,7 @@
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet2
@@ -107,7 +107,7 @@
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
-      HealthCheckType: ELB
+      HealthCheckType: EC2
       HealthCheckGracePeriod: 1200
       VPCZoneIdentifier:
         - !Ref Neo4jSubnet3

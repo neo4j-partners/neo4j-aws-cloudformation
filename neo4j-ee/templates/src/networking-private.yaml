@@ -484,8 +484,9 @@
       # connection without an SNI server name, and Neo4j's Jetty enforces
       # sniHostCheck (the cert SAN must be AdvertisedDNS), so an HTTPS GET /
       # health probe is answered 400 Invalid SNI and the target never goes
-      # healthy. With HealthCheckType=ELB on the node ASGs that turns into a
-      # permanent ~grace-period self-heal kill loop. A TCP connect is the
+      # healthy, so the NLB would never route to it. The node ASGs use
+      # HealthCheckType EC2, so this check governs NLB routing only and never
+      # replaces an instance. A TCP connect is the
       # strongest check NLB can run here without SNI; the L7 "Neo4j actually
       # serving" assurance is covered by the validate-private conf/TLS audit.
       HealthCheckProtocol: TCP

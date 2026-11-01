@@ -181,7 +181,7 @@ Use the Bolt tunnel when you want to connect a local driver, client tool, or scr
 uv run scripts/bolt-tunnel.py      # localhost:7687 -> NLB:7687  (blocks; Ctrl-C to close)
 ```
 
-Connect with `bolt://localhost:7687`, or `bolt+ssc://localhost:7687` when the NLB serves the self-signed certificate that `deploy.py` imports by default. Use direct `bolt` mode rather than `neo4j` routing mode from a laptop tunnel because routed mode returns the NLB's internal DNS name, which is not reachable from your laptop.
+Map `AdvertisedDNS` to `127.0.0.1` in `/etc/hosts`, as the script prints, so the certificate SAN matches. Connect with `bolt+s://<AdvertisedDNS>:7687` when the NLB serves a certificate you passed with `--cert-arn`. Connect with `bolt+ssc://<AdvertisedDNS>:7687` when it serves the self-signed certificate that `deploy.py` imports by default. The script prints the right URI. Use direct `bolt` mode rather than `neo4j` routing mode from a laptop tunnel because routed mode returns the NLB's internal DNS name, which is not reachable from your laptop.
 
 The Bolt tunnel is also required alongside the Browser Tunnel when using Neo4j Browser.
 
@@ -196,7 +196,7 @@ uv run browse.py                   # most recent deployment
 uv run browse.py <stack-name>      # specific deployment
 ```
 
-`browse.py` reads `.deploy/<stack-name>.txt`, opens both SSM port-forward tunnels in the same shell, and prints the URL and credentials. Add the `/etc/hosts` line it prints, then open the `https://<AdvertisedDNS>:7473` URL. Press Ctrl+C to close both tunnels.
+`browse.py` reads `.deploy/<stack-name>.txt`, opens both SSM port-forward tunnels in the same shell, and prints the URL and the username. It prints the password secret ARN. With `--show-password` it fetches the password from Secrets Manager with your AWS credentials and prints it. Add the `/etc/hosts` line it prints, then open the `https://<AdvertisedDNS>:7473` URL. Press Ctrl+C to close both tunnels.
 
 **Two-terminal option.** Run from `neo4j-ee/validate-private/`:
 
@@ -405,10 +405,10 @@ Every routing table entry points back to the NLB. A driver connecting with `neo4
 |---|---|---|
 | Same VPC | `neo4j://<nlb-dns>:7687` | Full cluster failover |
 | Peered VPC / Transit Gateway | `neo4j://<nlb-dns>:7687` | NLB DNS resolves to private IPs reachable through the peering route |
-| SSM tunnel | `bolt://localhost:7687` | Skips routing table; reliable for operator access |
+| SSM tunnel | `bolt+s://<AdvertisedDNS>:7687` | Skips routing table; reliable for operator access. Map `AdvertisedDNS` to `127.0.0.1`. Use `bolt+ssc` with the self-signed default certificate. |
 | Direct node IP | `bolt://<node-ip>:7687` | Bypasses NLB; single node, no failover |
 
-**`neo4j://` through an SSM tunnel requires a custom resolver.** Via SSM, the driver connects to `localhost:7687`. The server returns a routing table with the NLB DNS, or `AdvertisedDNS` when the stack creates its private hosted zone. The driver then tries to connect to that address, which resolves to private IPs inside the VPC. Those IPs are not reachable from the operator's laptop. Use `bolt://localhost:7687` for SSM access.
+**`neo4j://` through an SSM tunnel requires a custom resolver.** Via SSM, the driver connects to `localhost:7687`. The server returns a routing table with the NLB DNS, or `AdvertisedDNS` when the stack creates its private hosted zone. The driver then tries to connect to that address, which resolves to private IPs inside the VPC. Those IPs are not reachable from the operator's laptop. Use the direct URI that `bolt-tunnel.py` prints for SSM access.
 
 ### Operator Bastion: NLB Hairpin
 
@@ -582,7 +582,7 @@ cd neo4j-ee/validate-private
 uv run validate-private --stack <stack-name> --suite failover
 ```
 
-The four cases stop and start the Neo4j service with `systemctl` via SSM. The suite terminates no instance itself. Under the current template, each service bounce still triggers an ASG replacement of the node, because Bolt stays down longer than the node ASG's ELB health check tolerates. The ASG activity history records these replacements.
+The four cases stop and start the Neo4j service with `systemctl` via SSM. The suite terminates no instance. The node ASGs replace a node only when EC2 reports the instance impaired. A service restart therefore keeps the node on its instance.
 
 | Case | What it does | Typical runtime |
 |---|---|---|
@@ -606,6 +606,8 @@ Two cases that terminate EC2 instances and wait for ASG replacement:
 | `total-loss` | Terminate all 3 nodes; verify all 3 volumes reattach, sentinel intact | 1200 s |
 
 Each case writes a sentinel file to the data volume before termination and verifies it survives on the replacement instance, confirming `DeletionPolicy: Retain` and NVMe device resolution both work.
+
+The node ASGs use EC2 health checks. The NLB health check governs routing only. A hung Neo4j process therefore keeps its instance. The NLB stops routing to that node until an operator restarts the service.
 
 ### Tear Down
 
@@ -708,7 +710,7 @@ Match the result against each node's server ID. The `server_id` file holds one v
 python3 -c "import uuid; print(uuid.UUID(bytes=open('/var/lib/neo4j/data/server_id','rb').read()[1:]))"
 ```
 
-> **Warning:** Each stop and start in steps 1 and 3 keeps Bolt down longer than the node ASG's ELB health check tolerates. The target group checks TCP every 10 seconds and marks a node unhealthy after 2 failed checks. The ASG then replaces the node. The replacement re-runs the bootstrap, which rewrites `neo4j.conf` with auth enabled. Under the current template, the restarts in this procedure are not safe, and a node can come back with auth enabled partway through.
+> **Note:** The restarts in steps 1 and 3 do not replace the node. The node ASGs replace a node only when EC2 reports the instance impaired. The NLB stops routing to a node while Neo4j is down and resumes once its TCP check passes.
 
 > **Note:** `dbms.security.auth_enabled` may appear multiple times in `neo4j.conf` if the recovery procedure is run more than once. Neo4j 5 treats duplicate keys as a fatal config error and refuses to start. The `sed -i "/dbms.security.auth_enabled/d"` step above removes all occurrences before adding a single clean entry, which prevents this.
 

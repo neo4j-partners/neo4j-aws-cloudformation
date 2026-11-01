@@ -295,18 +295,11 @@ def get_caller_identity(
     return {"Account": resp["Account"], "Arn": resp["Arn"]}
 
 
-def format_record(
-    output_lines: list[str],
-    extra: list[tuple[str, str]],
-    *,
-    secret_keys: tuple[str, ...] = (),
-    mask: str = "",
-) -> str:
-    """Render the deploy record text; secret_keys values are replaced by mask."""
+def format_record(output_lines: list[str], extra: list[tuple[str, str]]) -> str:
+    """Render the deploy record text."""
     lines = list(output_lines)
     for key, value in extra:
-        shown = mask if key in secret_keys else value
-        lines.append(f"{key:<20} = {shown}")
+        lines.append(f"{key:<20} = {value}")
     return "\n".join(lines) + "\n"
 
 
@@ -1036,7 +1029,6 @@ def main() -> None:
     extra = [
         ("StackName", stack_name),
         ("Region", region),
-        ("Password", password),
         ("NumberOfServers", str(args.number_of_servers)),
         ("InstanceType", instance_type),
         ("Edition", "ee"),
@@ -1089,10 +1081,11 @@ def main() -> None:
         extra.append(("AutoCreatedLicenseSecretArns", ",".join(created_license_secret_arns)))
     extra.append(("StackID", stack_data["StackId"]))
 
-    # The password goes to the 0600 record file only, never to the terminal.
-    mask = f"<stored in {outputs_file}, mode 0600>"
-    print(format_record(lines, extra, secret_keys=("Password",), mask=mask), end="")
-    write_record_file(outputs_file, format_record(lines, extra))
+    # The record holds no password. Tools read it from the secret that the
+    # Neo4jPasswordSecretArn output names.
+    record = format_record(lines, extra)
+    print(record, end="")
+    write_record_file(outputs_file, record)
     cleanup_state["license_secret_arns"] = []
     (deploy_dir / f"{stack_name}.failed").unlink(missing_ok=True)
 

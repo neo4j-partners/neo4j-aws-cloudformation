@@ -163,7 +163,7 @@ python build.py --verify
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, secrets, and deployment file |
 | `browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
 | `bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
-| `browse.py` | Opens the Browser and Bolt tunnels and prints the URL and credentials |
+| `browse.py` | Opens the Browser and Bolt tunnels and prints the URL, the username and the password secret ARN |
 | `test-observability.sh` | Observability checks: CloudWatch, logs, flow logs, alarm, CloudTrail |
 | `validate-private/` | Operator tooling for Private and ExistingVpc stacks |
 | `marketplace/` | AMI build and test scripts |
