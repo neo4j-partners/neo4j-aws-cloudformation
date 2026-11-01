@@ -17,6 +17,7 @@ Metadata:
           - InstanceType
           - DataDiskSize
           - DataVolumeKmsKeyId
+          - Node1SnapshotId
       - Label:
           default: "Plugin licensing (Bloom, GDS)"
         Parameters:
@@ -34,11 +35,13 @@ Metadata:
           - CreateVpcEndpoints
           - ExistingEndpointSgId
           - AllowedCIDR
+          - NlbDeletionProtection
       - Label:
           default: "TLS"
         Parameters:
           - CertificateArn
           - AdvertisedDNS
+          - BoltTlsScheme
       - Label:
           default: "Private DNS"
         Parameters:
@@ -120,6 +123,12 @@ Metadata:
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
+      Node1SnapshotId:
+        default: Node 1 Snapshot ID
+      BoltTlsScheme:
+        default: Bolt TLS Scheme
+      NlbDeletionProtection:
+        default: NLB Deletion Protection
 
 Parameters:
   ImageId:
@@ -127,12 +136,12 @@ Parameters:
     Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1
   Password:
     Description: >
-      Password for the neo4j admin user. Must be at least 8 characters
+      Password for the neo4j admin user. Must be at least 12 characters
       and contain only letters and numbers.
     Type: String
-    MinLength: 8
-    AllowedPattern: ^[a-zA-Z0-9]{8,}$
-    ConstraintDescription: Must be at least 8 characters and contain only letters and numbers (no special characters).
+    MinLength: 12
+    AllowedPattern: ^[a-zA-Z0-9]{12,}$
+    ConstraintDescription: Must be at least 12 characters and contain only letters and numbers (no special characters).
     NoEcho: true
   NumberOfServers:
     Description: Number of EC2 instances to deploy
@@ -233,8 +242,22 @@ Parameters:
     Description: >-
       Optional. Snapshot ID to restore Node 1's data volume from. Leave blank
       to create a fresh empty volume. DataDiskSize must be >= the snapshot size.
+      After a restore, the database keeps the users and passwords stored in
+      the snapshot. The password secret this stack creates is then not
+      authoritative for the neo4j user.
     Type: String
     Default: ''
+    AllowedPattern: ^$|^snap-[0-9a-f]{8,17}$
+    ConstraintDescription: Must be blank or an EBS snapshot ID such as snap-0123456789abcdef0.
+  NlbDeletionProtection:
+    Description: >-
+      Set to true to enable deletion protection on the Network Load Balancer.
+      Stack deletion then fails until the attribute is turned off.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   CertificateArn:
     Description: >-
@@ -263,14 +286,13 @@ Parameters:
   BoltTlsScheme:
     Description: >-
       Bolt URL scheme published in /neo4j-ee/<stack>/bolt-url and the
-      Neo4jBoltUrl output. Set to neo4j+s when CertificateArn references a
-      real ACM cert against a real DNS name (production). Default neo4j+ssc
-      tolerates the self-signed cert auto-imported by deploy.py in the test
-      path. Scoped to Private and ExistingVpc; the Public template derives
-      its scheme from UsePublicTLS instead.
+      Neo4jBoltUrl output. The default neo4j+s verifies the certificate.
+      Choose neo4j+ssc only for a self-signed test certificate. Scoped to
+      Private and ExistingVpc; the Public template derives its scheme from
+      UsePublicTLS instead.
     Type: String
     AllowedValues: ['neo4j+s', 'neo4j+ssc']
-    Default: 'neo4j+ssc'
+    Default: 'neo4j+s'
 
   VpcId:
     Type: String
@@ -314,8 +336,8 @@ Parameters:
       Enter the CIDR of your existing VPC, e.g. 10.0.0.0/16 or
       172.16.0.0/12. 0.0.0.0/0 is not accepted.
     Type: String
-    AllowedPattern: ^(?!0\.0\.0\.0\/0)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
-    ConstraintDescription: Must be a valid CIDR range. 0.0.0.0/0 is not accepted.
+    AllowedPattern: ^(?!0\.0\.0\.0\/0)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([89]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: Must be a valid CIDR range with a prefix length of 8 or more. 0.0.0.0/0 is not accepted.
   CreatePrivateDns:
     Type: String
     AllowedValues:
@@ -508,7 +530,6 @@ Conditions:
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
   CreateVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'true']
   UseExistingVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'false']
-  IsSelfSignedTls: !Equals [!Ref BoltTlsScheme, 'neo4j+ssc']
 
 Resources:
   Neo4jInstanceProfile:
@@ -529,7 +550,7 @@ Resources:
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
         - PolicyName: Neo4jPolicy
           PolicyDocument:
@@ -542,12 +563,17 @@ Resources:
               - Effect: Allow
                 Action:
                   - autoscaling:DescribeAutoScalingGroups
-                  - cloudformation:DescribeStack*
-                  - cloudformation:SignalResource
                   - ec2:DescribeInstances
                   - ec2:DescribeVolumes
                   - ec2:DescribeTags
                 Resource: "*"
+              # cfn-init reads this stack's metadata and cfn-signal signals
+              # this stack's resources. Neither needs any other stack.
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStack*
+                  - cloudformation:SignalResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
               # Two-statement form: volume-side enforces StackID+Role,
               # instance-side enforces StackID. Both conditions must be
               # satisfied for an attach to succeed.
@@ -569,7 +595,7 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
               - !If
                 - BloomEnabledAndLicensed
                 - Effect: Allow
@@ -588,6 +614,12 @@ Resources:
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource: !Ref Neo4jPasswordSecret
+              # The password secrets use the stack key. The key policy allows
+              # data-plane use only through Secrets Manager.
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt Neo4jStackKey.Arn
 
   Neo4jBastionRole:
     Type: AWS::IAM::Role
@@ -600,7 +632,7 @@ Resources:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
         - PolicyName: Neo4jBastionSecretAndConfigRead
           PolicyDocument:
@@ -611,6 +643,10 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: !Ref Neo4jPasswordSecret
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt Neo4jStackKey.Arn
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
@@ -713,33 +749,6 @@ Resources:
       IpProtocol: tcp
       FromPort: 7688
       ToPort: 7688
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
-  Neo4jInternalSGIngress2003:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 2003
-      ToPort: 2003
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
-  Neo4jInternalSGIngress2004:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 2004
-      ToPort: 2004
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
-  Neo4jInternalSGIngress3637:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 3637
-      ToPort: 3637
       SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
 
   Neo4jBastionSecurityGroup:
@@ -1317,7 +1326,7 @@ Resources:
                   local gdsLicenseSecretArn="$4"
                   echo "Configuring plugin settings in neo4j.conf..."
                   if [[ "${installBloom}" == "true" ]]; then
-                    set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom,semantics.extension=/rdf"
+                    set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom"
                     if [[ -n "${bloomLicenseSecretArn}" ]]; then
                       set_neo4j_conf dbms.bloom.license_file /var/lib/neo4j/licenses/neo4j-bloom.license
                     fi
@@ -1555,8 +1564,8 @@ Resources:
                 server.metrics.prefix=neo4j
                 server.metrics.filter=*
                 server.metrics.csv.interval=5s
-                internal.dbms.cypher_ip_blocklist=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.169.0/24,fc00::/7,fe80::/10,ff00::/8
-                dbms.security.procedures.unrestricted=gds.*,apoc.*,bloom.*
+                internal.dbms.cypher_ip_blocklist=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.169.0/24,169.254.0.0/16,127.0.0.0/8,0.0.0.0/8,100.64.0.0/10,::1/128,fc00::/7,fe80::/10,ff00::/8
+                dbms.security.procedures.unrestricted=gds.*,bloom.*
                 dbms.security.http_auth_allowlist=/,/browser.*,/bloom.*
                 dbms.security.procedures.allowlist=apoc.*,gds.*,bloom.*
                 dbms.databases.seed_from_uri_providers=CloudSeedProvider,ServerSeedProvider
@@ -1583,6 +1592,7 @@ Resources:
         MetadataOptions:
           HttpTokens: required
           HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
         UserData:
           Fn::Base64:
             !Join
@@ -1707,6 +1717,7 @@ Resources:
       MetadataOptions:
         HttpTokens: required
         HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -1813,6 +1824,7 @@ Resources:
 
   Neo4jNetworkLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: Neo4jNlbAccessLogsBucketPolicy
     # PrivateSubnet2Id/3Id are optional String params (Default '') used only by
     # the CreateCluster branch of Subnets below. cfn-lint resolves the empty
     # default into a subnet-typed slot and emits W1030 even though the single
@@ -1842,6 +1854,14 @@ Resources:
       LoadBalancerAttributes:
         - Key: load_balancing.cross_zone.enabled
           Value: "true"
+        - Key: deletion_protection.enabled
+          Value: !Ref NlbDeletionProtection
+        - Key: access_logs.s3.enabled
+          Value: "true"
+        - Key: access_logs.s3.bucket
+          Value: !Ref Neo4jNlbAccessLogsBucket
+        - Key: access_logs.s3.prefix
+          Value: nlb
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -1973,10 +1993,13 @@ Resources:
 
   Neo4jPasswordSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub 'neo4j/${AWS::StackName}/password'
       Description: !Sub 'Neo4j admin password for stack ${AWS::StackName}'
       SecretString: !Ref Password
+      KmsKeyId: !Ref Neo4jStackKey
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2085,14 +2108,6 @@ Resources:
       Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
       Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. In-VPC apps use this directly; no scheme derivation required.
 
-  Neo4jConfigTlsSelfSignedParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub '/neo4j-ee/${AWS::StackName}/tls-self-signed'
-      Type: String
-      Value: !If [IsSelfSignedTls, 'true', 'false']
-      Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use (BoltTlsScheme=neo4j+s). Consumers that hit the HTTPS Query API directly read this to decide whether to skip TLS verification.
-
   Neo4jConfigHttpsUrlParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -2117,11 +2132,105 @@ Resources:
       Value: !If [CreateVpcEndpoints, !GetAtt VpcEndpointSecurityGroup.GroupId, !Ref ExistingEndpointSgId]
       Description: Security group ID on all interface VPC endpoints. In-VPC apps add this as an ingress rule source so their SG can reach SSM, Secrets Manager, and CloudWatch Logs via PrivateLink.
 
+  # ---------------------------------------------------------------------------
+  # Stack KMS key. Encrypts the password secrets, the log groups and the
+  # alert topic. Retained with the data volumes and the password secrets so
+  # a retained secret stays readable after stack deletion.
+  # Administration is delegated to IAM in this account. Data-plane use by
+  # account principals is allowed only through Secrets Manager, so a reader
+  # needs both secretsmanager:GetSecretValue and an IAM kms:Decrypt grant.
+  # ---------------------------------------------------------------------------
+  Neo4jStackKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub 'KMS key for Neo4j secrets, logs and alerts in stack ${AWS::StackName}'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: '*'
+          - Sid: AllowSecretsManagerUseInAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com'
+                kms:CallerAccount: !Ref AWS::AccountId
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/*'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vpc/flowlogs/${AWS::StackName}'
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
   Neo4jFlowLogsGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/vpc/flowlogs/${AWS::StackName}'
       RetentionInDays: 90
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jFlowLogsIAMRole:
     Type: AWS::IAM::Role
@@ -2164,45 +2273,26 @@ Resources:
     Properties:
       LogGroupName: !Sub '/neo4j/${AWS::StackName}/application'
       RetentionInDays: 90
-
-  Neo4jAlertTopicKey:
-    Type: AWS::KMS::Key
-    Condition: HasAlertEmail
-    Properties:
-      Description: !Sub 'KMS key for Neo4j alert topic ${AWS::StackName}'
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: EnableAccountAdministration
-            Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
-            Action: 'kms:*'
-            Resource: '*'
-          - Sid: AllowCloudWatchAlarms
-            Effect: Allow
-            Principal:
-              Service: cloudwatch.amazonaws.com
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey*
-            Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-              ArnLike:
-                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
-    Condition: HasAlertEmail
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
-      KmsMasterKeyId: !Ref Neo4jAlertTopicKey
-      Subscription:
-        - Protocol: email
-          Endpoint: !Ref AlertEmail
+      KmsMasterKeyId: !Ref Neo4jStackKey
+
+  Neo4jAlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref Neo4jAlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
 
   Neo4jFailedAuthMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -2217,7 +2307,6 @@ Resources:
 
   Neo4jFailedAuthAlarm:
     Type: AWS::CloudWatch::Alarm
-    Condition: HasAlertEmail
     Properties:
       AlarmName: !Sub 'Neo4j-FailedAuth-${AWS::StackName}'
       AlarmDescription: 'Neo4j authentication failures exceeded 10 in a 5-minute window'
@@ -2231,6 +2320,80 @@ Resources:
       AlarmActions:
         - !Ref Neo4jAlertTopic
       TreatMissingData: notBreaching
+
+  # ---------------------------------------------------------------------------
+  # NLB access logs. The NLB writes a log entry for each TLS connection.
+  # Retained on stack deletion so the audit trail outlives the stack;
+  # teardown.sh --delete-volumes empties and deletes it.
+  # ---------------------------------------------------------------------------
+  Neo4jNlbAccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jNlbAccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Neo4jNlbAccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt Neo4jNlbAccessLogsBucket.Arn
+              - !Sub '${Neo4jNlbAccessLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt Neo4jNlbAccessLogsBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${Neo4jNlbAccessLogsBucket.Arn}/nlb/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
 
 Outputs:
   Neo4jBastionSecurityGroupId:
@@ -2247,9 +2410,6 @@ Outputs:
   Neo4jHttpsUrl:
     Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
     Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
-  Neo4jTlsSelfSigned:
-    Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use. HTTPS Query API consumers key TLS skip-verify off this flag.
-    Value: !GetAtt Neo4jConfigTlsSelfSignedParameter.Value
   Neo4jPrivateDnsHostedZoneId:
     Condition: CreatePrivateDns
     Description: Route 53 private hosted zone ID containing AdvertisedDNS.
@@ -2305,11 +2465,10 @@ Outputs:
     Description: >-
       SSM Parameter Store path prefix for non-secret stack configuration.
       Entries: vpc-id, nlb-dns, advertised-dns, bolt-url, https-url,
-      tls-self-signed, private-dns-hosted-zone-id, private-dns-record,
-      region, stack-name, private-subnet-1-id, private-route-table-1-id,
-      private-subnet-2-id, password-secret-arn, external-sg-id,
-      vpc-endpoint-sg-id. In-VPC apps read from here instead of the
-      operator's local .deploy/<stack>.txt file.
+      private-dns-hosted-zone-id, private-dns-record, region, stack-name,
+      private-subnet-1-id, private-route-table-1-id, private-subnet-2-id,
+      password-secret-arn, external-sg-id, vpc-endpoint-sg-id. In-VPC apps
+      read from here instead of the operator's local .deploy/<stack>.txt file.
     Value: !Sub '/neo4j-ee/${AWS::StackName}/'
   Username:
     Description: 'The username is neo4j.'
@@ -2318,13 +2477,11 @@ Outputs:
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
   Neo4jAlertTopicArn:
-    Condition: HasAlertEmail
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic
   VpcFlowLogGroupName:
     Description: CloudWatch Logs log group for VPC flow logs
     Value: !Ref Neo4jFlowLogsGroup
   FailedAuthAlarmName:
-    Condition: HasAlertEmail
     Description: CloudWatch alarm name for Neo4j failed authentication events
     Value: !Ref Neo4jFailedAuthAlarm

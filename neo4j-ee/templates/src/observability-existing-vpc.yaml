@@ -1,8 +1,102 @@
+  # ---------------------------------------------------------------------------
+  # Stack KMS key. Encrypts the password secrets, the log groups and the
+  # alert topic. Retained with the data volumes and the password secrets so
+  # a retained secret stays readable after stack deletion.
+  # Administration is delegated to IAM in this account. Data-plane use by
+  # account principals is allowed only through Secrets Manager, so a reader
+  # needs both secretsmanager:GetSecretValue and an IAM kms:Decrypt grant.
+  # ---------------------------------------------------------------------------
+  Neo4jStackKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub 'KMS key for Neo4j secrets, logs and alerts in stack ${AWS::StackName}'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: '*'
+          - Sid: AllowSecretsManagerUseInAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com'
+                kms:CallerAccount: !Ref AWS::AccountId
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/*'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vpc/flowlogs/${AWS::StackName}'
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
   Neo4jFlowLogsGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/vpc/flowlogs/${AWS::StackName}'
       RetentionInDays: 90
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jFlowLogsIAMRole:
     Type: AWS::IAM::Role
@@ -45,45 +139,26 @@
     Properties:
       LogGroupName: !Sub '/neo4j/${AWS::StackName}/application'
       RetentionInDays: 90
-
-  Neo4jAlertTopicKey:
-    Type: AWS::KMS::Key
-    Condition: HasAlertEmail
-    Properties:
-      Description: !Sub 'KMS key for Neo4j alert topic ${AWS::StackName}'
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: EnableAccountAdministration
-            Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
-            Action: 'kms:*'
-            Resource: '*'
-          - Sid: AllowCloudWatchAlarms
-            Effect: Allow
-            Principal:
-              Service: cloudwatch.amazonaws.com
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey*
-            Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-              ArnLike:
-                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Neo4j-*-${AWS::StackName}'
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
-    Condition: HasAlertEmail
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
-      KmsMasterKeyId: !Ref Neo4jAlertTopicKey
-      Subscription:
-        - Protocol: email
-          Endpoint: !Ref AlertEmail
+      KmsMasterKeyId: !Ref Neo4jStackKey
+
+  Neo4jAlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref Neo4jAlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
 
   Neo4jFailedAuthMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -98,7 +173,6 @@
 
   Neo4jFailedAuthAlarm:
     Type: AWS::CloudWatch::Alarm
-    Condition: HasAlertEmail
     Properties:
       AlarmName: !Sub 'Neo4j-FailedAuth-${AWS::StackName}'
       AlarmDescription: 'Neo4j authentication failures exceeded 10 in a 5-minute window'
@@ -112,3 +186,77 @@
       AlarmActions:
         - !Ref Neo4jAlertTopic
       TreatMissingData: notBreaching
+
+  # ---------------------------------------------------------------------------
+  # NLB access logs. The NLB writes a log entry for each TLS connection.
+  # Retained on stack deletion so the audit trail outlives the stack;
+  # teardown.sh --delete-volumes empties and deletes it.
+  # ---------------------------------------------------------------------------
+  Neo4jNlbAccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jNlbAccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Neo4jNlbAccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt Neo4jNlbAccessLogsBucket.Arn
+              - !Sub '${Neo4jNlbAccessLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt Neo4jNlbAccessLogsBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${Neo4jNlbAccessLogsBucket.Arn}/nlb/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'

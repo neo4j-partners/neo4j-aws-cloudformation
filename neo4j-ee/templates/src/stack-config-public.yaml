@@ -1,9 +1,12 @@
   Neo4jPasswordSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub 'neo4j/${AWS::StackName}/password'
       Description: !Sub 'Neo4j admin password for stack ${AWS::StackName}'
       SecretString: !Ref Password
+      KmsKeyId: !Ref Neo4jStackKey
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -65,14 +68,6 @@
           - 'http://${NlbDns}:7474'
           - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
       Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
-
-  Neo4jConfigTlsSelfSignedParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub '/neo4j-ee/${AWS::StackName}/tls-self-signed'
-      Type: String
-      Value: 'false'
-      Description: Always 'false' on Public. Public stacks use either a real ACM cert (UsePublicTLS=true) or no TLS at all, so there is never a self-signed cert to skip-verify. Published for contract uniformity with the Private and ExistingVpc templates.
 
   Neo4jConfigNumberOfServersParameter:
     Type: AWS::SSM::Parameter

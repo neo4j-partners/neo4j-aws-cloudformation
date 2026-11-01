@@ -12,6 +12,7 @@
           - InstanceType
           - DataDiskSize
           - DataVolumeKmsKeyId
+          - Node1SnapshotId
       - Label:
           default: "Plugin licensing (Bloom, GDS)"
         Parameters:
@@ -20,10 +21,16 @@
           - InstallGDS
           - GdsLicenseSecretArn
       - Label:
+          default: "Network"
+        Parameters:
+          - AvailabilityZones
+          - NlbDeletionProtection
+      - Label:
           default: "TLS"
         Parameters:
           - CertificateArn
           - AdvertisedDNS
+          - BoltTlsScheme
       - Label:
           default: "Private DNS"
         Parameters:
@@ -94,3 +101,11 @@
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
+      Node1SnapshotId:
+        default: Node 1 Snapshot ID
+      BoltTlsScheme:
+        default: Bolt TLS Scheme
+      AvailabilityZones:
+        default: Availability Zones
+      NlbDeletionProtection:
+        default: NLB Deletion Protection

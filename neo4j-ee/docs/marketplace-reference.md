@@ -77,7 +77,7 @@ AllowedCIDR:
   ConstraintDescription: The value 0.0.0.0/0 is not permitted.
 ```
 
-The NLB security group applies this CIDR to Neo4j Browser and Bolt ports. The current templates use 7474 for Browser and 7687 for Bolt. The instance-facing external security group accepts those ports only from the NLB security group. Intra-cluster ports (5000, 6000, 7000, 7688, 2003, 2004, 3637) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
+The NLB security group applies this CIDR to Neo4j Browser and Bolt ports. The current templates use 7474 for Browser and 7687 for Bolt. The instance-facing external security group accepts those ports only from the NLB security group. Intra-cluster ports (5000, 6000, 7000, 7688) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
 
 ### IAM least privilege
 

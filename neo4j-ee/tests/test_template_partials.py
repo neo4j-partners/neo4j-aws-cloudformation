@@ -306,7 +306,7 @@ class ShellPartialTests(unittest.TestCase):
                 calls = set_log.read_text()
                 if want_class:
                     self.assertIn(
-                        "server.unmanaged_extension_classes=com.neo4j.bloom.server=/bloom,semantics.extension=/rdf",
+                        "server.unmanaged_extension_classes=com.neo4j.bloom.server=/bloom",
                         calls,
                     )
                 else:
@@ -1228,9 +1228,10 @@ _EXPECTED_BASE_CONF = {
     "server.metrics.csv.interval": "5s",
     "internal.dbms.cypher_ip_blocklist": (
         "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,"
-        "169.254.169.0/24,fc00::/7,fe80::/10,ff00::/8"
+        "169.254.169.0/24,169.254.0.0/16,127.0.0.0/8,0.0.0.0/8,"
+        "100.64.0.0/10,::1/128,fc00::/7,fe80::/10,ff00::/8"
     ),
-    "dbms.security.procedures.unrestricted": "gds.*,apoc.*,bloom.*",
+    "dbms.security.procedures.unrestricted": "gds.*,bloom.*",
     "dbms.security.http_auth_allowlist": "/,/browser.*,/bloom.*",
     "dbms.security.procedures.allowlist": "apoc.*,gds.*,bloom.*",
     "dbms.databases.seed_from_uri_providers": "CloudSeedProvider,ServerSeedProvider",
@@ -1731,7 +1732,6 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "number-of-servers",
             "region",
             "stack-name",
-            "tls-self-signed",
         }
         ssm, keys_to_logical = self._ssm_keys_to_logical("public")
         self.assertEqual(set(keys_to_logical), expected_keys)
@@ -1777,10 +1777,19 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "password-secret-arn",
             "external-sg-id",
             "vpc-endpoint-sg-id",
-            "tls-self-signed",
+            "public-subnet-1-id",
+            "public-subnet-2-id",
+            "public-subnet-3-id",
         }
         ssm, keys_to_logical = self._ssm_keys_to_logical("private")
         self.assertEqual(set(keys_to_logical), expected_keys)
+
+        # Public subnet 1 always exists; subnets 2 and 3 only on a cluster.
+        self.assertNotIn("Condition", ssm[keys_to_logical["public-subnet-1-id"]])
+        for key in ("public-subnet-2-id", "public-subnet-3-id"):
+            self.assertEqual(
+                ssm[keys_to_logical[key]].get("Condition"), "CreateCluster"
+            )
 
         # Private/ExistingVpc enforce AdvertisedDNS non-empty via
         # rules-tls-required.yaml, so bolt-url and https-url use it
@@ -1820,7 +1829,6 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "password-secret-arn",
             "external-sg-id",
             "vpc-endpoint-sg-id",
-            "tls-self-signed",
         }
         ssm, keys_to_logical = self._ssm_keys_to_logical("existing_vpc")
         self.assertEqual(set(keys_to_logical), expected_keys)
@@ -1835,27 +1843,17 @@ class RenderedTemplateContractTests(unittest.TestCase):
         )
 
     @unittest.skipUnless(yaml is not None, "pyyaml is required")
-    def test_tls_self_signed_value_resolves_from_bolt_tls_scheme(self) -> None:
-        # Private and ExistingVpc derive tls-self-signed from BoltTlsScheme via
-        # the IsSelfSignedTls condition. Public is never self-signed (real ACM
-        # cert or no TLS), so it publishes the literal 'false' for contract
-        # uniformity. Consumers key TLS skip-verify off this single SSM value
-        # rather than parsing the bolt URL scheme.
-        for template_name in ("private", "existing_vpc"):
+    def test_tls_self_signed_contract_is_removed(self) -> None:
+        # Security review item 14 dropped tls-self-signed. Consumers verify the
+        # NLB certificate against the published CA instead of skipping
+        # verification, so no template may publish the flag again.
+        for template_name in ("private", "public", "existing_vpc"):
             with self.subTest(template=template_name):
-                ssm, keys_to_logical = self._ssm_keys_to_logical(template_name)
-                value = ssm[keys_to_logical["tls-self-signed"]]["Properties"]["Value"]
-                self.assertEqual(
-                    value, {"Fn::If": ["IsSelfSignedTls", "true", "false"]}
-                )
-                conditions = self.docs[template_name].get("Conditions", {})
-                self.assertEqual(
-                    conditions.get("IsSelfSignedTls"),
-                    {"Fn::Equals": [{"Ref": "BoltTlsScheme"}, "neo4j+ssc"]},
-                )
-        ssm, keys_to_logical = self._ssm_keys_to_logical("public")
-        public_value = ssm[keys_to_logical["tls-self-signed"]]["Properties"]["Value"]
-        self.assertEqual(public_value, "false")
+                _ssm, keys_to_logical = self._ssm_keys_to_logical(template_name)
+                self.assertNotIn("tls-self-signed", keys_to_logical)
+                doc = self.docs[template_name]
+                self.assertNotIn("IsSelfSignedTls", doc.get("Conditions", {}))
+                self.assertNotIn("Neo4jTlsSelfSigned", doc.get("Outputs", {}))
 
     @unittest.skipUnless(yaml is not None, "pyyaml is required")
     def test_bolt_tls_scheme_parameter_scoped_to_private_templates(self) -> None:
@@ -1874,7 +1872,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
                     sorted(param["AllowedValues"]),
                     ["neo4j+s", "neo4j+ssc"],
                 )
-                self.assertEqual(param["Default"], "neo4j+ssc")
+                self.assertEqual(param["Default"], "neo4j+s")
         public_params = self.docs["public"].get("Parameters", {})
         self.assertNotIn("BoltTlsScheme", public_params)
 
@@ -1885,11 +1883,6 @@ class RenderedTemplateContractTests(unittest.TestCase):
                 outputs = self.docs[template_name].get("Outputs", {})
                 self.assertIn("Neo4jBoltUrl", outputs)
                 self.assertIn("Neo4jHttpsUrl", outputs)
-                self.assertIn("Neo4jTlsSelfSigned", outputs)
-                self.assertEqual(
-                    outputs["Neo4jTlsSelfSigned"]["Value"],
-                    {"Fn::GetAtt": "Neo4jConfigTlsSelfSignedParameter.Value"},
-                )
                 # Old Public-only names must not survive the rename.
                 self.assertNotIn("Neo4jURI", outputs)
                 self.assertNotIn("Neo4jBrowserURL", outputs)
@@ -1927,8 +1920,9 @@ class RenderedTemplateContractTests(unittest.TestCase):
 
 # Actions permitted on Resource: "*" in an instance role: read-only verbs
 # (AWS does not support resource-level scoping on Describe/List/Get), plus a
-# small set of documented non-readonly exceptions.
-_WILDCARD_RESOURCE_EXCEPTIONS = {"cloudformation:SignalResource"}
+# set of documented non-readonly exceptions. The set is empty since
+# cloudformation:SignalResource was scoped to the stack ARN.
+_WILDCARD_RESOURCE_EXCEPTIONS: set[str] = set()
 
 
 def _allowed_on_wildcard_resource(action: str) -> bool:
@@ -1942,6 +1936,11 @@ REQUIRED_BLOCKLIST_CIDRS = (
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    "169.254.0.0/16",
+    "127.0.0.0/8",
+    "0.0.0.0/8",
+    "100.64.0.0/10",
+    "::1/128",
     "fc00::/7",
     "fe80::/10",
     "ff00::/8",
@@ -2083,6 +2082,35 @@ class RenderedTemplateSecurityTests(unittest.TestCase):
                                 )
                                 self.assertIn("Ref", resource)
                                 self.assertNotEqual(resource.get("Ref"), "*")
+
+    def test_cloudformation_actions_are_scoped_to_this_stack(self) -> None:
+        # Security review M8: a node may describe and signal only its own
+        # stack, so every cloudformation statement names the stack ARN.
+        expected = {
+            "Fn::Sub": "arn:${AWS::Partition}:cloudformation:${AWS::Region}:"
+            "${AWS::AccountId}:stack/${AWS::StackName}/*"
+        }
+        for name in self.docs:
+            with self.subTest(template=name):
+                role = self._resources(name)["Neo4jRole"]
+                found = False
+                for policy in role["Properties"].get("Policies", []):
+                    statements = policy["PolicyDocument"]["Statement"]
+                    for stmt in flatten_policy_statements(statements):
+                        actions = stmt.get("Action", [])
+                        if isinstance(actions, str):
+                            actions = [actions]
+                        if any(a.startswith("cloudformation:") for a in actions):
+                            found = True
+                            self.assertEqual(stmt.get("Resource"), expected)
+                self.assertTrue(found, f"{name}: no cloudformation statement")
+
+    def test_arns_use_the_partition_pseudo_parameter(self) -> None:
+        # Security review M8: a literal arn:aws: prefix breaks GovCloud and
+        # China partitions, so every ARN goes through ${AWS::Partition}.
+        for name, body in self.text.items():
+            with self.subTest(template=name):
+                self.assertNotIn("arn:aws:", body)
 
     def test_conditional_secret_grants_stay_wrapped_in_conditions(self) -> None:
         for name in self.docs:
@@ -2438,6 +2466,124 @@ class BuildVerifyTests(unittest.TestCase):
                     committed,
                     f"{spec.filename} is stale; run templates/build.py",
                 )
+
+
+
+@unittest.skipUnless(yaml is not None, "pyyaml is required for structural tests")
+class SecurityReviewHardeningTests(unittest.TestCase):
+    """Locks the template-level fixes from security-review.md batch A."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = _assemble_all_templates()
+        cls.docs = {name: load_cfn(body) for name, body in cls.text.items()}
+
+    def _resources_of_type(self, name: str, rtype: str) -> dict[str, dict]:
+        return {
+            rn: r
+            for rn, r in self.docs[name]["Resources"].items()
+            if r.get("Type") == rtype
+        }
+
+    def test_every_launch_template_sets_hop_limit_one(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                lts = self._resources_of_type(name, "AWS::EC2::LaunchTemplate")
+                self.assertTrue(lts)
+                for rn, lt in lts.items():
+                    meta = lt["Properties"]["LaunchTemplateData"]["MetadataOptions"]
+                    self.assertEqual(meta.get("HttpPutResponseHopLimit"), 1, rn)
+
+    def test_allowed_cidr_rejects_prefixes_shorter_than_eight(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                param = self.docs[name]["Parameters"]["AllowedCIDR"]
+                pattern = re.compile(param["AllowedPattern"])
+                for ok in ("10.0.0.0/8", "203.0.113.7/32", "192.168.0.0/16"):
+                    self.assertIsNotNone(pattern.fullmatch(ok), ok)
+                for bad in ("0.0.0.0/0", "10.0.0.0/7", "1.0.0.0/1", "10.0.0.0"):
+                    self.assertIsNone(pattern.fullmatch(bad), bad)
+
+    def test_password_parameter_requires_twelve_characters(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                pattern = re.compile(
+                    self.docs[name]["Parameters"]["Password"]["AllowedPattern"]
+                )
+                self.assertIsNone(pattern.fullmatch("a" * 11))
+                self.assertIsNotNone(pattern.fullmatch("a" * 12))
+
+    def test_password_secret_is_retained_and_uses_the_stack_key(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                secret = self.docs[name]["Resources"]["Neo4jPasswordSecret"]
+                self.assertEqual(secret.get("DeletionPolicy"), "Retain")
+                self.assertEqual(secret.get("UpdateReplacePolicy"), "Retain")
+                self.assertEqual(
+                    secret["Properties"].get("KmsKeyId"), {"Ref": "Neo4jStackKey"}
+                )
+                key = self.docs[name]["Resources"]["Neo4jStackKey"]
+                self.assertNotIn("Condition", key)
+                self.assertEqual(key.get("DeletionPolicy"), "Retain")
+                self.assertTrue(key["Properties"].get("EnableKeyRotation"))
+
+    def test_log_groups_are_encrypted_with_the_stack_key(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                groups = self._resources_of_type(name, "AWS::Logs::LogGroup")
+                self.assertTrue(groups)
+                for rn, group in groups.items():
+                    self.assertEqual(
+                        group["Properties"].get("KmsKeyId"),
+                        {"Fn::GetAtt": "Neo4jStackKey.Arn"},
+                        rn,
+                    )
+
+    def test_failed_auth_alarm_is_unconditional(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                resources = self.docs[name]["Resources"]
+                self.assertNotIn("Condition", resources["Neo4jFailedAuthAlarm"])
+                self.assertNotIn("Condition", resources["Neo4jAlertTopic"])
+                self.assertEqual(
+                    resources["Neo4jAlertEmailSubscription"].get("Condition"),
+                    "HasAlertEmail",
+                )
+
+    def test_nlb_writes_access_logs_and_exposes_deletion_protection(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                nlbs = self._resources_of_type(
+                    name, "AWS::ElasticLoadBalancingV2::LoadBalancer"
+                )
+                self.assertEqual(len(nlbs), 1)
+                (nlb,) = nlbs.values()
+                attrs = {
+                    a["Key"]: a["Value"]
+                    for a in nlb["Properties"]["LoadBalancerAttributes"]
+                }
+                self.assertEqual(attrs["access_logs.s3.enabled"], "true")
+                self.assertEqual(
+                    attrs["access_logs.s3.bucket"],
+                    {"Ref": "Neo4jNlbAccessLogsBucket"},
+                )
+                self.assertEqual(
+                    attrs["deletion_protection.enabled"],
+                    {"Ref": "NlbDeletionProtection"},
+                )
+                bucket = self.docs[name]["Resources"]["Neo4jNlbAccessLogsBucket"]
+                props = bucket["Properties"]
+                self.assertIn("BucketEncryption", props)
+                block = props["PublicAccessBlockConfiguration"]
+                self.assertTrue(all(block.values()))
+                rules = props["LifecycleConfiguration"]["Rules"]
+                self.assertEqual(rules[0]["ExpirationInDays"], 90)
+
+    def test_removed_monitoring_ports_stay_closed(self) -> None:
+        for name, body in self.text.items():
+            with self.subTest(template=name):
+                for port in (2003, 2004, 3637):
+                    self.assertNotIn(f"FromPort: {port}", body)
 
 
 if __name__ == "__main__":

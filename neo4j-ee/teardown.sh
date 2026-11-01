@@ -8,8 +8,11 @@
 #   ./teardown.sh [--delete-volumes] [--expected-account <id>] [stack-name]
 #
 # If stack-name is omitted, uses the most recently modified file in .deploy/.
-# --delete-volumes: after stack deletion, permanently delete the retained EBS
-#   data volumes. Without this flag the volumes are printed but left intact.
+# --delete-volumes: after stack deletion, permanently delete everything the
+#   stack retains: the EBS data volumes, the password secrets, the NLB
+#   access-log bucket and the stack KMS key. The key is scheduled for deletion
+#   with the 7-day minimum window. Without this flag they are printed but left
+#   intact.
 # --expected-account: stop unless the credentials resolve to this 12-digit
 #   account id. Defaults to EXPECTED_AWS_ACCOUNT.
 
@@ -299,6 +302,99 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# Step 0a: Refuse to delete a VPC that other stacks still use
+#
+# Public and Private stacks create their VPC. Another stack, such as Hume, can
+# place security groups and instances in it. Deleting this stack first would
+# strand those resources and leave the VPC delete stuck. Any security group
+# or ENI in the VPC that this stack does not own blocks the teardown. The
+# default security group and NAT gateway ENIs are exempt, because the VPC and
+# the stack's NAT gateways own them.
+# ---------------------------------------------------------------------------
+STACK_RESOURCES=$(aws cloudformation describe-stack-resources \
+  --stack-name "${STACK_NAME}" --region "${REGION}" \
+  --query 'StackResources[].[LogicalResourceId,ResourceType,PhysicalResourceId]' \
+  --output text 2>/dev/null || true)
+
+stack_physical_ids_of_type() {
+  local rtype="$1"
+  [ -n "${STACK_RESOURCES}" ] || return 0
+  awk -F'\t' -v t="${rtype}" '$2 == t && $3 != "" && $3 != "None" { print $3 }' \
+    <<< "${STACK_RESOURCES}"
+}
+
+case "${DEPLOYMENT_MODE}" in
+  Public|Private)
+    if [ -n "${STACK_ID}" ]; then
+      GUARD_VPC_ID=$(discover_stack_vpc)
+      if [ -n "${GUARD_VPC_ID}" ]; then
+        STACK_SGS=" $(stack_physical_ids_of_type 'AWS::EC2::SecurityGroup' | tr '\n' ' ') "
+        # The NLB names its ENIs "ELB net/<name>/<id>" after its own ARN.
+        STACK_NLB_DESCS=" $(stack_physical_ids_of_type 'AWS::ElasticLoadBalancingV2::LoadBalancer' \
+          | sed 's|^.*:loadbalancer/|ELB_|' | tr '\n' ' ') "
+        FOREIGN=""
+        for sg in $(aws ec2 describe-security-groups --region "${REGION}" \
+              --filters "Name=vpc-id,Values=${GUARD_VPC_ID}" \
+              --query "SecurityGroups[?GroupName!='default'].GroupId" \
+              --output text 2>/dev/null || true); do
+          [[ "${STACK_SGS}" == *" ${sg} "* ]] || FOREIGN="${FOREIGN} sg:${sg}"
+        done
+        while IFS=$'\t' read -r eni itype desc groups; do
+          [ -n "${eni}" ] || continue
+          [ "${itype}" = "nat_gateway" ] && continue
+          [[ "${STACK_NLB_DESCS}" == *" ${desc/ELB /ELB_} "* ]] && continue
+          owned=false
+          for g in ${groups}; do
+            if [[ "${STACK_SGS}" == *" ${g} "* ]]; then
+              owned=true
+            else
+              owned=false
+              break
+            fi
+          done
+          [ "${owned}" = true ] || FOREIGN="${FOREIGN} eni:${eni}"
+        done < <(aws ec2 describe-network-interfaces --region "${REGION}" \
+              --filters "Name=vpc-id,Values=${GUARD_VPC_ID}" \
+              --query 'NetworkInterfaces[].[NetworkInterfaceId,InterfaceType,Description,join(` `, Groups[].GroupId)]' \
+              --output text 2>/dev/null || true)
+        if [ -n "${FOREIGN}" ]; then
+          echo "ERROR: VPC ${GUARD_VPC_ID} holds resources this stack does not own:" >&2
+          for item in ${FOREIGN}; do
+            echo "  ${item}" >&2
+          done
+          echo "Delete the stack that uses this VPC first, then re-run teardown." >&2
+          exit 1
+        fi
+      fi
+    fi
+    ;;
+  *)
+    : # ExistingVpc or unknown mode: the caller owns the VPC
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Step 0b: Record the resources the stack retains on delete
+#
+# The password secrets, the NLB access-log bucket and the stack KMS key carry
+# DeletionPolicy: Retain. Their physical IDs come from the stack before it is
+# deleted. On a re-run the stack is gone, so the StackID tag finds them.
+# ---------------------------------------------------------------------------
+RETAINED_SECRETS=$(stack_physical_ids_of_type 'AWS::SecretsManager::Secret')
+RETAINED_BUCKETS=$(stack_physical_ids_of_type 'AWS::S3::Bucket')
+RETAINED_KEYS=$(stack_physical_ids_of_type 'AWS::KMS::Key')
+if [ -z "${STACK_RESOURCES}" ] && [ -n "${STACK_ID}" ]; then
+  TAGGED=$(aws resourcegroupstaggingapi get-resources --region "${REGION}" \
+    --tag-filters "Key=StackID,Values=${STACK_ID}" \
+    --resource-type-filters secretsmanager:secret s3 kms:key \
+    --query 'ResourceTagMappingList[].ResourceARN' \
+    --output text 2>/dev/null | tr '\t' '\n' || true)
+  RETAINED_SECRETS=$(grep ':secretsmanager:' <<< "${TAGGED}" || true)
+  RETAINED_BUCKETS=$(grep ':s3:::' <<< "${TAGGED}" | sed 's/^arn:[^:]*:s3:::\(.*\)$/\1/' || true)
+  RETAINED_KEYS=$(grep ':kms:' <<< "${TAGGED}" || true)
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: Delete the CloudFormation stack
 # ---------------------------------------------------------------------------
 echo "Deleting stack ${STACK_NAME}..."
@@ -378,22 +474,6 @@ if [ -n "${SSM_PARAM_PATH}" ]; then
     --name "${SSM_PARAM_PATH}" 2>/dev/null || true
   echo "SSM parameter deleted."
 fi
-
-# ---------------------------------------------------------------------------
-# Step 2b: Force-delete the Neo4j password secret (Private mode only)
-#
-# The stack owns AWS::SecretsManager::Secret at neo4j/<stack-name>/password.
-# CFN's stack delete schedules the secret for deletion with a 30-day recovery
-# window, which blocks re-deploying the same stack name until the window
-# expires. Force-delete purges it immediately. --force-delete-without-recovery
-# works on secrets already in "scheduled deletion" state, so running this
-# after stack delete is safe and idempotent.
-# ---------------------------------------------------------------------------
-PASSWORD_SECRET_NAME="neo4j/${STACK_NAME}/password"
-echo ""
-echo "Force-deleting password secret ${PASSWORD_SECRET_NAME} (if present)..."
-force_delete_secret "${PASSWORD_SECRET_NAME}"
-echo "Password secret cleanup done."
 
 # ---------------------------------------------------------------------------
 # Step 2c: Delete the auto-imported self-signed ACM certificate
@@ -495,6 +575,60 @@ if [ -n "${STACK_ID}" ]; then
     while IFS=$'\t' read -r vol_id size az created; do
       echo "  ${vol_id}  ${size}GB  ${az}  created ${created}"
     done <<< "${VOLUME_IDS}"
+    echo ""
+    echo "To delete: ./teardown.sh --delete-volumes ${STACK_NAME}"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2f: Handle the retained secrets, log bucket and stack KMS key
+#
+# These survive stack deletion so that a deleted stack never loses its
+# credentials or its audit trail by accident. --delete-volumes removes them.
+# Secrets go first, then the bucket, then the key the secrets were encrypted
+# with. KMS enforces a 7-day minimum wait before a key is gone.
+# ---------------------------------------------------------------------------
+if [ -n "${RETAINED_SECRETS}${RETAINED_BUCKETS}${RETAINED_KEYS}" ]; then
+  echo ""
+  if [ "${DELETE_VOLUMES}" = true ]; then
+    echo "Deleting retained secrets, log bucket and stack key..."
+    for secret_id in ${RETAINED_SECRETS}; do
+      echo "  Secret ${secret_id}"
+      force_delete_secret "${secret_id}"
+    done
+    for bucket in ${RETAINED_BUCKETS}; do
+      echo "  Bucket ${bucket}"
+      if ! aws s3 rm "s3://${bucket}" --recursive --region "${REGION}" >/dev/null \
+          || ! aws s3api delete-bucket --bucket "${bucket}" --region "${REGION}"; then
+        BUCKET_ERR=$(aws s3api head-bucket --bucket "${bucket}" --region "${REGION}" 2>&1 || true)
+        if [[ "${BUCKET_ERR}" != *"Not Found"* && "${BUCKET_ERR}" != *"404"* ]]; then
+          echo "  WARNING: Could not delete bucket ${bucket}. Check the S3 console."
+          TEARDOWN_FAILED=true
+        fi
+      fi
+    done
+    for key_id in ${RETAINED_KEYS}; do
+      KEY_STATE=$(aws kms describe-key --key-id "${key_id}" --region "${REGION}" \
+        --query 'KeyMetadata.KeyState' --output text 2>/dev/null || echo "Missing")
+      case "${KEY_STATE}" in
+        PendingDeletion|Missing)
+          echo "  Key ${key_id} is already ${KEY_STATE}."
+          ;;
+        *)
+          echo "  Key ${key_id} (scheduled for deletion in 7 days)"
+          if ! aws kms schedule-key-deletion --key-id "${key_id}" \
+              --pending-window-in-days 7 --region "${REGION}" >/dev/null; then
+            echo "  WARNING: Could not schedule deletion of key ${key_id}."
+            TEARDOWN_FAILED=true
+          fi
+          ;;
+      esac
+    done
+  else
+    echo "Retained secrets, log bucket and stack key (not deleted, pass --delete-volumes to remove):"
+    for item in ${RETAINED_SECRETS} ${RETAINED_BUCKETS} ${RETAINED_KEYS}; do
+      echo "  ${item}"
+    done
     echo ""
     echo "To delete: ./teardown.sh --delete-volumes ${STACK_NAME}"
   fi

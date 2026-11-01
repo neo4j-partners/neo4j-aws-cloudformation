@@ -84,7 +84,7 @@ configure_plugin_settings() {
   local gdsLicenseSecretArn="$4"
   echo "Configuring plugin settings in neo4j.conf..."
   if [[ "${installBloom}" == "true" ]]; then
-    set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom,semantics.extension=/rdf"
+    set_neo4j_conf server.unmanaged_extension_classes "com.neo4j.bloom.server=/bloom"
     if [[ -n "${bloomLicenseSecretArn}" ]]; then
       set_neo4j_conf dbms.bloom.license_file /var/lib/neo4j/licenses/neo4j-bloom.license
     fi

@@ -21,4 +21,3 @@
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
   CreateVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'true']
   UseExistingVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, 'false']
-  IsSelfSignedTls: !Equals [!Ref BoltTlsScheme, 'neo4j+ssc']

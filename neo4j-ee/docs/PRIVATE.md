@@ -408,7 +408,7 @@ Either mitigation alone closes the observed failure. Both ship together so the t
 
 The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that applications and operator tooling can wire themselves up without knowing stack internals. `uv run preflight` validates both groups on every run.
 
-**Contract parameters** — required; all six must exist:
+**Contract parameters** — required; all five must exist:
 
 | Parameter | Purpose |
 |---|---|
@@ -417,7 +417,6 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 | `/neo4j-ee/<stack>/external-sg-id` | Security group that accepts client/app ingress on 7473 and 7687 |
 | `/neo4j-ee/<stack>/password-secret-arn` | Secrets Manager ARN for the Neo4j password |
 | `/neo4j-ee/<stack>/vpc-endpoint-sg-id` | Security group attached to the VPC interface endpoints |
-| `/neo4j-ee/<stack>/tls-self-signed` | `true` when the NLB serves the self-signed cert auto-imported by `deploy.py`; `false` for real ACM certs. HTTPS Query API consumers key TLS skip-verify off this flag |
 
 **Operational parameters** — informational:
 

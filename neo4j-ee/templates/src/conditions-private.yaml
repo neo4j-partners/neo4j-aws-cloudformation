@@ -19,4 +19,4 @@
   GdsEnabledAndLicensed: !And
     - !Equals [!Ref InstallGDS, 'true']
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
-  IsSelfSignedTls: !Equals [!Ref BoltTlsScheme, 'neo4j+ssc']
+  HasAvailabilityZones: !Not [!Equals [!Join ['', !Ref AvailabilityZones], '']]

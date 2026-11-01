@@ -12,9 +12,6 @@
   Neo4jHttpsUrl:
     Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
     Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
-  Neo4jTlsSelfSigned:
-    Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use. HTTPS Query API consumers key TLS skip-verify off this flag.
-    Value: !GetAtt Neo4jConfigTlsSelfSignedParameter.Value
   Neo4jPrivateDnsHostedZoneId:
     Condition: CreatePrivateDns
     Description: Route 53 private hosted zone ID containing AdvertisedDNS.
@@ -70,11 +67,10 @@
     Description: >-
       SSM Parameter Store path prefix for non-secret stack configuration.
       Entries: vpc-id, nlb-dns, advertised-dns, bolt-url, https-url,
-      tls-self-signed, private-dns-hosted-zone-id, private-dns-record,
-      region, stack-name, private-subnet-1-id, private-route-table-1-id,
-      private-subnet-2-id, password-secret-arn, external-sg-id,
-      vpc-endpoint-sg-id. In-VPC apps read from here instead of the
-      operator's local .deploy/<stack>.txt file.
+      private-dns-hosted-zone-id, private-dns-record, region, stack-name,
+      private-subnet-1-id, private-route-table-1-id, private-subnet-2-id,
+      password-secret-arn, external-sg-id, vpc-endpoint-sg-id. In-VPC apps
+      read from here instead of the operator's local .deploy/<stack>.txt file.
     Value: !Sub '/neo4j-ee/${AWS::StackName}/'
   Username:
     Description: 'The username is neo4j.'
@@ -83,13 +79,11 @@
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
   Neo4jAlertTopicArn:
-    Condition: HasAlertEmail
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic
   VpcFlowLogGroupName:
     Description: CloudWatch Logs log group for VPC flow logs
     Value: !Ref Neo4jFlowLogsGroup
   FailedAuthAlarmName:
-    Condition: HasAlertEmail
     Description: CloudWatch alarm name for Neo4j failed authentication events
     Value: !Ref Neo4jFailedAuthAlarm

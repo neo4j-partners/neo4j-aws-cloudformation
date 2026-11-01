@@ -1,9 +1,12 @@
   Neo4jPasswordSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub 'neo4j/${AWS::StackName}/password'
       Description: !Sub 'Neo4j admin password for stack ${AWS::StackName}'
       SecretString: !Ref Password
+      KmsKeyId: !Ref Neo4jStackKey
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -96,6 +99,32 @@
       Value: !Ref Neo4jPrivateSubnet2
       Description: Second private subnet ID (Lambda / reference app placement).
 
+  Neo4jConfigPublicSubnet1Parameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/public-subnet-1-id'
+      Type: String
+      Value: !Ref Neo4jSubnet1
+      Description: First public subnet ID (NAT gateway subnet; in-VPC load balancer placement).
+
+  Neo4jConfigPublicSubnet2Parameter:
+    Type: AWS::SSM::Parameter
+    Condition: CreateCluster
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/public-subnet-2-id'
+      Type: String
+      Value: !Ref Neo4jSubnet2
+      Description: Second public subnet ID (NAT gateway subnet; in-VPC load balancer placement).
+
+  Neo4jConfigPublicSubnet3Parameter:
+    Type: AWS::SSM::Parameter
+    Condition: CreateCluster
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/public-subnet-3-id'
+      Type: String
+      Value: !Ref Neo4jSubnet3
+      Description: Third public subnet ID (NAT gateway subnet; in-VPC load balancer placement).
+
   Neo4jConfigPasswordSecretArnParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -111,14 +140,6 @@
       Type: String
       Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
       Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. In-VPC apps use this directly; no scheme derivation required.
-
-  Neo4jConfigTlsSelfSignedParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub '/neo4j-ee/${AWS::StackName}/tls-self-signed'
-      Type: String
-      Value: !If [IsSelfSignedTls, 'true', 'false']
-      Description: Set to true when the NLB serves the self-signed cert auto-imported by deploy.py (BoltTlsScheme=neo4j+ssc); false when a real ACM cert is in use (BoltTlsScheme=neo4j+s). Consumers that hit the HTTPS Query API directly read this to decide whether to skip TLS verification.
 
   Neo4jConfigHttpsUrlParameter:
     Type: AWS::SSM::Parameter

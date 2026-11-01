@@ -3,12 +3,12 @@
     Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1
   Password:
     Description: >
-      Password for the neo4j admin user. Must be at least 8 characters
+      Password for the neo4j admin user. Must be at least 12 characters
       and contain only letters and numbers.
     Type: String
-    MinLength: 8
-    AllowedPattern: ^[a-zA-Z0-9]{8,}$
-    ConstraintDescription: Must be at least 8 characters and contain only letters and numbers (no special characters).
+    MinLength: 12
+    AllowedPattern: ^[a-zA-Z0-9]{12,}$
+    ConstraintDescription: Must be at least 12 characters and contain only letters and numbers (no special characters).
     NoEcho: true
   NumberOfServers:
     Description: Number of EC2 instances to deploy
@@ -109,5 +109,19 @@
     Description: >-
       Optional. Snapshot ID to restore Node 1's data volume from. Leave blank
       to create a fresh empty volume. DataDiskSize must be >= the snapshot size.
+      After a restore, the database keeps the users and passwords stored in
+      the snapshot. The password secret this stack creates is then not
+      authoritative for the neo4j user.
     Type: String
     Default: ''
+    AllowedPattern: ^$|^snap-[0-9a-f]{8,17}$
+    ConstraintDescription: Must be blank or an EBS snapshot ID such as snap-0123456789abcdef0.
+  NlbDeletionProtection:
+    Description: >-
+      Set to true to enable deletion protection on the Network Load Balancer.
+      Stack deletion then fails until the attribute is turned off.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'

@@ -34,7 +34,6 @@ _CONTRACT_PARAMS = (
     "external-sg-id",
     "password-secret-arn",
     "vpc-endpoint-sg-id",
-    "tls-self-signed",
 )
 _BASE_OPERATIONAL_PARAMS = ("region", "stack-name", "private-subnet-1-id")
 _INTERFACE_ENDPOINTS = ("secretsmanager", "logs", "ssm", "ssmmessages")

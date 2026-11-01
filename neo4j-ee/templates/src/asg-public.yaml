@@ -157,4 +157,5 @@
         MetadataOptions:
           HttpTokens: required
           HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
         # __USERDATA__

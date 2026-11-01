@@ -358,6 +358,50 @@ in-VPC client and the deploy script exits non-zero on any hard failure
 self-signed certificate is a supported mode. A negative result is a real
 finding, never papered over.
 
+### AD-5: Stack data is encrypted with a stack key and retained on delete
+
+Every stack creates one customer-managed KMS key, `Neo4jStackKey`, with
+rotation on. It encrypts the password secret, both CloudWatch log groups and
+the alert SNS topic. The key exists on every deploy, so no encryption path
+depends on an optional parameter.
+
+**The key policy delegates use to IAM, never to a bare account grant.** The
+account-root statement holds key management actions only. Secrets Manager use
+goes through a root statement conditioned on `kms:ViaService` for Secrets
+Manager in the stack region and on `kms:CallerAccount`. A principal also needs
+an IAM `kms:Decrypt` grant on the key to read a secret. `Neo4jRole` carries
+that grant. CloudWatch Logs gets its own statement, limited by an `ArnLike`
+condition on `kms:EncryptionContext:aws:logs:arn` to the stack's
+`/neo4j/<stack>/*` and `/aws/vpc/flowlogs/<stack>` groups.
+
+**Credentials and the audit trail survive a stack delete.** The password
+secret, the stack key and the NLB access-log bucket carry
+`DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`. A stack delete
+therefore never destroys a credential or the access record by accident. The
+key is retained with the secret, so a retained secret stays readable.
+`teardown.sh --delete-volumes` removes all three after the stack is gone. It
+force-deletes the secrets, empties and deletes the bucket, and schedules the
+key for deletion with the 7-day minimum window. Without the flag, teardown
+prints their identifiers.
+
+**The NLB writes access logs.** The log bucket uses SSE-S3, blocks public
+access, enforces bucket-owner object ownership and expires objects after
+90 days. Its policy denies any request without TLS. Log delivery may write
+only under `nlb/AWSLogs/<account>/`. `preserve_client_ip` stays at its
+default.
+
+**The failed-auth alarm and its topic always exist.** Only the email
+subscription depends on `AlertEmail`. A stack without an email address still
+records alarm state.
+
+**Instance metadata is reachable only from the instance itself.** Every
+launch template, including the operator bastion, sets
+`HttpPutResponseHopLimit: 1` alongside `HttpTokens: required`. A container or
+forwarded hop cannot obtain an IMDSv2 token.
+
+**There is no `tls-self-signed` flag.** No template publishes a parameter or
+output that tells a client to skip certificate verification.
+
 ---
 
 ## 6. The AMI / Template / UserData / Bootstrap Split
@@ -379,10 +423,14 @@ Private Existing VPC.
 
 `internal.dbms.cypher_ip_blocklist` is the single most protected key in the
 system. Its value in `neo4j-base.conf` covers the IMDS credential range
-(`169.254.169.0/24`), the RFC1918 VPC-internal ranges (`10.0.0.0/8`,
-`172.16.0.0/12`, `192.168.0.0/16`), and the IPv6 unique-local and link-local
-ranges. Removing it would let any Cypher user steal the instance IAM role
-credentials and pivot into the VPC.
+`169.254.169.0/24` and the full IPv4 link-local range `169.254.0.0/16`. It
+covers the RFC1918 VPC-internal ranges `10.0.0.0/8`, `172.16.0.0/12` and
+`192.168.0.0/16`. It covers loopback `127.0.0.0/8` and `::1/128`, the
+"this network" range `0.0.0.0/8`, and the shared address space
+`100.64.0.0/10`. It also covers the IPv6 unique-local, link-local and
+multicast ranges. Removing it would let any Cypher user steal the instance IAM
+role credentials and pivot into the VPC. The loopback ranges stop Cypher from
+reaching the local Neo4j HTTP and Bolt listeners.
 
 It is enforced at four independent layers:
 
@@ -469,6 +517,11 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-13 | The Browser target group uses an L7 health check (`HTTPS` for TLS, `HTTP` for Public plain) against `/` with a `200` matcher; the Bolt target group uses `TCP` (AD-4) | `NlbAndRoutingTests.test_private_existing_listeners_and_tgs_are_tls` |
 | NFR-14 | `openssl` is baked into the AMI and never `dnf`-installed on the boot path (AD-4) | `test_create_ami_bakes_openssl`, `test_configure_tls_does_not_install_packages_at_boot` |
 | NFR-15 | Bolt advertises `AdvertisedDNS` only when `boltAdvertiseDns` is `true`: Private under `CreatePrivateDnsHostedZone`, ExistingVpc under `CreatePrivateDns`, never on Public; otherwise it advertises the NLB DNS (AD-4) | `RenderedTemplateContractTests.test_bolt_advertise_dns_reaches_userdata_on_private_templates_only`, `ShellPartialTests.test_configure_tls_bolt_advertises_advertised_dns_when_resolvable`, `test_configure_tls_generates_certs_and_sets_keys` |
+| NFR-16 | `Neo4jStackKey` is unconditional, rotated and retained; the password secret is retained and encrypted with it; both log groups use it (AD-5) | `SecurityReviewHardeningTests.test_password_secret_is_retained_and_uses_the_stack_key`, `test_log_groups_are_encrypted_with_the_stack_key` |
+| NFR-17 | The NLB writes access logs to an encrypted, private, 90-day bucket; deletion protection is a parameter; the failed-auth alarm and topic are unconditional (AD-5) | `SecurityReviewHardeningTests.test_nlb_writes_access_logs_and_exposes_deletion_protection`, `test_failed_auth_alarm_is_unconditional` |
+| NFR-18 | Every launch template sets `HttpPutResponseHopLimit: 1` (AD-5) | `SecurityReviewHardeningTests.test_every_launch_template_sets_hop_limit_one` |
+| NFR-19 | `cloudformation:*` grants name the stack ARN; no ARN in any template hard-codes the `aws` partition | `RenderedTemplateSecurityTests.test_cloudformation_actions_are_scoped_to_this_stack`, `test_arns_use_the_partition_pseudo_parameter` |
+| NFR-20 | No template publishes `tls-self-signed` or the `IsSelfSignedTls` condition (AD-5) | `RenderedTemplateContractTests.test_tls_self_signed_contract_is_removed` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

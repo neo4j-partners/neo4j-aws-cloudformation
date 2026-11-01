@@ -59,10 +59,12 @@ cfn-lint templates/neo4j-private-existing-vpc.template.yaml   # clean; W1030 sco
 # self-signed ACM cert is auto-imported (clients use neo4j+ssc://). Public is
 # plain TCP unless: ./deploy.py --mode Public --enable-public-tls --cert-arn <arn> --advertised-dns <dns>
 
-# Tear down (EBS data volumes are DeletionPolicy: Retain by design)
+# Tear down. EBS data volumes, password secrets, the stack KMS key and the NLB
+# log bucket are DeletionPolicy: Retain by design. Teardown refuses while
+# another stack still has security groups or ENIs in a stack-created VPC.
 ./teardown.sh                    # most recent deployment
 ./teardown.sh <stack-name>
-./teardown.sh --delete-volumes   # also delete retained EBS volumes
+./teardown.sh --delete-volumes   # also delete the retained volumes, secrets, log bucket; schedule key deletion
 
 # AMI (Marketplace: AWS_PROFILE=marketplace; local iteration: AMI_BUILD_MODE=iteration AWS_PROFILE=default)
 ./marketplace/create-ami.sh      # writes marketplace/ami-id.txt
@@ -90,7 +92,7 @@ The `--suite release` run plus `preflight` is the post-release gate; the full pr
 
 ## Security Invariant: `internal.dbms.cypher_ip_blocklist`
 
-The single most protected key. In `templates/src/neo4j-base.conf` it covers `169.254.169.0/24` (IMDS credential exfiltration), `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (VPC SSRF), and the IPv6 unique-local/link-local ranges. Removing it lets any Cypher user steal the instance IAM role credentials and pivot into the VPC. Enforced at four independent layers: source file → build-time contract test (`Neo4jBaseConfTests`, `RenderedTemplateContractTests`) → runtime fail-closed `assert_security_invariant` (presence-only; **do not widen to content validation**) → post-deploy G3 conf-key audit in `validate-private`.
+The single most protected key. In `templates/src/neo4j-base.conf` it covers `169.254.169.0/24` and `169.254.0.0/16` (IMDS credential exfiltration), `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (VPC SSRF), loopback `127.0.0.0/8` and `::1/128`, `0.0.0.0/8`, and the IPv6 unique-local/link-local/multicast ranges. Removing it lets any Cypher user steal the instance IAM role credentials and pivot into the VPC. Enforced at four independent layers: source file → build-time contract test (`Neo4jBaseConfTests`, `RenderedTemplateContractTests`) → runtime fail-closed `assert_security_invariant` (presence-only; **do not widen to content validation**) → post-deploy G3 conf-key audit in `validate-private`.
 
 ## AMI Lifecycle Invariant
 

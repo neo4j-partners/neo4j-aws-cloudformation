@@ -21,10 +21,10 @@
     Properties:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone:
-        Fn::Select:
-          - 0
-          - Fn::GetAZs: !Ref 'AWS::Region'
+      AvailabilityZone: !If
+        - HasAvailabilityZones
+        - !Select [0, !Ref AvailabilityZones]
+        - !Select [0, !GetAZs '']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -40,10 +40,10 @@
     Properties:
       CidrBlock: 10.0.2.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone:
-        Fn::Select:
-          - 1
-          - Fn::GetAZs: !Ref 'AWS::Region'
+      AvailabilityZone: !If
+        - HasAvailabilityZones
+        - !Select [1, !Ref AvailabilityZones]
+        - !Select [1, !GetAZs '']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -59,10 +59,10 @@
     Properties:
       CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone:
-        Fn::Select:
-          - 2
-          - Fn::GetAZs: !Ref 'AWS::Region'
+      AvailabilityZone: !If
+        - HasAvailabilityZones
+        - !Select [2, !Ref AvailabilityZones]
+        - !Select [2, !GetAZs '']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -134,7 +134,9 @@
   # ---------------------------------------------------------------------------
 
   Neo4jNetworkLoadBalancer:
-    DependsOn: Neo4jInternetGatewayAttachment
+    DependsOn:
+      - Neo4jInternetGatewayAttachment
+      - Neo4jNlbAccessLogsBucketPolicy
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       IpAddressType: ipv4
@@ -154,6 +156,14 @@
       LoadBalancerAttributes:
         - Key: load_balancing.cross_zone.enabled
           Value: "true"
+        - Key: deletion_protection.enabled
+          Value: !Ref NlbDeletionProtection
+        - Key: access_logs.s3.enabled
+          Value: "true"
+        - Key: access_logs.s3.bucket
+          Value: !Ref Neo4jNlbAccessLogsBucket
+        - Key: access_logs.s3.prefix
+          Value: nlb
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'

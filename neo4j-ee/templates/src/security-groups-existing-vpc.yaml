@@ -89,33 +89,6 @@
       ToPort: 7688
       SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
 
-  Neo4jInternalSGIngress2003:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 2003
-      ToPort: 2003
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
-  Neo4jInternalSGIngress2004:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 2004
-      ToPort: 2004
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
-  Neo4jInternalSGIngress3637:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-      IpProtocol: tcp
-      FromPort: 3637
-      ToPort: 3637
-      SourceSecurityGroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
-
   Neo4jBastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:

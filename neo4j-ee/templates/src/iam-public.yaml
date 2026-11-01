@@ -16,7 +16,7 @@
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
         - PolicyName: Neo4jPolicy
           PolicyDocument:
@@ -29,12 +29,17 @@
               - Effect: Allow
                 Action:
                   - autoscaling:DescribeAutoScalingGroups
-                  - cloudformation:DescribeStack*
-                  - cloudformation:SignalResource
                   - ec2:DescribeInstances
                   - ec2:DescribeVolumes
                   - ec2:DescribeTags
                 Resource: "*"
+              # cfn-init reads this stack's metadata and cfn-signal signals
+              # this stack's resources. Neither needs any other stack.
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStack*
+                  - cloudformation:SignalResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
               # Two-statement form: volume-side enforces StackID+Role,
               # instance-side enforces StackID. Both conditions must be
               # satisfied for an attach to succeed.
@@ -56,7 +61,7 @@
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
               - !If
                 - BloomEnabledAndLicensed
                 - Effect: Allow
@@ -75,3 +80,9 @@
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource: !Ref Neo4jPasswordSecret
+              # The password secrets use the stack key. The key policy allows
+              # data-plane use only through Secrets Manager.
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt Neo4jStackKey.Arn

@@ -14,6 +14,7 @@
       MetadataOptions:
         HttpTokens: required
         HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -120,6 +121,7 @@
 
   Neo4jNetworkLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: Neo4jNlbAccessLogsBucketPolicy
     # PrivateSubnet2Id/3Id are optional String params (Default '') used only by
     # the CreateCluster branch of Subnets below. cfn-lint resolves the empty
     # default into a subnet-typed slot and emits W1030 even though the single
@@ -149,6 +151,14 @@
       LoadBalancerAttributes:
         - Key: load_balancing.cross_zone.enabled
           Value: "true"
+        - Key: deletion_protection.enabled
+          Value: !Ref NlbDeletionProtection
+        - Key: access_logs.s3.enabled
+          Value: "true"
+        - Key: access_logs.s3.bucket
+          Value: !Ref Neo4jNlbAccessLogsBucket
+        - Key: access_logs.s3.prefix
+          Value: nlb
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
