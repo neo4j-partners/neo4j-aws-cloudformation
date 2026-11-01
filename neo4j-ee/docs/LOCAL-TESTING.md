@@ -166,7 +166,7 @@ Public stays plain TCP unless you pass `--enable-public-tls --cert-arn <acm-arn>
 
 ### Private DNS
 
-Private DNS is off by default. The advertised name resolves nowhere, and tooling reaches the cluster through the SSM bastion.
+With no `--advertised-dns`, a Private or Existing VPC deploy creates a private hosted zone named after the invented name `neo4j-<stack-name>.neo4j.local`. The stack adds an alias record for that name at the zone apex. Each stack gets its own zone, so several stacks can share one VPC. Pass `--no-create-private-dns` or `--advertised-dns` to opt out. Without a private record, the advertised name resolves nowhere, and tooling reaches the cluster through the SSM bastion.
 
 To create a Route 53 private record for the advertised name, pass `--create-private-dns` with one of these:
 

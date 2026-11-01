@@ -162,7 +162,9 @@ def parse_args() -> argparse.Namespace:
                    help="DNS name placed in the cert SAN, the Neo4j advertised "
                         "addresses, and (when --create-private-dns) the Route 53 "
                         "record. Defaults to neo4j-<stack>.neo4j.local for the "
-                        "self-signed test path.")
+                        "self-signed test path. That default also creates a "
+                        "private hosted zone of the same name for the stack "
+                        "unless --no-create-private-dns is set.")
     p.add_argument("--enable-public-tls", action="store_true",
                    help="Public mode only: enable TLS (requires --cert-arn and "
                         "--advertised-dns). Without it, Public stays plain TCP.")
@@ -171,7 +173,10 @@ def parse_args() -> argparse.Namespace:
                         "record mapping AdvertisedDNS to the NLB.")
     p.add_argument("--no-create-private-dns", dest="create_private_dns",
                    action="store_false",
-                   help="Disable the Route 53 private DNS record (the default).")
+                   help="Disable the Route 53 private DNS record. Without it, "
+                        "a Private/ExistingVpc deploy with no --advertised-dns "
+                        "creates one in a private zone named after the "
+                        "invented name.")
     p.add_argument("--private-dns-zone", metavar="ZONE_NAME", default="",
                    help="Private hosted zone name to create when "
                         "--create-private-dns is set and no hosted zone ID is given.")
@@ -413,14 +418,15 @@ def resolve_tls_plan(
     cert_arn: str,
     advertised_dns: str,
     enable_public_tls: bool,
-    create_private_dns: bool,
+    create_private_dns: bool | None,
     private_dns_zone: str,
     private_dns_hosted_zone_id: str,
 ) -> TlsPlan:
     """Resolve the TLS plan and validate flag combinations (no AWS calls).
 
     Raises ``ValueError`` for any invalid combination so callers fail before
-    uploading a template or creating a stack.
+    uploading a template or creating a stack. ``create_private_dns`` is None
+    when the operator left it unset; an explicit False always opts out.
     """
     cert_arn = cert_arn or ""
     advertised_dns = advertised_dns or ""
@@ -459,6 +465,18 @@ def resolve_tls_plan(
         )
 
     # Private / ExistingVpc: TLS is mandatory.
+    if not advertised_dns:
+        advertised_dns = f"neo4j-{stack_name}.neo4j.local"
+        # Nothing else resolves the invented name. Give the stack its own
+        # private zone named after it, with the alias record at the apex.
+        # Route 53 rejects two same-named zones on one VPC, so a per-stack
+        # zone name lets several stacks share an existing VPC.
+        if create_private_dns is None and not (
+            private_dns_zone or private_dns_hosted_zone_id
+        ):
+            create_private_dns = True
+            private_dns_zone = advertised_dns
+    create_private_dns = bool(create_private_dns)
     if create_private_dns and not (
         private_dns_zone or private_dns_hosted_zone_id
     ):
@@ -467,8 +485,6 @@ def resolve_tls_plan(
             "--private-dns-hosted-zone-id; the template cannot create a "
             "useful hosted zone with an empty name."
         )
-    if not advertised_dns:
-        advertised_dns = f"neo4j-{stack_name}.neo4j.local"
     return TlsPlan(
         mode=mode,
         cert_arn=cert_arn,
@@ -844,7 +860,7 @@ def main() -> None:
             cert_arn=args.cert_arn,
             advertised_dns=args.advertised_dns,
             enable_public_tls=args.enable_public_tls,
-            create_private_dns=bool(args.create_private_dns),
+            create_private_dns=args.create_private_dns,
             private_dns_zone=args.private_dns_zone,
             private_dns_hosted_zone_id=args.private_dns_hosted_zone_id,
         )

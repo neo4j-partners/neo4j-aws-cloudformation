@@ -29,14 +29,76 @@ class ResolveTlsPlanTests(unittest.TestCase):
             cert_arn="",
             advertised_dns="",
             enable_public_tls=False,
-            create_private_dns=False,
+            create_private_dns=None,
             private_dns_zone="",
             private_dns_hosted_zone_id="",
         )
         self.assertEqual(plan.advertised_dns, "neo4j-test-ee-1.neo4j.local")
         self.assertTrue(plan.needs_self_signed_import)
-        self.assertFalse(plan.create_private_dns)
+        self.assertTrue(plan.create_private_dns)
+        self.assertEqual(plan.private_dns_zone, plan.advertised_dns)
         self.assertEqual(plan.cert_arn, "")
+
+    def test_existing_vpc_default_creates_per_stack_zone(self) -> None:
+        plan = deploy.resolve_tls_plan(
+            mode="ExistingVpc",
+            stack_name="test-ee-2",
+            cert_arn="",
+            advertised_dns="",
+            enable_public_tls=False,
+            create_private_dns=None,
+            private_dns_zone="",
+            private_dns_hosted_zone_id="",
+        )
+        self.assertEqual(plan.advertised_dns, "neo4j-test-ee-2.neo4j.local")
+        self.assertTrue(plan.create_private_dns)
+        self.assertEqual(plan.private_dns_zone, plan.advertised_dns)
+        self.assertEqual(plan.private_dns_hosted_zone_id, "")
+
+    def test_private_explicit_no_private_dns_creates_no_zone(self) -> None:
+        plan = deploy.resolve_tls_plan(
+            mode="Private",
+            stack_name="test-ee-1",
+            cert_arn="",
+            advertised_dns="",
+            enable_public_tls=False,
+            create_private_dns=False,
+            private_dns_zone="",
+            private_dns_hosted_zone_id="",
+        )
+        self.assertEqual(plan.advertised_dns, "neo4j-test-ee-1.neo4j.local")
+        self.assertFalse(plan.create_private_dns)
+        self.assertEqual(plan.private_dns_zone, "")
+
+    def test_private_supplied_name_unset_flag_creates_no_zone(self) -> None:
+        plan = deploy.resolve_tls_plan(
+            mode="Private",
+            stack_name="s",
+            cert_arn="",
+            advertised_dns="neo4j.example.com",
+            enable_public_tls=False,
+            create_private_dns=None,
+            private_dns_zone="",
+            private_dns_hosted_zone_id="",
+        )
+        self.assertEqual(plan.advertised_dns, "neo4j.example.com")
+        self.assertFalse(plan.create_private_dns)
+        self.assertEqual(plan.private_dns_zone, "")
+
+    def test_public_unset_flag_creates_no_zone(self) -> None:
+        plan = deploy.resolve_tls_plan(
+            mode="Public",
+            stack_name="s",
+            cert_arn="",
+            advertised_dns="",
+            enable_public_tls=False,
+            create_private_dns=None,
+            private_dns_zone="",
+            private_dns_hosted_zone_id="",
+        )
+        self.assertFalse(plan.create_private_dns)
+        self.assertEqual(plan.private_dns_zone, "")
+        self.assertEqual(plan.advertised_dns, "")
 
     def test_private_supplied_cert(self) -> None:
         plan = deploy.resolve_tls_plan(

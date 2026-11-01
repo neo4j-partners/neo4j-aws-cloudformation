@@ -492,6 +492,8 @@ The NLB terminates TLS on the Browser port (7473) and the Bolt port (7687) using
 
 For local testing, `deploy.py` imports a self-signed ACM certificate when you pass no `--cert-arn`. Clients connect with `neo4j+ssc://`. See [TLS and DNS in LOCAL-TESTING.md](LOCAL-TESTING.md#tls-and-dns).
 
+With no `--advertised-dns`, `deploy.py` invents the name `neo4j-<stack>.neo4j.local`. The stack then creates a private hosted zone named after that name, with an alias record at the zone apex. Each stack gets its own zone, so several stacks can share one VPC. Pass `--no-create-private-dns` or `--advertised-dns` to opt out.
+
 For production, use a stable customer-owned DNS name rather than the generated NLB DNS:
 
 1. Obtain or import an ACM certificate whose SAN and CN are that DNS name.
