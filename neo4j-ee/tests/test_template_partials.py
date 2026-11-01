@@ -803,12 +803,22 @@ class ShellPartialTests(unittest.TestCase):
         self.assertIn("GDS JAR not found", self.fail_log.read_text())
 
     def test_install_neo4j_commands_and_first_boot_password(self) -> None:
-        # Security review M5: the initial password is set from a 0600 @file
-        # before the first start, and never appears in any argv.
+        # Security review M5: the initial password is set from an @file
+        # before the first start, and never appears in any argv. neo4j-admin
+        # runs as the service user, which owns the 0400 file.
         self.write_stub("yum", "echo \"yum $* accept=${NEO4J_ACCEPT_LICENSE_AGREEMENT:-}\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("service", "echo \"service $*\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("chown", "echo \"chown $*\" >> \"$COMMAND_LOG\"\n")
+        self.write_stub(
+            "runuser",
+            """
+            echo "runuser $*" >> "$COMMAND_LOG"
+            while [[ "$1" != "--" ]]; do shift; done
+            shift
+            exec "$@"
+            """,
+        )
         self.write_stub(
             "neo4j-admin",
             """
@@ -837,13 +847,16 @@ class ShellPartialTests(unittest.TestCase):
         self.assertIn("yum -y install neo4j-enterprise accept=yes", log)
         self.assertIn("systemctl enable neo4j", log)
         self.assertNotIn("Secret123abc", log)
-        self.assertRegex(log, r"neo4j-admin dbms set-initial-password @\S+")
+        self.assertRegex(
+            log, r"runuser -u neo4j -- neo4j-admin dbms set-initial-password @\S+"
+        )
         self.assertLess(
             log.index("neo4j-admin dbms set-initial-password"),
             log.index("service neo4j start"),
         )
-        self.assertIn(f"chown -R neo4j:neo4j {data_dir}/dbms", log)
-        self.assertEqual((self.tmp / "argfile.mode").read_text().strip(), "-rw-------")
+        self.assertNotIn("chown -R", log)
+        self.assertRegex(log, r"chown neo4j:neo4j \S+")
+        self.assertEqual((self.tmp / "argfile.mode").read_text().strip(), "-r--------")
         self.assertEqual(
             (self.tmp / "argfile.content").read_text(), "Secret123abc\n"
         )
@@ -872,6 +885,16 @@ class ShellPartialTests(unittest.TestCase):
             exit 3
             """,
         )
+        self.write_stub(
+            "runuser",
+            """
+            echo "runuser $*" >> "$COMMAND_LOG"
+            while [[ "$1" != "--" ]]; do shift; done
+            shift
+            exec "$@"
+            """,
+        )
+        self.write_stub("chown", "exit 0\n")
         self.write_stub("service", "echo \"service $*\" >> \"$COMMAND_LOG\"\n")
         result = self.run_shell(
             f"""
@@ -883,7 +906,11 @@ class ShellPartialTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 42, result.stderr)
         self.assertIn("set-initial-password failed", self.fail_log.read_text())
-        self.assertFalse(self.command_log.exists(), "service started after failure")
+        self.assertNotIn(
+            "service neo4j start",
+            self.command_log.read_text(),
+            "service started after failure",
+        )
         argfile = Path((self.tmp / "argfile.path").read_text().strip())
         self.assertFalse(argfile.exists(), "password file was not removed")
 

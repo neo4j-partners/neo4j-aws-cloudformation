@@ -426,13 +426,17 @@ The bootstrap connects to `localhost` over a direct Bolt connection, which gets
 no server-side routing. A `neo4j://` connection would follow the routing table
 to the advertised address, which is the load balancer. The leader therefore
 creates the user, and the other nodes retry until `SHOW USERS` shows it with
-the `architect` role. A node fails closed after 600 seconds. A node that
+the `architect` role. A node fails closed after 600 seconds. The 600 seconds
+start after `service neo4j start`, so cluster formation counts against them.
+That fits inside the 20-minute creation policy on the supported sizes. A node that
 reattaches an existing data volume skips the step.
 
 **The initial password is set before the first start.** `start_neo4j` runs
 `neo4j-admin dbms set-initial-password` before `service neo4j start`. The
-password is in a 0600 temporary file passed as an `@file` argument, so argv
-holds only the file path. The file is removed right after the command.
+command runs as the `neo4j` service user through `runuser`, so the auth file
+it writes has the right owner. The password is in a temporary file passed as
+an `@file` argument, so argv holds only the file path. The file is owned by
+`neo4j` with mode 0400 and is removed right after the command.
 `cypher-shell` reads the admin password from `NEO4J_PASSWORD` and the
 application password from a `:param` line on stdin.
 
@@ -564,7 +568,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-19 | `cloudformation:*` grants name the stack ARN; no ARN in any template hard-codes the `aws` partition | `RenderedTemplateSecurityTests.test_cloudformation_actions_are_scoped_to_this_stack`, `test_arns_use_the_partition_pseudo_parameter` |
 | NFR-20 | No template publishes `tls-self-signed` or the `IsSelfSignedTls` condition (AD-5) | `RenderedTemplateContractTests.test_tls_self_signed_contract_is_removed` |
 | NFR-21 | The application secret is generated, alphanumeric, retained and encrypted with the stack key; the node role reads it; the stack publishes `app-password-secret-arn` and `app-username`; the bootstrap creates `neo4j_app` with `architect` after start, on first boot only (AD-6) | `SecurityReviewBatchBTests.test_app_password_secret_is_generated_alphanumeric_and_retained`, `test_node_role_reads_both_password_secrets`, `test_app_user_ssm_parameters`, `test_bootstrap_creates_app_user_after_start_on_first_boot`; `ShellPartialTests.test_create_app_user_*` |
-| NFR-22 | The initial password is set from a 0600 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
+| NFR-22 | The initial password is set as `neo4j` from a 0400 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
 | NFR-23 | `OidcNativeAuthEnabled` defaults to `true`; `false` sets both provider lists to `oidc-sso` (AD-6) | `ShellPartialTests.test_configure_oidc_native_auth_flag`; `SecurityReviewBatchBTests.test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata` |
 | NFR-24 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
 
