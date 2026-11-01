@@ -36,16 +36,17 @@ def _nlb_dns():
     )["Parameter"]["Value"]
 
 
-def _password():
-    return sm.get_secret_value(
+def _auth():
+    password = sm.get_secret_value(
         SecretId=os.environ["NEO4J_SECRET_ARN"]
     )["SecretString"]
+    return os.environ["NEO4J_USERNAME"], password
 
 
 def _init_driver():
     return GraphDatabase.driver(
         f"{_bolt_scheme()}://{_nlb_dns()}:7687",
-        auth=("neo4j", _password()),
+        auth=_auth(),
     )
 
 
@@ -95,14 +96,14 @@ MERGE (t3)-[:AT]->(m3)
 """
 
 
-def _probe_plaintext_bolt_refused(nlb_dns, password):
+def _probe_plaintext_bolt_refused(nlb_dns, auth):
     """A non-TLS Bolt connect must fail: NLB listener is TLS and the instance
     sets server.bolt.tls_level=REQUIRED. Success here is a hard failure."""
     base = _base_scheme()
     try:
         drv = GraphDatabase.driver(
             f"{base}://{nlb_dns}:7687",
-            auth=("neo4j", password),
+            auth=auth,
             connection_timeout=8,
         )
         try:
@@ -114,7 +115,7 @@ def _probe_plaintext_bolt_refused(nlb_dns, password):
     return False, f"plaintext {base}://{nlb_dns}:7687 unexpectedly connected"
 
 
-def _probe_strict_tls(nlb_dns, password):
+def _probe_strict_tls(nlb_dns, auth):
     """Informational: strict +s verifies the served cert against the system CA
     bundle. Pass means a publicly-trusted cert; failure is expected and
     acceptable for the auto-imported self-signed ACM cert."""
@@ -122,7 +123,7 @@ def _probe_strict_tls(nlb_dns, password):
     try:
         drv = GraphDatabase.driver(
             f"{base}+s://{nlb_dns}:7687",
-            auth=("neo4j", password),
+            auth=auth,
             connection_timeout=8,
         )
         try:
@@ -194,7 +195,7 @@ def _probe_cert_identity(nlb_dns, advertised_dns):
     return True, f"served cert valid for {advertised_dns}"
 
 
-def _tls_conformance(nlb_dns, password):
+def _tls_conformance(nlb_dns, auth):
     """End-to-end TLS conformance probe run from inside the VPC.
 
     Hard checks (fail the probe): plaintext Bolt refused, HTTPS 7473 = 200,
@@ -210,12 +211,12 @@ def _tls_conformance(nlb_dns, password):
         }
 
     hard = {
-        "plaintext_bolt_refused": _probe_plaintext_bolt_refused(nlb_dns, password),
+        "plaintext_bolt_refused": _probe_plaintext_bolt_refused(nlb_dns, auth),
         "https_7473_ok": _probe_https_7473(nlb_dns),
         "plaintext_http_7474_refused": _probe_plaintext_http_7474_refused(nlb_dns),
         "cert_identity": _probe_cert_identity(nlb_dns, advertised_dns),
     }
-    strict_passed, strict_detail = _probe_strict_tls(nlb_dns, password)
+    strict_passed, strict_detail = _probe_strict_tls(nlb_dns, auth)
 
     return {
         "applicable": True,
@@ -273,9 +274,6 @@ def _run(driver, run_probe=False):
             """
         ).data()
 
-    with driver.session(database="system") as sys_session:
-        servers = sys_session.run("SHOW SERVERS").data()
-
     writers = 0
     readers = 0
     for row in routing_rows:
@@ -293,14 +291,6 @@ def _run(driver, run_probe=False):
         "nodes_created": nodes_created,
         "relationships_created": rels_created,
         "graph_sample": graph_sample,
-        "servers": [
-            {
-                "name": s.get("name", s.get("address", "")),
-                "state": s.get("state", ""),
-                "health": s.get("health", ""),
-            }
-            for s in servers
-        ],
         "routing_table": {
             "writers": writers,
             "readers": readers,
@@ -308,7 +298,7 @@ def _run(driver, run_probe=False):
     }
 
     if run_probe:
-        body["tls_conformance"] = _tls_conformance(_nlb_dns(), _password())
+        body["tls_conformance"] = _tls_conformance(_nlb_dns(), _auth())
 
     return {
         "statusCode": 200,

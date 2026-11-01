@@ -1,10 +1,10 @@
 # Neo4j Private Cluster: Lambda Demo App
 
-`sample-private-app.template.yaml` deploys a Python Lambda inside a Neo4j EE Private or ExistingVpc stack. The Lambda connects to Neo4j over Bolt through the internal NLB, writes a small graph, reads it back, and returns cluster health details.
+`sample-private-app.template.yaml` deploys a Python Lambda inside a Neo4j EE Private or ExistingVpc stack. The Lambda connects to Neo4j over Bolt through the internal NLB, writes a small graph, reads it back, and returns routing details. It connects as the `neo4j_app` application user, not as the `neo4j` admin user.
 
 - **What it deploys:** a Python Lambda in the EE stack's private subnets, exposed through a Function URL with `AWS_IAM` auth
 - **What it requires:** an existing `neo4j-ee` Private or ExistingVpc stack
-- **What it demonstrates:** SSM parameter discovery, Secrets Manager password retrieval, security group wiring to the NLB and VPC interface endpoints, and topology-aware Bolt URI selection
+- **What it demonstrates:** SSM parameter discovery, least-privilege application credentials, Secrets Manager password retrieval, security group wiring to the NLB and VPC interface endpoints, and topology-aware Bolt URI selection
 - **Optional:** `--enable-resilience` adds a second Lambda that stops and starts a follower to validate cluster failover
 
 [`docs/PRIVATE.md`](../docs/PRIVATE.md) covers operator access from a laptop via SSM port forwarding. This README covers application access from inside the VPC.
@@ -51,7 +51,8 @@ Lambda Function URL  (HTTPS, AWS_IAM auth)
     |
     +-- Lambda  (private subnet, Neo4j VPC)
            |  NEO4J_SSM_NLB_PATH       -> /neo4j-ee/<stack>/nlb-dns
-           |  NEO4J_SECRET_ARN         -> neo4j/<stack>/password
+           |  NEO4J_SECRET_ARN         -> neo4j/<stack>/app-password
+           |  NEO4J_USERNAME           -> neo4j_app
            |  NEO4J_NUMBER_OF_SERVERS  -> 1 or 3
            |  NEO4J_BOLT_TLS           -> true when the stack sets AdvertisedDNS (TLS at the NLB)
            v
@@ -78,14 +79,16 @@ The EE stack publishes SSM parameters under `/neo4j-ee/<stack-name>/`. Applicati
 | `/neo4j-ee/<stack>/vpc-id` | Attach Lambda to the correct VPC |
 | `/neo4j-ee/<stack>/nlb-dns` | Connect to the internal NLB on Bolt port 7687 |
 | `/neo4j-ee/<stack>/external-sg-id` | NLB security group used as the egress target on port 7687 |
-| `/neo4j-ee/<stack>/password-secret-arn` | Import the Neo4j password secret by ARN |
+| `/neo4j-ee/<stack>/app-password-secret-arn` | Read the `neo4j_app` password secret by ARN |
+| `/neo4j-ee/<stack>/app-username` | Connect as this Neo4j user |
+| `/neo4j-ee/<stack>/kms-key-arn` | Grant `kms:Decrypt` on the key that encrypts the secret |
 | `/neo4j-ee/<stack>/vpc-endpoint-sg-id` | Add ingress 443 from the app SG; add egress 443 to the endpoint SG |
 | `/neo4j-ee/<stack>/private-subnet-1-id` | Place Lambda in the first private subnet |
 | `/neo4j-ee/<stack>/private-subnet-2-id` | Place Lambda in the second private subnet for clustered stacks; omitted when `NumberOfServers=1` |
 
 ## Connection Pattern
 
-At cold start the Lambda resolves the internal NLB DNS name from SSM and the Neo4j password from Secrets Manager. Both AWS API calls route through private VPC endpoints.
+At cold start the Lambda resolves the internal NLB DNS name from SSM and the `neo4j_app` password from Secrets Manager. Both AWS API calls route through private VPC endpoints.
 
 The deployer passes two topology fields:
 
@@ -98,13 +101,13 @@ The driver is created lazily on first invocation and cached across warm starts. 
 ## Client Checklist
 
 1. Read the parent stack name or the EE deployment output file.
-2. Read platform parameters from `/neo4j-ee/<stack>/`: `nlb-dns`, `vpc-id`, `external-sg-id`, `password-secret-arn`, `vpc-endpoint-sg-id`, and the private subnet IDs you need.
+2. Read platform parameters from `/neo4j-ee/<stack>/`: `nlb-dns`, `vpc-id`, `external-sg-id`, `app-password-secret-arn`, `app-username`, `kms-key-arn`, `vpc-endpoint-sg-id`, and the private subnet IDs you need.
 3. Place the client in private subnets with DNS resolution enabled.
 4. Create an application-owned security group.
 5. Wire Bolt access: app SG egress to the NLB SG on TCP 7687, and NLB SG ingress from the app SG on TCP 7687.
 6. Wire AWS API access when reading SSM or Secrets Manager privately: app SG egress to the endpoint SG on TCP 443, and endpoint SG ingress from the app SG on TCP 443.
-7. Retrieve the Neo4j password from the Secrets Manager ARN published by the EE stack.
-8. Connect to the internal NLB DNS name on port 7687.
+7. Retrieve the `neo4j_app` password from the Secrets Manager ARN published by the EE stack. The client role needs `secretsmanager:GetSecretValue` on that secret and `kms:Decrypt` on the key in `kms-key-arn`.
+8. Connect to the internal NLB DNS name on port 7687 as the user in `app-username`. Do not connect as the `neo4j` admin user.
 9. Cache the driver or connection pool across requests, then close it during process shutdown.
 
 ## What The Lambda Returns
@@ -118,9 +121,6 @@ The driver is created lazily on first invocation and cached across warm starts. 
   "relationships_created": 9,
   "graph_sample": [
     {"customer": "Alice Chen", "account_type": "checking", "amount": 2400.0, "merchant": "StripePayments"}
-  ],
-  "servers": [
-    {"name": "...", "state": "Enabled", "health": "Available"}
   ],
   "routing_table": {
     "writers": 1,
@@ -162,7 +162,7 @@ The hard checks fail the probe (`passed: false`) if a plaintext Bolt connection 
 4. Picks a random follower, invokes the stack-owned stop-Neo4j SSM document, and polls `SHOW SERVERS`.
 5. Invokes the stack-owned start-Neo4j SSM document and waits for the server to return to `Available`.
 
-The resilience Lambda is test-only and is not deployed by default. When enabled, its role can run only the stack-owned SSM command documents against EC2 instances tagged with the parent EE stack ID. It cannot run arbitrary `AWS-RunShellScript` commands.
+The resilience Lambda is test tooling. Do not copy its role into an application. It connects as the `neo4j` admin user because `SHOW SERVERS` is an admin-only command. Its role can read the admin password secret and decrypt with the stack key. The Lambda is not deployed by default. When enabled, its role can run only the stack-owned SSM command documents against EC2 instances tagged with the parent EE stack ID. It cannot run arbitrary `AWS-RunShellScript` commands.
 
 ## Teardown Ordering
 

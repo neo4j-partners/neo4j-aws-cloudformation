@@ -469,6 +469,11 @@ def main() -> None:
     vpc_id = require_ssm(ssm, f"{ssm_prefix}/vpc-id")
     external_sg_id = require_ssm(ssm, f"{ssm_prefix}/external-sg-id")
     password_secret_arn = require_ssm(ssm, f"{ssm_prefix}/password-secret-arn")
+    app_password_secret_arn = require_ssm(
+        ssm, f"{ssm_prefix}/app-password-secret-arn"
+    )
+    app_username = require_ssm(ssm, f"{ssm_prefix}/app-username")
+    kms_key_arn = require_ssm(ssm, f"{ssm_prefix}/kms-key-arn")
     vpc_endpoint_sg_id = require_ssm(ssm, f"{ssm_prefix}/vpc-endpoint-sg-id")
     private_subnet_1_id = require_ssm(ssm, f"{ssm_prefix}/private-subnet-1-id")
     subnet_ids = [private_subnet_1_id]
@@ -480,6 +485,9 @@ def main() -> None:
     print(f"  vpc-id:              {vpc_id}")
     print(f"  external-sg-id:      {external_sg_id}")
     print(f"  password-secret-arn: {password_secret_arn}")
+    print(f"  app-password-secret-arn: {app_password_secret_arn}")
+    print(f"  app-username:        {app_username}")
+    print(f"  kms-key-arn:         {kms_key_arn}")
     print(f"  vpc-endpoint-sg-id:  {vpc_endpoint_sg_id}")
     print(f"  private-subnet-1-id: {private_subnet_1_id}")
     if private_subnet_2_id:
@@ -501,6 +509,9 @@ def main() -> None:
         "ExternalSgId": external_sg_id,
         "VpcEndpointSgId": vpc_endpoint_sg_id,
         "PasswordSecretArn": password_secret_arn,
+        "AppPasswordSecretArn": app_password_secret_arn,
+        "AppUsername": app_username,
+        "KmsKeyArn": kms_key_arn,
         "Neo4jStackName": neo4j_stack,
         "Neo4jStackId": neo4j_stack_id,
         "LambdaS3Bucket": bucket,

@@ -24,7 +24,18 @@ Parameters:
     Description: SG attached to the VPC interface endpoints the Lambda calls on 443.
   PasswordSecretArn:
     Type: String
-    Description: ARN of the Neo4j password secret.
+    Description: >-
+      ARN of the Neo4j admin password secret. Only the test-only resilience
+      Lambda reads it, because it runs admin-only commands.
+  AppPasswordSecretArn:
+    Type: String
+    Description: ARN of the neo4j_app application user password secret. The main Lambda connects with it.
+  AppUsername:
+    Type: String
+    Description: Neo4j application username published by the parent EE stack.
+  KmsKeyArn:
+    Type: String
+    Description: Full ARN of the parent EE stack KMS key that encrypts both password secrets.
   Neo4jStackName:
     Type: String
     Description: CloudFormation stack name of the parent Neo4j EE stack (used for logging/env).
@@ -145,7 +156,10 @@ Resources:
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/*'
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref PasswordSecretArn
+                Resource: !Ref AppPasswordSecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KmsKeyArn
 
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -180,7 +194,8 @@ Resources:
       Environment:
         Variables:
           NEO4J_SSM_NLB_PATH: !Sub '${SsmPrefix}/nlb-dns'
-          NEO4J_SECRET_ARN: !Ref PasswordSecretArn
+          NEO4J_SECRET_ARN: !Ref AppPasswordSecretArn
+          NEO4J_USERNAME: !Ref AppUsername
           NEO4J_NUMBER_OF_SERVERS: !Ref NumberOfServers
           NEO4J_BOLT_TLS: !Ref BoltTlsEnabled
           NEO4J_ADVERTISED_DNS: !Ref AdvertisedDNS
@@ -295,6 +310,9 @@ Resources:
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref PasswordSecretArn
               - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KmsKeyArn
+              - Effect: Allow
                 Action: ec2:DescribeInstances
                 Resource: '*'
               - Effect: Allow
@@ -348,6 +366,7 @@ Resources:
         Variables:
           NEO4J_SSM_NLB_PATH: !Sub '${SsmPrefix}/nlb-dns'
           NEO4J_SECRET_ARN: !Ref PasswordSecretArn
+          NEO4J_USERNAME: neo4j
           NEO4J_NUMBER_OF_SERVERS: !Ref NumberOfServers
           NEO4J_BOLT_TLS: !Ref BoltTlsEnabled
           NEO4J_ADVERTISED_DNS: !Ref AdvertisedDNS

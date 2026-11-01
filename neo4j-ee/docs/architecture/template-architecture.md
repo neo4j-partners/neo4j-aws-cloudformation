@@ -420,6 +420,12 @@ as `app-password-secret-arn` and the username as `app-username`. The user is
 `neo4j_app` and holds the built-in `architect` role. Applications use it. The
 `neo4j` superuser is for operators.
 
+**The sample app's main Lambda is the reference consumer.** The main Lambda in
+`sample-private-app` connects as `neo4j_app`. Its role can read only the
+application secret and decrypt with the stack key. The optional resilience
+Lambda is test tooling. It connects as `neo4j` because `SHOW SERVERS` is an
+admin-only command.
+
 **Every node tries to create the user on its first boot.** The user lives in
 the replicated `system` database. Only the `system` leader accepts the write.
 The bootstrap connects to `localhost` over a direct Bolt connection, which gets
