@@ -21,10 +21,10 @@ A deployment is produced by four layers, each with one owner:
 
 | Layer | Owner file | Changeable by | Holds |
 |---|---|---|---|
-| **AMI** | `marketplace/create-ami.sh` | AMI rebuild + Marketplace submission + instance replacement | OS patches, base packages, cfn helpers, Neo4j yum repo + GPG key, `neo4j` system user, SSH hardening, IMDSv2. **No Neo4j config, no orchestration.** |
+| **AMI** | `marketplace/create-ami.sh` | AMI rebuild + Marketplace submission + instance replacement | OS patches, base packages, cfn helpers, Neo4j yum repo + GPG key (repo disabled), `neo4j-enterprise` and `cypher-shell` baked at the pinned `NEO4J_VERSION` (service disabled, never started), `neo4j` system user, SSH hardening, IMDSv2. **No Neo4j config, no orchestration.** |
 | **Template** | rendered by `build.py` | Template update, zero Marketplace churn | Static Neo4j config (`neo4j-base.conf`) + the bootstrap, both as `AWS::CloudFormation::Init` metadata on the single shared `Neo4jLaunchTemplate` |
 | **UserData** | `templates/src/userdata.sh` | Template update | IMDSv2 fetch, tag lookups, password fetch, `cfn-init`, env-var export, bootstrap invocation, **sole owner of `cfn-signal`** |
-| **Bootstrap** | `templates/src/bootstrap/neo4j-bootstrap.sh` + `partials/*.sh` | Template update | Install Neo4j/plugins, apply config, assert security invariant, start service |
+| **Bootstrap** | `templates/src/bootstrap/neo4j-bootstrap.sh` + `partials/*.sh` | Template update | Verify the baked Neo4j, install plugins and licenses, apply config, assert security invariant, start service |
 
 **Placement Decision Rule** (first match wins): (1) depends on a stack input or runtime value → a runtime overlay function in a partial taking it as an explicit arg; (2) a fixed Neo4j config key on every deploy → a line in `templates/src/neo4j-base.conf`, never an inline `set_neo4j_conf` call; (3) OS-level, immutable, Neo4j-independent → AMI; (4) CloudFormation signaling/metadata resolution → UserData. **Config never reaches branch 3.**
 
@@ -67,7 +67,7 @@ cfn-lint templates/neo4j-private-existing-vpc.template.yaml   # clean; W1030 sco
 ./teardown.sh --delete-volumes   # also delete the retained volumes, secrets, log bucket; schedule key deletion
 
 # AMI (Marketplace: AWS_PROFILE=marketplace; local iteration: AMI_BUILD_MODE=iteration AWS_PROFILE=default)
-./marketplace/create-ami.sh      # writes marketplace/ami-id.txt
+NEO4J_VERSION=2026.10.1 ./marketplace/create-ami.sh   # writes marketplace/ami-id.txt; NEO4J_VERSION required in marketplace mode, newest stable in iteration mode
 ./marketplace/test-ami.sh        # SSM-based AMI verification, no SSH
 ```
 
