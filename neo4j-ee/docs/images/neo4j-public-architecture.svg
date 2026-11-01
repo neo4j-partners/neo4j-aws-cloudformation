@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" role="img" aria-labelledby="t">
+  <title id="t">Neo4j Enterprise Edition on AWS: Public topology</title>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #111827; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 13px; fill: #374151; }
+    .h { font-size: 13px; font-weight: 700; }
+    .b { font-size: 12px; }
+    .s { font-size: 11px; fill: #374151; }
+    .note { font-size: 12px; fill: #374151; }
+    .lbl { font-size: 11px; fill: #1f2937; }
+    .vpc { fill: #f8fafc; stroke: #475569; stroke-width: 2; }
+    .az { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .pub { fill: #ecfdf5; stroke: #10b981; stroke-width: 1.5; }
+    .priv { fill: #eff6ff; stroke: #3b82f6; stroke-width: 1.5; }
+    .node { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.5; }
+    .nlb { fill: #ecfeff; stroke: #0891b2; stroke-width: 1.5; }
+    .bastion { fill: #fffbeb; stroke: #d97706; stroke-width: 1.5; }
+    .ep { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.5; }
+    .svc { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.5; }
+    .ext { fill: #ffffff; stroke: #374151; stroke-width: 1.5; }
+    .opt { fill: #f9fafb; stroke: #6b7280; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .igw { fill: #ecfdf5; stroke: #059669; stroke-width: 1.5; }
+    .flow { fill: none; stroke: #1f2937; stroke-width: 1.6; }
+    .flowd { fill: none; stroke: #6b7280; stroke-width: 1.6; stroke-dasharray: 6 4; }
+    .halo { fill: #ffffff; }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2937"/>
+    </marker>
+    <marker id="ahd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1400" height="900" fill="#ffffff"/>
+  <text x="700" y="36" class="title" text-anchor="middle">Neo4j Enterprise Edition on AWS: Public topology</text>
+  <text x="700" y="60" class="subtitle" text-anchor="middle">New VPC 10.0.0.0/16 with public subnets only. Nodes have public IPs and reach AWS APIs over the Internet Gateway. No bastion, no NAT gateway, no private subnet, no interface endpoint.</text>
+  <rect x="230" y="85" width="900" height="680" rx="8" class="vpc"/>
+  <text x="240" y="102" class="h">VPC 10.0.0.0/16, created by the template</text>
+  <rect x="262" y="112" width="840" height="72" rx="6" class="nlb"/>
+  <text x="682.0" y="136.0" class="h" text-anchor="middle">Internet-facing Network Load Balancer, cross-zone, one ENI in each public subnet, access logs to S3</text>
+  <text x="682.0" y="152.0" class="b" text-anchor="middle">Default, UsePublicTLS false: TCP listeners 7474 HTTP Browser and 7687 Bolt, HTTP health check on 7474</text>
+  <text x="682.0" y="168.0" class="b" text-anchor="middle">EnableTLS=true with CertificateArn and AdvertisedDNS: TLS listeners 7473 HTTPS Browser and 7687 Bolt</text>
+  <rect x="262" y="206" width="268" height="420" rx="8" class="az"/>
+  <text x="272" y="223" class="h">Availability Zone a</text>
+  <rect x="272" y="231" width="248" height="380" rx="8" class="pub"/>
+  <text x="282" y="248" class="h">Public subnet 10.0.1.0/24</text>
+  <rect x="282" y="272" width="228" height="116" rx="6" class="node"/>
+  <text x="396.0" y="292.0" class="h" text-anchor="middle">Neo4j node 1</text>
+  <text x="396.0" y="309.0" class="b" text-anchor="middle">public IP via MapPublicIpOnLaunch</text>
+  <text x="396.0" y="326.0" class="b" text-anchor="middle">no SSH, IMDSv2 only</text>
+  <text x="396.0" y="343.0" class="b" text-anchor="middle">ASG, MinSize = MaxSize = 1</text>
+  <text x="396.0" y="360.0" class="b" text-anchor="middle">gp3 data volume, DeletionPolicy Retain</text>
+  <text x="396.0" y="377.0" class="s" text-anchor="middle">SSM agent for Session Manager</text>
+  <rect x="282" y="420" width="208" height="110" rx="6" class="svc"/>
+  <text x="386.0" y="441.0" class="h" text-anchor="middle">Security groups on the node</text>
+  <text x="386.0" y="456.0" class="s" text-anchor="middle">External SG: 7474 or 7473, and 7687</text>
+  <text x="386.0" y="471.0" class="s" text-anchor="middle">from the NLB SG only</text>
+  <text x="386.0" y="486.0" class="s" text-anchor="middle">Internal SG: 5000, 6000, 7000, 7688</text>
+  <text x="386.0" y="501.0" class="s" text-anchor="middle">between cluster members only</text>
+  <text x="386.0" y="516.0" class="s" text-anchor="middle">Egress: 443 anywhere, cluster ports</text>
+  <text x="396.0" y="570" class="s" text-anchor="middle">no NAT gateway, no bastion,</text>
+  <text x="396.0" y="586" class="s" text-anchor="middle">no interface endpoint in this zone</text>
+  <path d="M 396.0 184 L 396.0 272" class="flow" marker-end="url(#ah)"/>
+  <rect x="400" y="189" width="119" height="15" class="halo"/>
+  <text x="404.0" y="199" class="lbl">7474 or 7473, 7687</text>
+  <path d="M 500 388 L 500 660" class="flow" marker-end="url(#ah)"/>
+  <rect x="424" y="630" width="70" height="15" class="halo"/>
+  <text x="494" y="640" class="lbl" text-anchor="end">443 egress</text>
+  <rect x="548" y="206" width="268" height="420" rx="8" class="az"/>
+  <text x="558" y="223" class="h">Availability Zone b</text>
+  <text x="708" y="223" class="s">cluster only</text>
+  <rect x="558" y="231" width="248" height="380" rx="8" class="pub"/>
+  <text x="568" y="248" class="h">Public subnet 10.0.2.0/24</text>
+  <rect x="568" y="272" width="228" height="116" rx="6" class="node"/>
+  <text x="682.0" y="292.0" class="h" text-anchor="middle">Neo4j node 2</text>
+  <text x="682.0" y="309.0" class="b" text-anchor="middle">public IP via MapPublicIpOnLaunch</text>
+  <text x="682.0" y="326.0" class="b" text-anchor="middle">no SSH, IMDSv2 only</text>
+  <text x="682.0" y="343.0" class="b" text-anchor="middle">ASG, MinSize = MaxSize = 1</text>
+  <text x="682.0" y="360.0" class="b" text-anchor="middle">gp3 data volume, DeletionPolicy Retain</text>
+  <text x="682.0" y="377.0" class="s" text-anchor="middle">SSM agent for Session Manager</text>
+  <rect x="568" y="420" width="208" height="110" rx="6" class="svc"/>
+  <text x="672.0" y="441.0" class="h" text-anchor="middle">Security groups on the node</text>
+  <text x="672.0" y="456.0" class="s" text-anchor="middle">External SG: 7474 or 7473, and 7687</text>
+  <text x="672.0" y="471.0" class="s" text-anchor="middle">from the NLB SG only</text>
+  <text x="672.0" y="486.0" class="s" text-anchor="middle">Internal SG: 5000, 6000, 7000, 7688</text>
+  <text x="672.0" y="501.0" class="s" text-anchor="middle">between cluster members only</text>
+  <text x="672.0" y="516.0" class="s" text-anchor="middle">Egress: 443 anywhere, cluster ports</text>
+  <text x="682.0" y="570" class="s" text-anchor="middle">no NAT gateway, no bastion,</text>
+  <text x="682.0" y="586" class="s" text-anchor="middle">no interface endpoint in this zone</text>
+  <path d="M 682.0 184 L 682.0 272" class="flow" marker-end="url(#ah)"/>
+  <rect x="686" y="189" width="119" height="15" class="halo"/>
+  <text x="690.0" y="199" class="lbl">7474 or 7473, 7687</text>
+  <path d="M 786 388 L 786 660" class="flow" marker-end="url(#ah)"/>
+  <rect x="710" y="630" width="70" height="15" class="halo"/>
+  <text x="780" y="640" class="lbl" text-anchor="end">443 egress</text>
+  <rect x="834" y="206" width="268" height="420" rx="8" class="az"/>
+  <text x="844" y="223" class="h">Availability Zone c</text>
+  <text x="994" y="223" class="s">cluster only</text>
+  <rect x="844" y="231" width="248" height="380" rx="8" class="pub"/>
+  <text x="854" y="248" class="h">Public subnet 10.0.3.0/24</text>
+  <rect x="854" y="272" width="228" height="116" rx="6" class="node"/>
+  <text x="968.0" y="292.0" class="h" text-anchor="middle">Neo4j node 3</text>
+  <text x="968.0" y="309.0" class="b" text-anchor="middle">public IP via MapPublicIpOnLaunch</text>
+  <text x="968.0" y="326.0" class="b" text-anchor="middle">no SSH, IMDSv2 only</text>
+  <text x="968.0" y="343.0" class="b" text-anchor="middle">ASG, MinSize = MaxSize = 1</text>
+  <text x="968.0" y="360.0" class="b" text-anchor="middle">gp3 data volume, DeletionPolicy Retain</text>
+  <text x="968.0" y="377.0" class="s" text-anchor="middle">SSM agent for Session Manager</text>
+  <rect x="854" y="420" width="208" height="110" rx="6" class="svc"/>
+  <text x="958.0" y="441.0" class="h" text-anchor="middle">Security groups on the node</text>
+  <text x="958.0" y="456.0" class="s" text-anchor="middle">External SG: 7474 or 7473, and 7687</text>
+  <text x="958.0" y="471.0" class="s" text-anchor="middle">from the NLB SG only</text>
+  <text x="958.0" y="486.0" class="s" text-anchor="middle">Internal SG: 5000, 6000, 7000, 7688</text>
+  <text x="958.0" y="501.0" class="s" text-anchor="middle">between cluster members only</text>
+  <text x="958.0" y="516.0" class="s" text-anchor="middle">Egress: 443 anywhere, cluster ports</text>
+  <text x="968.0" y="570" class="s" text-anchor="middle">no NAT gateway, no bastion,</text>
+  <text x="968.0" y="586" class="s" text-anchor="middle">no interface endpoint in this zone</text>
+  <path d="M 968.0 184 L 968.0 272" class="flow" marker-end="url(#ah)"/>
+  <rect x="972" y="189" width="119" height="15" class="halo"/>
+  <text x="976.0" y="199" class="lbl">7474 or 7473, 7687</text>
+  <path d="M 1072 388 L 1072 660" class="flow" marker-end="url(#ah)"/>
+  <rect x="996" y="630" width="70" height="15" class="halo"/>
+  <text x="1066" y="640" class="lbl" text-anchor="end">443 egress</text>
+  <path d="M 510 324 L 568 324" class="flow" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <rect x="523" y="310" width="33" height="15" class="halo"/>
+  <text x="539.0" y="320" class="lbl" text-anchor="middle">Raft</text>
+  <path d="M 796 324 L 854 324" class="flow" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <rect x="809" y="310" width="33" height="15" class="halo"/>
+  <text x="825.0" y="320" class="lbl" text-anchor="middle">Raft</text>
+  <rect x="262" y="660" width="840" height="60" rx="6" class="igw"/>
+  <text x="682.0" y="686.0" class="h" text-anchor="middle">Internet Gateway, 0.0.0.0/0 route for the public subnets</text>
+  <text x="682.0" y="702.0" class="b" text-anchor="middle">client traffic in to the NLB, and node egress on 443 out to AWS APIs and the OIDC issuer</text>
+  <rect x="12" y="112" width="200" height="92" rx="6" class="ext"/>
+  <text x="112.0" y="131.5" class="h" text-anchor="middle">Clients on the Internet</text>
+  <text x="112.0" y="146.5" class="s" text-anchor="middle">AllowedCIDR only, not 0.0.0.0/0</text>
+  <text x="112.0" y="161.5" class="s" text-anchor="middle">Browser 7474 HTTP, or 7473 HTTPS</text>
+  <text x="112.0" y="176.5" class="s" text-anchor="middle">with public TLS</text>
+  <text x="112.0" y="191.5" class="s" text-anchor="middle">Bolt 7687, plain TCP or TLS</text>
+  <path d="M 212 148 L 262 148" class="flow" marker-end="url(#ah)"/>
+  <rect x="12" y="630" width="200" height="110" rx="6" class="ext"/>
+  <text x="112.0" y="651.0" class="h" text-anchor="middle">Internet</text>
+  <text x="112.0" y="666.0" class="s" text-anchor="middle">AWS APIs: Secrets Manager,</text>
+  <text x="112.0" y="681.0" class="s" text-anchor="middle">CloudWatch Logs, SSM, EC2,</text>
+  <text x="112.0" y="696.0" class="s" text-anchor="middle">CloudFormation, ASG, ACM</text>
+  <text x="112.0" y="711.0" class="s" text-anchor="middle">OIDC issuer when configured</text>
+  <text x="112.0" y="726.0" class="s" text-anchor="middle">Session Manager for operators</text>
+  <path d="M 262 690 L 212 690" class="flow" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <rect x="1148" y="112" width="240" height="92" rx="6" class="ext"/>
+  <text x="1268.0" y="131.5" class="h" text-anchor="middle">Operator laptop</text>
+  <text x="1268.0" y="146.5" class="s" text-anchor="middle">connects straight to the NLB DNS</text>
+  <text x="1268.0" y="161.5" class="s" text-anchor="middle">from inside AllowedCIDR,</text>
+  <text x="1268.0" y="176.5" class="s" text-anchor="middle">no SSM tunnel needed</text>
+  <text x="1268.0" y="191.5" class="s" text-anchor="middle">password read from Secrets Manager</text>
+  <rect x="1148" y="300" width="240" height="160" rx="6" class="svc"/>
+  <text x="1268.0" y="320.0" class="h" text-anchor="middle">Stack resources outside the VPC</text>
+  <text x="1268.0" y="336.0" class="s" text-anchor="middle">Secrets: admin and app passwords</text>
+  <text x="1268.0" y="352.0" class="s" text-anchor="middle">KMS stack key, Retain</text>
+  <text x="1268.0" y="368.0" class="s" text-anchor="middle">CloudWatch log groups: application,</text>
+  <text x="1268.0" y="384.0" class="s" text-anchor="middle">VPC flow logs</text>
+  <text x="1268.0" y="400.0" class="s" text-anchor="middle">SNS alert topic, failed-auth alarm</text>
+  <text x="1268.0" y="416.0" class="s" text-anchor="middle">S3 bucket for NLB access logs</text>
+  <text x="1268.0" y="432.0" class="s" text-anchor="middle">SSM parameters /neo4j-ee/&lt;stack&gt;/</text>
+  <text x="1268.0" y="448.0" class="s" text-anchor="middle">Node IAM role with SSM core policy</text>
+  <rect x="1148" y="480" width="240" height="116" rx="6" class="svc"/>
+  <text x="1268.0" y="496.5" class="h" text-anchor="middle">Not in this topology</text>
+  <text x="1268.0" y="511.5" class="s" text-anchor="middle">no private subnet, no NAT gateway</text>
+  <text x="1268.0" y="526.5" class="s" text-anchor="middle">no operator bastion</text>
+  <text x="1268.0" y="541.5" class="s" text-anchor="middle">no VPC interface endpoints</text>
+  <text x="1268.0" y="556.5" class="s" text-anchor="middle">no S3 gateway endpoint</text>
+  <text x="1268.0" y="571.5" class="s" text-anchor="middle">no Route 53 record, no S3 prefix list</text>
+  <text x="1268.0" y="586.5" class="s" text-anchor="middle">nodes keep a 443 route to the internet</text>
+  <rect x="1148" y="616" width="240" height="104" rx="6" class="svc"/>
+  <text x="1268.0" y="634.0" class="h" text-anchor="middle">Two-layer security groups</text>
+  <text x="1268.0" y="649.0" class="s" text-anchor="middle">NLB SG admits AllowedCIDR on the</text>
+  <text x="1268.0" y="664.0" class="s" text-anchor="middle">Browser and Bolt ports; its egress is</text>
+  <text x="1268.0" y="679.0" class="s" text-anchor="middle">those ports to the External SG only</text>
+  <text x="1268.0" y="694.0" class="s" text-anchor="middle">External SG admits the NLB SG, so</text>
+  <text x="1268.0" y="709.0" class="s" text-anchor="middle">health checks pass without a VPC CIDR</text>
+  <text x="20" y="790" class="note">Listeners: the Browser listener and target group move from TCP 7474 to TLS 7473 when EnableTLS=true with CertificateArn and AdvertisedDNS. Bolt stays on 7687 and switches from TCP to TLS. Each ASG uses the EC2 health check.</text>
+  <text x="20" y="810" class="note">Egress residual risk: public nodes have no VPC endpoints, so the node security groups allow outbound 443 to any address. Use the Private topology when the cluster must have no internet egress.</text>
+  <rect x="20" y="828" width="1360" height="56" rx="6" class="ext"/>
+  <text x="32" y="848" class="h">Legend</text>
+  <rect x="100" y="837" width="26" height="14" rx="3" class="svc"/>
+  <text x="134" y="848" class="b">Solid box: created by the template</text>
+  <rect x="360" y="837" width="26" height="14" rx="3" class="opt"/>
+  <text x="394" y="848" class="b">Dashed box: optional or caller-supplied</text>
+  <path d="M 650 844 L 690 844" class="flow" marker-end="url(#ah)"/>
+  <text x="700" y="848" class="b">Solid arrow: traffic path that always exists</text>
+  <path d="M 995 844 L 1035 844" class="flowd" marker-end="url(#ahd)"/>
+  <text x="1045" y="848" class="b">Dashed arrow: optional or caller-supplied path</text>
+</svg>

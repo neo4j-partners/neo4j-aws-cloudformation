@@ -80,13 +80,13 @@ Bastion access and all operator tools (`uv run preflight`, `validate-private`, `
 ./test-observability.sh <stack-name>     # specific deployment
 ```
 
-Same five steps as the Private template: CloudWatch agent, log streams, VPC flow logs, failed-auth alarm, and CloudTrail.
+Same five steps as the Private template: CloudWatch agent, log streams, VPC flow logs, failed-auth alarm, and an account-level CloudTrail check.
 
 ---
 
 ## Architecture
 
-![Neo4j EE Private Existing VPC Architecture](images/neo4j-private-existing-vpc-architecture.png)
+![Neo4j EE Private Existing VPC Architecture](images/neo4j-private-existing-vpc-architecture.svg)
 
 ### AWS Resources Created
 
@@ -103,7 +103,7 @@ The template creates the following inside your VPC. It does **not** create: VPC,
 | Security groups | NLB SG (AllowedCIDR on 7473/7687 to the NLB); External SG (NLB SG as source on 7473/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
 | SSM parameters | `/neo4j-ee/<stack>/` prefix; publishes VPC ID, NLB DNS, security group IDs, the password secret ARNs and the stack KMS key ARN |
 | Secrets Manager | Neo4j admin password at `neo4j/<stack>/password` |
-| CloudWatch | Log group, VPC flow logs, failed-auth alarm, CloudTrail trail |
+| CloudWatch | Log group, VPC flow logs, failed-auth alarm |
 
 ### Relationship to the Private Template
 

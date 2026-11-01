@@ -132,7 +132,7 @@ The full workflow, the six SSM contract keys it requires, the URI selection rule
 
 ### Observability Checks
 
-Verify CloudWatch agent, application logs, VPC flow logs, failed-auth alarm, and CloudTrail:
+Verify CloudWatch agent, application logs, VPC flow logs, failed-auth alarm, and an account-level CloudTrail check:
 
 ```bash
 ./test-observability.sh                  # most recent deployment
@@ -146,13 +146,13 @@ Verify CloudWatch agent, application logs, VPC flow logs, failed-auth alarm, and
 | `logs` | Application log group exists with the expected stream count | <1 min |
 | `flowlogs` | VPC flow log group exists and has ENI streams | <1 min |
 | `alarm` | Failed-auth alarm transitions to ALARM after 12 bad login attempts | ~7 min |
-| `cloudtrail` | A multi-region CloudTrail trail exists and is logging | <1 min |
+| `cloudtrail` | Account-level check: the region's CloudTrail event history holds a management event from the last 24 hours. It is not a stack resource. | <1 min |
 
 ---
 
 ## Architecture
 
-![Neo4j EE Public Architecture](images/neo4j-public-architecture.png)
+![Neo4j EE Public Architecture](images/neo4j-public-architecture.svg)
 
 ### Network Topology
 
@@ -181,7 +181,7 @@ The `AvailabilityZones` parameter is optional. Every deployment, including a sin
 | EBS data volumes | One GP3 volume per node with `DeletionPolicy: Retain`; survives stack deletion |
 | Security groups | `NLBSecurityGroup` (AllowedCIDR on Browser and Bolt ports to the NLB); `ExternalSecurityGroup` (NLBSecurityGroup as source on Browser and Bolt ports to the instances); `InternalSecurityGroup` (cluster ports 5000/6000/7000/7688 between cluster members only) |
 | Secrets Manager | Neo4j admin password at `neo4j/<stack>/password` |
-| CloudWatch | Log group, VPC flow logs, failed-auth alarm, CloudTrail trail |
+| CloudWatch | Log group, VPC flow logs, failed-auth alarm |
 
 ### Security Configuration
 

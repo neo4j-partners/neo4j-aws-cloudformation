@@ -341,13 +341,13 @@ cd neo4j-ee
 | `logs` | Application log group exists with expected stream count | <1 min |
 | `flowlogs` | VPC flow log group exists and has ENI streams | <1 min |
 | `alarm` | Failed-auth alarm transitions to ALARM after 12 bad login attempts | ~7 min |
-| `cloudtrail` | A multi-region CloudTrail trail exists and is logging | <1 min |
+| `cloudtrail` | Account-level check: the region's CloudTrail event history holds a management event from the last 24 hours. It is not a stack resource. | <1 min |
 
 ---
 
 ## Architecture
 
-![Neo4j EE Private Architecture](images/neo4j-private-architecture.png)
+![Neo4j EE Private Architecture](images/neo4j-private-architecture.svg)
 
 ### Network Topology
 
@@ -360,7 +360,7 @@ cd neo4j-ee
 - VPC interface endpoints for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`
 
 **Single instance:**
-- VPC with one public subnet (NAT Gateway) and one private subnet (EC2 instance)
+- VPC with one public subnet for the optional NAT Gateway and one private subnet for the EC2 instance
 - Internal NLB in the private subnet
 - One NAT Gateway, only when `EnableInternetEgress` is `true`
 - One `t4g.small` operator bastion
@@ -384,7 +384,7 @@ The `AvailabilityZones` parameter is optional. Every deployment, including a sin
 | Security groups | NLB SG (AllowedCIDR on 7473/7687 to the NLB); External SG (NLB SG as source on 7473/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
 | SSM parameters | `/neo4j-ee/<stack>/` prefix; publishes VPC ID, NLB DNS, security group IDs, and secret ARN for downstream consumers |
 | Secrets Manager | Neo4j admin password at `neo4j/<stack>/password` |
-| CloudWatch | Log group, VPC flow logs, failed-auth alarm, CloudTrail trail |
+| CloudWatch | Log group, VPC flow logs, failed-auth alarm |
 
 ### NLB Routing
 
