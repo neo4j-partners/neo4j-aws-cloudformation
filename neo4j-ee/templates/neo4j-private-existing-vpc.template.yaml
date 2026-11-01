@@ -2253,6 +2253,14 @@ Resources:
       Value: neo4j_app
       Description: Neo4j application username. The user has the built-in architect role.
 
+  Neo4jConfigKmsKeyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/kms-key-arn'
+      Type: String
+      Value: !GetAtt Neo4jStackKey.Arn
+      Description: Full ARN of the single-Region stack KMS key that encrypts the password secrets. Readers of a secret need kms:Decrypt on this key.
+
   Neo4jConfigBoltUrlParameter:
     Type: AWS::SSM::Parameter
     Properties:

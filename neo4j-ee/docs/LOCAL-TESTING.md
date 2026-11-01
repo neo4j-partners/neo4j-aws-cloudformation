@@ -17,7 +17,7 @@ This guide covers deploying a test stack from source with `deploy.py`. It applie
 
 ## Prerequisites
 
-- **AWS credentials:** Set `AWS_PROFILE`, or the `default` profile is used. The profile must be able to create every resource in the stack, plus the ACM certificate, SSM parameter, Secrets Manager secrets, and temporary S3 bucket that `deploy.py` creates.
+- **AWS credentials:** Set `AWS_PROFILE`, or the `default` profile is used. The profile must be able to create every resource in the stack, plus the ACM certificate, SSM parameter, Secrets Manager secrets, and temporary S3 bucket that `deploy.py` creates. Creating the stack's password secrets also needs `kms:GenerateDataKey` through Secrets Manager. See [Deploying identity in PRIVATE.md](PRIVATE.md#prerequisites).
 - **Tools:** `uv`, `openssl`, the AWS CLI for `teardown.sh` and the checks below, and the Session Manager plugin for private stacks. `deploy.py` is a `uv` script, so it installs `boto3` on first run.
 - **Neo4j licence terms:** The bootstrap sets `NEO4J_ACCEPT_LICENSE_AGREEMENT=yes` on every node. Review the Neo4j Enterprise Edition terms before you deploy.
 - **Plugin licences:** `deploy.py` installs Bloom and GDS by default, which differs from the Marketplace defaults. Place licence files at `.licenses/bloom.license` and `.licenses/gds.license`, or pass `--no-bloom --no-gds` to skip both plugins.

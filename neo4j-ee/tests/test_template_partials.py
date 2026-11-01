@@ -1896,6 +1896,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "password-secret-arn",
             "app-password-secret-arn",
             "app-username",
+            "kms-key-arn",
             "advertised-dns",
             "bolt-url",
             "https-url",
@@ -1947,6 +1948,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "password-secret-arn",
             "app-password-secret-arn",
             "app-username",
+            "kms-key-arn",
             "external-sg-id",
             "vpc-endpoint-sg-id",
             "public-subnet-1-id",
@@ -2001,6 +2003,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "password-secret-arn",
             "app-password-secret-arn",
             "app-username",
+            "kms-key-arn",
             "external-sg-id",
             "vpc-endpoint-sg-id",
         }
@@ -2015,6 +2018,22 @@ class RenderedTemplateContractTests(unittest.TestCase):
         self.assertEqual(
             https_url, {"Fn::Sub": "https://${AdvertisedDNS}:7473"}
         )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_kms_key_arn_is_published_unconditionally_as_full_arn(self) -> None:
+        # Consumers such as Hume need kms:Decrypt on the stack key to read the
+        # password secrets. They read the key by full ARN, so the value must
+        # be GetAtt Arn, not the key ID that Ref returns.
+        for template_name in ("private", "public", "existing_vpc"):
+            with self.subTest(template=template_name):
+                ssm, keys_to_logical = self._ssm_keys_to_logical(template_name)
+                param = ssm[keys_to_logical["kms-key-arn"]]
+                self.assertNotIn("Condition", param)
+                self.assertEqual(param["Properties"]["Type"], "String")
+                self.assertEqual(
+                    param["Properties"]["Value"],
+                    {"Fn::GetAtt": "Neo4jStackKey.Arn"},
+                )
 
     @unittest.skipUnless(yaml is not None, "pyyaml is required")
     def test_tls_self_signed_contract_is_removed(self) -> None:

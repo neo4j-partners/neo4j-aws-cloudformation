@@ -86,7 +86,7 @@ EC2 instances must use an IAM role, not long-term access keys. Each permission m
 - CloudFormation signaling: restrict to the current stack ARN using `!Sub`.
 - EBS operations (`ec2:AttachVolume`, `ec2:DescribeVolumes`, `ec2:DescribeInstances`): resource `*` is acceptable because EBS volumes lack ARN-level scoping on all relevant APIs.
 - Auto Scaling discovery (`autoscaling:DescribeAutoScalingGroups`): required for cluster node discovery; resource `*` is unavoidable.
-- Secrets Manager (`secretsmanager:GetSecretValue`): scoped to the password secret ARN (`!Ref Neo4jPasswordSecret`). When `InstallBloom=true` and `BloomLicenseSecretArn` is non-empty, an `Fn::If` statement adds a grant scoped to that ARN; the same pattern applies to GDS via `GdsLicenseSecretArn`. Each license grant collapses to `AWS::NoValue` when the matching plugin is off or the ARN is empty, so a default Marketplace launch grants no Secrets Manager access for licenses.
+- Secrets Manager (`secretsmanager:GetSecretValue`): scoped to the password secret ARNs (`!Ref Neo4jPasswordSecret`, `!Ref Neo4jAppPasswordSecret`). The stack KMS key encrypts both secrets, so the role also holds `kms:Decrypt` scoped to `!GetAtt Neo4jStackKey.Arn`. When `InstallBloom=true` and `BloomLicenseSecretArn` is non-empty, an `Fn::If` statement adds a grant scoped to that ARN; the same pattern applies to GDS via `GdsLicenseSecretArn`. Each license grant collapses to `AWS::NoValue` when the matching plugin is off or the ARN is empty, so a default Marketplace launch grants no Secrets Manager access for licenses.
 
 ### Auto Scaling groups for all topologies
 
@@ -145,7 +145,7 @@ password=$(aws secretsmanager get-secret-value \
   --region "${region}")
 ```
 
-The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARN.
+The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARN. It also needs `kms:Decrypt` on the stack KMS key that encrypts the secret.
 
 ### Parameter grouping metadata
 

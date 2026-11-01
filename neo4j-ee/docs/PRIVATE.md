@@ -80,6 +80,11 @@ These are the minimum permissions the operator's local IAM principal (user or as
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:StartSession`, `ssm:DescribeInstanceInformation` | The bastion instance | `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`, `admin-shell`, `run-cypher`, `validate-private`, `uv run preflight` (bastion ping check) |
 | `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract |
 | `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight` (secret existence check) |
+| `kms:Decrypt` | The stack key in `/neo4j-ee/<stack-name>/kms-key-arn` | `get-password.sh` |
+
+**Deploying identity**
+
+The identity that creates the stack also creates the two password secrets. Secrets Manager encrypts them with the stack KMS key on that identity's behalf. The identity therefore needs `kms:GenerateDataKey` on the key. The key does not exist until the stack creates it, so scope the grant with the `kms:ViaService` condition for `secretsmanager.<region>.amazonaws.com` instead of a key ARN. An identity with `AdministratorAccess` already has this permission.
 
 **Plugin licenses (optional)**
 
@@ -199,7 +204,7 @@ The certificate SAN is the stack's `AdvertisedDNS`, so add `127.0.0.1 <Advertise
 PASSWORD=$(./scripts/get-password.sh 2>/dev/null)
 ```
 
-The password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON.
+The password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON. The stack KMS key encrypts it, so the caller needs `kms:Decrypt` on that key. See [IAM permissions](#prerequisites).
 
 Only the Browser Tunnel requires the password locally — you type it into the Neo4j Browser login form. `admin-shell` and `run-cypher` resolve the password on the bastion using the bastion's IAM role; it never appears on your local machine or in CloudTrail.
 
@@ -432,10 +437,15 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 | `/neo4j-ee/<stack>/private-route-table-1-id` | Route table for the first private subnet |
 | `/neo4j-ee/<stack>/app-password-secret-arn` | Secrets Manager ARN for the `neo4j_app` application user password |
 | `/neo4j-ee/<stack>/app-username` | Application username, `neo4j_app`. The user has the built-in `architect` role. |
+| `/neo4j-ee/<stack>/kms-key-arn` | Full ARN of the stack KMS key that encrypts both password secrets |
 
 **VPC interface endpoints.** The regional service hostnames (`ssm`, `ssmmessages`, `logs`, `secretsmanager`) resolve to private IPs inside the VPC. No endpoint URL overrides are needed in application code, and no NAT data-processing charges apply to AWS service calls.
 
 The `vpc-endpoint-sg-id` parameter is the mechanism by which applications opt into reaching these endpoints. Each application adds its own security group to the endpoint SG's ingress on port 443. Opening the endpoint SG to the whole VPC CIDR would allow any workload in the VPC to call SSM and Secrets Manager via PrivateLink. The published SG ID approach requires each application to explicitly opt in, creating an auditable per-application record and a clean removal path.
+
+**Reading a password secret.** An application that reads `password-secret-arn` or `app-password-secret-arn` needs two grants. The first is `secretsmanager:GetSecretValue` on the secret. The second is `kms:Decrypt` on the key in `kms-key-arn`. Without the KMS grant, `GetSecretValue` fails with `AccessDeniedException`. The key policy allows decryption only through Secrets Manager in the stack's region.
+
+**The stack key is single-Region and retained.** The key exists only in the stack's region. It carries `DeletionPolicy: Retain`, like both secrets, so a retained secret stays readable after the stack is deleted. `teardown.sh --delete-volumes` schedules the key for deletion with the 7-day minimum window.
 
 See [`sample-private-app/README.md`](../sample-private-app/README.md) for the full application connection pattern.
 

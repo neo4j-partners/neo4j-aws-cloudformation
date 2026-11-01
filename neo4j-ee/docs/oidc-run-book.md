@@ -135,21 +135,23 @@ Hume's `neo4j_env.py` reads these values from the stack:
 
 | Value | Where it lives |
 |---|---|
-| `advertised-dns`, `vpc-id`, `external-sg-id`, `vpc-endpoint-sg-id`, `password-secret-arn`, `private-subnet-1-id`, `private-subnet-2-id`, `nlb-dns` | SSM parameters under `/neo4j-ee/<stack-name>/` |
+| `advertised-dns`, `vpc-id`, `external-sg-id`, `vpc-endpoint-sg-id`, `password-secret-arn`, `kms-key-arn`, `private-subnet-1-id`, `private-subnet-2-id`, `nlb-dns` | SSM parameters under `/neo4j-ee/<stack-name>/` |
 | The bastion instance ID | The stack output `Neo4jOperatorBastionId` |
 | Three public subnets, `10.0.1.0/24`, `10.0.2.0/24` and `10.0.3.0/24`, one in each zone | The stack VPC |
 | The certificate on port 7687, whose name must match `advertised-dns` | The load balancer |
 
 `external-sg-id` is the load balancer security group, not the instance security group.
 
-Check that all eight parameters exist:
+`kms-key-arn` is the full ARN of the stack KMS key. Hume needs `kms:Decrypt` on it to read the password secret.
+
+Check that all nine parameters exist:
 
 ```bash
 aws ssm get-parameters-by-path --path "/neo4j-ee/$NEO4J_STACK/" \
   --query 'Parameters[].Name' --output text | tr '\t' '\n' | sort
 ```
 
-The list must include all eight names in the table. The stack also publishes other parameters. Hume does not read them.
+The list must include all nine names in the table. The stack also publishes other parameters. Hume does not read them.
 
 Check the bastion output:
 

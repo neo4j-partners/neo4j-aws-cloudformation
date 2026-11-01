@@ -59,6 +59,11 @@ These are the minimum permissions the operator's local IAM principal (user or as
 |---|---|---|
 | `cloudformation:DescribeStacks` | The stack ARN | `deploy.py` (reads stack outputs), observability and teardown scripts |
 | `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | Retrieving the Neo4j admin password |
+| `kms:Decrypt` | The stack key in `/neo4j-ee/<stack-name>/kms-key-arn` | Retrieving the Neo4j admin password |
+
+**Deploying identity**
+
+The identity that creates the stack also creates the two password secrets. Secrets Manager encrypts them with the stack KMS key on that identity's behalf. The identity therefore needs `kms:GenerateDataKey` on the key. The key does not exist until the stack creates it, so scope the grant with the `kms:ViaService` condition for `secretsmanager.<region>.amazonaws.com` instead of a key ARN. An identity with `AdministratorAccess` already has this permission.
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation` | The cluster EC2 instances | `test-observability.sh` (checks CloudWatch agent via SSM Run Command) |
 
 **Plugin licenses (optional)**
@@ -99,7 +104,7 @@ aws cloudformation describe-stacks \
 
 ### Retrieve the Password
 
-The Neo4j admin password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON. The secret ARN is in the stack outputs as `Neo4jPasswordSecretArn`.
+The Neo4j admin password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON. The secret ARN is in the stack outputs as `Neo4jPasswordSecretArn`. The stack KMS key encrypts the secret, so the caller needs `kms:Decrypt` on that key. The stack publishes the key's full ARN at `/neo4j-ee/<stack-name>/kms-key-arn`. The key exists only in the stack's region and is retained with the secret when the stack is deleted.
 
 ```bash
 aws secretsmanager get-secret-value \

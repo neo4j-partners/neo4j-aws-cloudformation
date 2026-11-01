@@ -375,6 +375,14 @@ that grant. CloudWatch Logs gets its own statement, limited by an `ArnLike`
 condition on `kms:EncryptionContext:aws:logs:arn` to the stack's
 `/neo4j/<stack>/*` and `/aws/vpc/flowlogs/<stack>` groups.
 
+**The stack publishes the key by full ARN.** Every template writes
+`/neo4j-ee/<stack>/kms-key-arn` unconditionally, with the value
+`!GetAtt Neo4jStackKey.Arn`. A consumer that reads a password secret needs an
+IAM `kms:Decrypt` grant on that ARN. The key is single-Region, so the ARN names
+the stack's region. The identity that deploys the stack needs
+`kms:GenerateDataKey` through Secrets Manager, because Secrets Manager
+encrypts the secrets on that identity's behalf.
+
 **Credentials and the audit trail survive a stack delete.** The password
 secret, the stack key and the NLB access-log bucket carry
 `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`. A stack delete
@@ -558,6 +566,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-21 | The application secret is generated, alphanumeric, retained and encrypted with the stack key; the node role reads it; the stack publishes `app-password-secret-arn` and `app-username`; the bootstrap creates `neo4j_app` with `architect` after start, on first boot only (AD-6) | `SecurityReviewBatchBTests.test_app_password_secret_is_generated_alphanumeric_and_retained`, `test_node_role_reads_both_password_secrets`, `test_app_user_ssm_parameters`, `test_bootstrap_creates_app_user_after_start_on_first_boot`; `ShellPartialTests.test_create_app_user_*` |
 | NFR-22 | The initial password is set from a 0600 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
 | NFR-23 | `OidcNativeAuthEnabled` defaults to `true`; `false` sets both provider lists to `oidc-sso` (AD-6) | `ShellPartialTests.test_configure_oidc_native_auth_flag`; `SecurityReviewBatchBTests.test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata` |
+| NFR-24 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf
