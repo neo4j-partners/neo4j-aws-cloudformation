@@ -1,35 +1,42 @@
-"""CLI entry point: uv run admin-shell"""
+"""CLI entry point: uv run admin-shell
+
+Runs cypher-shell on this machine through an SSM port-forward to the
+internal NLB. The password is read with the operator's AWS credentials and
+passed to cypher-shell in its environment only, never on the command line.
+"""
 
 from __future__ import annotations
 
-import base64
+import contextlib
 import logging
 import os
+import shutil
+import signal
+import socket
+import subprocess
 import sys
-import time
+from collections.abc import Iterator
 from pathlib import Path
 
-from validate_private.config import load_config
+from neo4j import GraphDatabase
+from neo4j.exceptions import DriverError, Neo4jError
+
+from validate_private.config import StackConfig, load_config
+from validate_private.runner import BOLT_PORT
+from validate_private.tunnel import PortForward, TunnelError
 
 log = logging.getLogger(__name__)
 
 _NEO4J_EE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 _DEPLOY_DIR = _NEO4J_EE_DIR / ".deploy"
+_LOOPBACK = {"127.0.0.1", "::1"}
 
-# Launcher script that runs ON the bastion. Placeholders __STACK__, __REGION__,
-# and __BOLT_SCHEME__ are replaced before base64 encoding, so no shell expansion
-# is needed.
-_LAUNCHER_TEMPLATE = """\
-#!/bin/bash
-set -euo pipefail
-export NEO4J_PASSWORD=$(aws secretsmanager get-secret-value \\
-  --secret-id 'neo4j/__STACK__/password' \\
-  --query SecretString --output text --region '__REGION__')
-NLB_DNS=$(aws ssm get-parameter \\
-  --name '/neo4j-ee/__STACK__/nlb-dns' \\
-  --query Parameter.Value --output text --region '__REGION__')
-exec cypher-shell -a "__BOLT_SCHEME__://${NLB_DNS}:7687" -u neo4j -p "${NEO4J_PASSWORD}"
-"""
+# cypher-shell has no custom resolver. A bolt:// URI sends no routing
+# context, so server-side routing does not apply and a write that lands on a
+# follower fails with NotALeader. The routed scheme makes cypher-shell follow
+# the routing table, whose entries name the advertised Bolt host on 7687. The
+# /etc/hosts line maps that host to 127.0.0.1, which is what makes every
+# routed address land on this tunnel. The local port must therefore be 7687.
 
 
 def _resolve_outputs_path(stack: str | None) -> Path:
@@ -49,11 +56,80 @@ def _resolve_outputs_path(stack: str | None) -> Path:
     )
 
 
+def _local_port_open() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", BOLT_PORT), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+@contextlib.contextmanager
+def _tunnel(config: StackConfig) -> Iterator[None]:
+    if _local_port_open():
+        log.info("  Using the existing tunnel on %s.", BOLT_PORT)
+        yield
+        return
+    log.info("  Opening the SSM port-forward on 127.0.0.1:%s...", BOLT_PORT)
+    with PortForward(
+        config.region, config.bastion_id, config.nlb_dns, BOLT_PORT,
+        local_port=BOLT_PORT,
+    ):
+        yield
+
+
+def _advertised_host(config: StackConfig) -> str:
+    """Return the host the cluster advertises in its Bolt routing table."""
+    scheme = "bolt+ssc" if "+ssc" in config.bolt_scheme else "bolt"
+    with GraphDatabase.driver(
+        f"{scheme}://127.0.0.1:{BOLT_PORT}",
+        auth=("neo4j", config.password),
+    ) as driver:
+        records, _, _ = driver.execute_query(
+            "CALL dbms.routing.getRoutingTable({})"
+        )
+    address = records[0]["servers"][0]["addresses"][0]
+    host, _, _ = address.rpartition(":")
+    return host
+
+
+def _resolves_to_loopback(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, BOLT_PORT, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return False
+    return all(info[4][0] in _LOOPBACK for info in infos)
+
+
+def _run_shell(cypher_shell: str, uri: str, config: StackConfig) -> int:
+    env = {
+        **os.environ,
+        "NEO4J_USERNAME": "neo4j",
+        "NEO4J_PASSWORD": config.password,
+    }
+    proc = subprocess.Popen([cypher_shell, "-a", uri], env=env)
+    # Ctrl-C belongs to cypher-shell, which uses it to cancel a query. The
+    # handler is set after the fork so the child keeps the default.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        return proc.wait()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def main() -> None:
     args = sys.argv[1:]
     stack = args[0] if args else None
 
     logging.basicConfig(format="%(message)s", level=logging.INFO, stream=sys.stderr)
+
+    cypher_shell = shutil.which("cypher-shell")
+    if cypher_shell is None:
+        log.error(
+            "ERROR: cypher-shell is not on PATH. Install cypher-shell "
+            "(brew install cypher-shell) and run admin-shell again."
+        )
+        sys.exit(1)
 
     try:
         outputs_path = _resolve_outputs_path(stack)
@@ -67,68 +143,30 @@ def main() -> None:
     log.info("  Stack:   %s", config.stack_name)
     log.info("  Region:  %s", config.region)
     log.info("  Bastion: %s", config.bastion_id)
-    log.info("  URI:     %s://%s:7687", config.bolt_scheme, config.nlb_dns)
-    log.info("")
-    log.info("  Password is resolved on the bastion — not visible here or in CloudTrail.")
-    log.info("  Type ':exit' or press Ctrl-D to close the session.")
+    log.info("  NLB:     %s:%s", config.nlb_dns, BOLT_PORT)
     log.info("")
 
-    import boto3
-
-    launcher = (
-        _LAUNCHER_TEMPLATE
-        .replace("__STACK__", config.stack_name)
-        .replace("__REGION__", config.region)
-        .replace("__BOLT_SCHEME__", config.bolt_scheme)
-    )
-    b64_launcher = base64.b64encode(launcher.encode()).decode()
-
-    ssm = boto3.client("ssm", region_name=config.region)
-
-    # Step 1: write the launcher script to the bastion via RunShellScript.
-    log.info("  Preparing bastion...")
-    write_cmd = f"echo {b64_launcher} | base64 -d > /tmp/neo4j-shell.sh && chmod +x /tmp/neo4j-shell.sh"
-    resp = ssm.send_command(
-        InstanceIds=[config.bastion_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [write_cmd]},
-    )
-    command_id = resp["Command"]["CommandId"]
-
-    terminal = {"Success", "Failed", "Cancelled", "TimedOut"}
-    deadline = time.monotonic() + 30
-    inv: dict = {}
-    status = "Pending"
-
-    while True:
-        if time.monotonic() >= deadline:
-            log.error("ERROR: Timed out waiting for bastion preparation")
-            sys.exit(1)
-        try:
-            inv = ssm.get_command_invocation(
-                CommandId=command_id,
-                InstanceId=config.bastion_id,
-            )
-            status = inv["Status"]
-            if status in terminal:
-                break
-        except ssm.exceptions.InvocationDoesNotExist:
-            pass
-        time.sleep(2)
-
-    if status != "Success":
-        stderr = inv.get("StandardErrorContent", "").strip()
-        log.error("ERROR: Failed to prepare bastion (status=%s)\n%s", status, stderr)
+    try:
+        with _tunnel(config):
+            host = _advertised_host(config)
+            if not _resolves_to_loopback(host):
+                log.error(
+                    "ERROR: cypher-shell follows the routing table to %s, so "
+                    "that name must resolve to 127.0.0.1. Add this line to "
+                    "/etc/hosts:",
+                    host,
+                )
+                print(f"127.0.0.1 {host}")
+                sys.exit(1)
+            uri = f"{config.bolt_scheme}://{host}:{BOLT_PORT}"
+            log.info("  URI:     %s", uri)
+            log.info("  Type ':exit' or press Ctrl-D to close the session.")
+            log.info("")
+            rc = _run_shell(cypher_shell, uri, config)
+    except TunnelError as exc:
+        log.error("ERROR: %s", exc)
         sys.exit(1)
-
-    # Step 2: replace this process with an interactive SSM session that runs the launcher.
-    os.execvp(
-        "aws",
-        [
-            "aws", "ssm", "start-session",
-            "--target", config.bastion_id,
-            "--region", config.region,
-            "--document-name", "AWS-StartInteractiveCommand",
-            "--parameters", '{"command": ["/tmp/neo4j-shell.sh"]}',
-        ],
-    )
+    except (Neo4jError, DriverError) as exc:
+        log.error("ERROR: Could not read the routing table: %s", exc)
+        sys.exit(1)
+    sys.exit(rc)

@@ -1,4 +1,4 @@
-"""Validation checks run against the Neo4j cluster via the operator bastion."""
+"""Validation checks run against the Neo4j cluster over an SSM tunnel and SSM commands."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from validate_private.runner import Neo4jQueryError, run_cypher_on_bastion
+from validate_private.runner import Neo4jQueryError, run_cypher
+from validate_private.tunnel import TunnelError
 
 if TYPE_CHECKING:
     from validate_private.config import StackConfig
@@ -21,7 +22,7 @@ def _run(config: "StackConfig", reporter: "TestReporter", name: str, cypher: str
     log.info("--- %s ---", name)
     start = time.monotonic()
     try:
-        rows = run_cypher_on_bastion(config, cypher)
+        rows = run_cypher(config, cypher)
         passed, detail = check_fn(rows)
     except Neo4jQueryError as exc:
         passed, detail = False, str(exc)
@@ -33,7 +34,7 @@ def _run(config: "StackConfig", reporter: "TestReporter", name: str, cypher: str
 def check_bolt(config: "StackConfig", reporter: "TestReporter") -> None:
     def _check(rows):
         val = rows[0]["result"] if rows else None
-        return val == 1, f"Bolt connected via bastion, Cypher returned: {val}"
+        return val == 1, f"Bolt connected over the SSM tunnel, Cypher returned: {val}"
 
     _run(config, reporter, "Bolt connectivity", "RETURN 1 AS result", _check)
 
@@ -106,6 +107,78 @@ def check_apoc(config: "StackConfig", reporter: "TestReporter") -> None:
     _run(config, reporter, "APOC plugin", cypher, _check)
 
 
+# The APOC calls the Hume application makes, run as the stack's application
+# user. neo4j-base.conf allowlists apoc.* but leaves it out of the
+# unrestricted list. A procedure-not-allowed or sandbox error here means
+# those settings no longer cover what Hume calls.
+_APP_USER_APOC_CALLS = (
+    (
+        "apoc.path.expandConfig",
+        "CREATE (n:_ValidatePrivateApocCheck) "
+        "WITH n CALL apoc.path.expandConfig(n, {maxLevel: 1}) YIELD path "
+        "WITH n, count(path) AS paths DELETE n RETURN paths AS result",
+    ),
+    ("apoc.text.join", "RETURN apoc.text.join(['a', 'b'], ',') AS result"),
+    ("apoc.coll.sum", "RETURN apoc.coll.sum([1, 2]) AS result"),
+    ("apoc.convert.toJson", "RETURN apoc.convert.toJson({a: 1}) AS result"),
+    ("apoc.help", "CALL apoc.help('apoc') YIELD name RETURN count(name) AS result"),
+)
+
+
+def _app_user_credentials(config: "StackConfig") -> tuple[str, str]:
+    """Read the application user's name and password with the operator's credentials."""
+    import boto3
+
+    ssm = boto3.client("ssm", region_name=config.region)
+    prefix = f"/neo4j-ee/{config.stack_name}"
+    username = ssm.get_parameter(Name=f"{prefix}/app-username")["Parameter"]["Value"]
+    secret_arn = ssm.get_parameter(Name=f"{prefix}/app-password-secret-arn")[
+        "Parameter"
+    ]["Value"]
+    sm = boto3.client("secretsmanager", region_name=config.region)
+    password = sm.get_secret_value(SecretId=secret_arn)["SecretString"]
+    return username, password
+
+
+def check_apoc_app_user(config: "StackConfig", reporter: "TestReporter") -> None:
+    """Run the APOC calls Hume makes as the application user. Release suite only.
+
+    The queries run on a second driver over the same Bolt tunnel. The
+    expandConfig query creates and deletes its throwaway node in one
+    transaction, so a failed call leaves nothing behind.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    if not config.install_apoc:
+        return
+
+    name = "APOC as application user"
+    log.info("")
+    log.info("--- %s ---", name)
+    start = time.monotonic()
+    try:
+        auth = _app_user_credentials(config)
+    except (BotoCoreError, ClientError, KeyError) as exc:
+        reporter.record(
+            name, False,
+            f"Could not read the application user credentials: {exc}",
+            time.monotonic() - start,
+        )
+        return
+
+    failed: list[str] = []
+    for call, cypher in _APP_USER_APOC_CALLS:
+        try:
+            run_cypher(config, cypher, auth=auth)
+        except (Neo4jQueryError, TunnelError) as exc:
+            failed.append(f"{call}: {exc}")
+    if failed:
+        detail = "; ".join(failed)
+    else:
+        detail = f"{len(_APP_USER_APOC_CALLS)} APOC calls succeeded as {auth[0]}"
+    reporter.record(name, not failed, detail, time.monotonic() - start)
+
+
 def check_gds(config: "StackConfig", reporter: "TestReporter") -> None:
     if not config.install_gds:
         return
@@ -142,7 +215,7 @@ def check_cluster_roles(config: "StackConfig", reporter: "TestReporter") -> None
     """Verify SHOW DATABASE returns per-node serverId with exactly one writer."""
     start = time.monotonic()
     try:
-        rows = run_cypher_on_bastion(
+        rows = run_cypher(
             config,
             "SHOW DATABASE neo4j YIELD serverID, writer",
             database="system",
@@ -258,10 +331,10 @@ def run_server_id_check(config: "StackConfig", reporter: "TestReporter") -> None
         time.monotonic() - start,
     )
 
-    # Get the authoritative UUIDs from SHOW SERVERS via the bastion.
+    # Get the authoritative UUIDs from SHOW SERVERS.
     start = time.monotonic()
     try:
-        server_rows = run_cypher_on_bastion(config, "SHOW SERVERS YIELD name", database="system")
+        server_rows = run_cypher(config, "SHOW SERVERS YIELD name", database="system")
         authoritative_uuids = {r["name"] for r in server_rows if r.get("name")}
     except Exception as exc:
         reporter.record("SHOW SERVERS (authoritative UUIDs)", False, str(exc), time.monotonic() - start)
@@ -714,7 +787,7 @@ def run_version_inventory(
 
     start = time.monotonic()
     try:
-        rows = run_cypher_on_bastion(
+        rows = run_cypher(
             config,
             "CALL dbms.components() YIELD name, versions, edition "
             "RETURN name, versions[0] AS version, edition",
@@ -737,7 +810,7 @@ def run_version_inventory(
 
     start = time.monotonic()
     try:
-        rows = run_cypher_on_bastion(
+        rows = run_cypher(
             config,
             "CALL dbms.listConfig('db.query.default_language') "
             "YIELD name, value RETURN value",
@@ -845,6 +918,7 @@ def run_release_gate(
 ) -> None:
     """Run the deploy-time release checks for a Private EE stack."""
     run_checks(config, reporter)
+    check_apoc_app_user(config, reporter)
     run_version_inventory(
         config,
         reporter,

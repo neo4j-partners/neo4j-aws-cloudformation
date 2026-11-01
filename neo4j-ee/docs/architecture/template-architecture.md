@@ -486,6 +486,30 @@ alarm is always on. Single sign-on users get roles only through the group
 mapping. The `neo4j` admin password remains the break-glass path when the
 identity provider is down.
 
+**The operator bastion holds no credentials.** The Private and ExistingVpc
+bastion relays SSM port-forward sessions to the load balancer. Its role reads
+the stack's `/neo4j-ee/<stack>/` parameters and writes Session Manager logs.
+It reads no secret and decrypts with no key. The `validate-private` tools read
+the admin password with the operator's own AWS credentials and keep it in
+memory. They run the Neo4j driver and `cypher-shell` on the operator machine
+through the tunnel. The bastion UserData installs no package. Its security
+group allows outbound port 443 to the endpoint security group and to the S3
+prefix list. It also allows ports 7473 and 7687 to the load balancer security
+group. The S3 rule leaves the same residual that AD-7 accepts for the nodes.
+Security review finding H3 flagged the old bastion, whose role could read the
+superuser password, as a credential source for anyone able to open a session
+on it.
+
+**Interactive sessions are logged to the stack.** The stack creates a Session
+Manager preferences document and publishes its name as the
+`Neo4jSessionDocumentName` output. A shell session started with that document
+through `--document-name` streams to the `/neo4j/<stack>/sessions` log group.
+The group is encrypted with `Neo4jStackKey` and keeps 90 days. Both the
+bastion role and the node role can write to it. Session Manager does not log
+port-forwarding sessions. The operator tools therefore leave no session
+transcript. CloudTrail `StartSession` events and the Neo4j security and query logs are
+the trail for those sessions.
+
 ### AD-7: Node egress reaches only VPC endpoints, cluster peers and the identity provider
 
 **Private and ExistingVpc nodes have no general internet route.** The node
@@ -699,6 +723,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-24 | Neo4j and `cypher-shell` are baked into the AMI at the pinned version with the repo and service disabled; the node boot path installs no package and fails closed without them (AD-1) | `ShellPartialTests.test_create_ami_bakes_pinned_neo4j_and_never_starts_it`, `test_verify_neo4j_installed_*`; `RenderedTemplateContractTests.test_node_boot_path_installs_no_packages`; `test-ami.sh` CHECK 7, 8, 10 and 12 |
 | NFR-25 | No security group has an empty egress list; Private and ExistingVpc node egress is the endpoint SG on 443, cluster self rules and OIDC-conditional 443 only; Public node egress is 443 and cluster only; the interface endpoints cover the nine node services, each with an account-scoped policy; endpoint SG ingress comes from the nodes and the bastion (AD-7) | `SecurityReviewBatchCTests.test_no_security_group_has_an_empty_egress_list`, `test_node_security_groups_declare_inline_egress`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only`, `test_public_node_egress_is_https_and_cluster_only`, `test_interface_endpoints_cover_every_node_service`, `test_every_vpc_endpoint_has_an_account_scoped_policy`, `test_endpoint_sg_ingress_comes_from_nodes_and_bastion` |
 | NFR-26 | Private and ExistingVpc node egress to S3 is port 443 to the prefix list returned by the `S3PrefixList` custom resource for `com.amazonaws.${AWS::Region}.s3`; the lookup Lambda runs outside the VPC, its role grants only `ec2:DescribePrefixLists` and its own log group, and it fails unless exactly one prefix list matches; Public has no lookup (AD-7) | `SecurityReviewBatchCTests.test_s3_egress_uses_the_looked_up_prefix_list`, `test_s3_prefix_list_function_is_least_privilege_and_fails_loudly`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only` |
+| NFR-27 | The bastion role grants no `secretsmanager` or `kms` action; bastion egress is the endpoint SG and the S3 prefix list on 443 and the NLB SG on 7473 and 7687 only; the bastion UserData installs no package; the Session Manager preferences document streams to the encrypted `/neo4j/<stack>/sessions` group and is a stack output (AD-6) | `SecurityReviewBatchDTests.test_bastion_role_holds_no_credential_grants`, `test_bastion_and_nodes_can_stream_to_the_session_log_group`, `test_bastion_egress_is_endpoints_nlb_and_s3_only`, `test_bastion_userdata_installs_nothing`, `test_session_preferences_log_to_the_encrypted_stack_log_group` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

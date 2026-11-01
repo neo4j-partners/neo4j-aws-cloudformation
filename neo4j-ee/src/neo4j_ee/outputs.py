@@ -100,9 +100,11 @@ def resolve_direct_bolt_scheme(fields: dict[str, str]) -> str:
 
     A routed ``neo4j`` scheme makes the driver follow the routing table to the
     NLB's private DNS name, which a laptop cannot reach. A direct ``bolt``
-    connection stays on the forwarded port and the cluster's server-side
-    routing (``dbms.routing.default_router=SERVER``) directs writes to the
-    leader. TLS handling matches ``resolve_bolt_scheme``.
+    connection stays on the forwarded port, but it sends no routing context,
+    so server-side routing does not apply. A direct connection is safe for
+    reads only. A write that lands on a follower fails with NotALeader, so
+    writes need the routed scheme. TLS handling matches
+    ``resolve_bolt_scheme``.
     """
     if fields.get("AdvertisedDNS", ""):
         return "bolt+ssc"

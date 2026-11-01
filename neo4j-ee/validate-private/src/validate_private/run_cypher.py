@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from validate_private.config import load_config
-from validate_private.runner import Neo4jQueryError, run_cypher_on_bastion
+from validate_private.runner import Neo4jQueryError, run_cypher
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def main() -> None:
     log.info("")
 
     try:
-        rows = run_cypher_on_bastion(config, cypher)
+        rows = run_cypher(config, cypher)
     except Neo4jQueryError as exc:
         log.error("Query failed: %s", exc)
         sys.exit(1)

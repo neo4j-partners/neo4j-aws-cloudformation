@@ -21,7 +21,7 @@ from botocore.config import Config
 from validate_private.aws_helpers import asg_instances as _asg_instances
 from validate_private.aws_helpers import stack_resources as _stack_resources
 from validate_private.quorum import check_quorum
-from validate_private.runner import run_cypher_on_bastion, run_shell_on_instance
+from validate_private.runner import run_cypher, run_shell_on_instance
 from validate_private.sentinel import cleanup_sentinel, verify_sentinel, write_sentinel
 
 if TYPE_CHECKING:
@@ -158,15 +158,15 @@ def _check_marker(ssm, instance_id: str, marker_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Neo4j checks via bastion
+# Neo4j checks over the Bolt tunnel
 # ---------------------------------------------------------------------------
 
 def _wait_neo4j(config: "StackConfig", timeout: int) -> bool:
-    """Retry a trivial Cypher query via the bastion until Neo4j is reachable."""
+    """Retry a trivial Cypher query over the Bolt tunnel until Neo4j is reachable."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            rows = run_cypher_on_bastion(config, "RETURN 1 AS ok", timeout_s=30)
+            rows = run_cypher(config, "RETURN 1 AS ok", timeout_s=30)
             if rows and rows[0].get("ok") == 1:
                 return True
         except Exception:
@@ -269,7 +269,7 @@ def run_single_loss(
     ok = _wait_neo4j(config, timeout=300)
     reporter.record(
         "Neo4j reachable post-recovery", ok,
-        "Accepting Cypher via bastion" if ok else "Neo4j not reachable within 300s",
+        "Accepting Cypher over the Bolt tunnel" if ok else "Neo4j not reachable within 300s",
         time.monotonic() - start,
     )
     if not ok:
@@ -432,7 +432,7 @@ def run_total_loss(
     ok = _wait_neo4j(config, timeout=600)
     reporter.record(
         "Neo4j reachable post-recovery", ok,
-        "Accepting Cypher via bastion" if ok
+        "Accepting Cypher over the Bolt tunnel" if ok
         else (
             "Neo4j not reachable within 600s — cluster did not reform quorum. "
             "Check /var/log/cloud-init-output.log and /var/log/neo4j/debug.log "

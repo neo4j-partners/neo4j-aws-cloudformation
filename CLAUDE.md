@@ -75,14 +75,14 @@ Each deployment writes `.deploy/<stack-name>.txt` (gitignored); operator/test to
 
 ## Operator Tooling for Private Stacks (validate-private/)
 
-`neo4j-ee/validate-private/` is a `uv` project (Python ≥3.11). It reaches private clusters through the SSM bastion; credentials resolve on the bastion via its IAM role and never touch the operator laptop. Run from `validate-private/`:
+`neo4j-ee/validate-private/` is a `uv` project (Python ≥3.11). It reaches private clusters over an SSM port-forward through the bastion. The bastion holds no credentials. The tools read the Neo4j password with the operator's AWS credentials, keep it in memory, and run the driver locally. Run from `validate-private/`:
 
 ```bash
 uv run preflight [stack]                       # 12 required readiness checks; gate before other tools
 uv run validate-private [--stack <name>]       # Bolt, edition, memory, APOC/GDS, cluster roles, blocklist
 uv run validate-private --suite release --expected-cypher-default <v> [--expected-neo4j-version X] [--min-java-major N]
 uv run run-cypher [stack] '<cypher>'
-uv run admin-shell [stack]                      # interactive cypher-shell on the bastion
+uv run admin-shell [stack]                      # interactive cypher-shell over the SSM tunnel
 uv run scripts/smoke-write.py [stack] [N]       # N CREATE/DELETE write cycles
 uv run scripts/browser-tunnel.py [stack]        # port-forward NLB :7473
 uv run scripts/bolt-tunnel.py [stack]           # port-forward NLB :7687

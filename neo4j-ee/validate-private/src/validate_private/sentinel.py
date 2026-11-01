@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from validate_private.runner import Neo4jQueryError, run_cypher_on_bastion
+from validate_private.runner import Neo4jQueryError, run_cypher
 
 if TYPE_CHECKING:
     from validate_private.config import StackConfig
@@ -15,12 +15,12 @@ log = logging.getLogger(__name__)
 
 def write_sentinel(config: "StackConfig", test_run_id: str) -> tuple[bool, str]:
     try:
-        run_cypher_on_bastion(
+        run_cypher(
             config,
             "CREATE (s:ResilienceSentinel {test_id: $tid, value: 'persistence-check'})",
             params={"tid": test_run_id},
         )
-        rows = run_cypher_on_bastion(
+        rows = run_cypher(
             config,
             "MATCH (s:ResilienceSentinel {test_id: $tid}) RETURN s.value AS v",
             params={"tid": test_run_id},
@@ -34,7 +34,7 @@ def write_sentinel(config: "StackConfig", test_run_id: str) -> tuple[bool, str]:
 
 def verify_sentinel(config: "StackConfig", test_run_id: str) -> tuple[bool, str]:
     try:
-        rows = run_cypher_on_bastion(
+        rows = run_cypher(
             config,
             "MATCH (s:ResilienceSentinel {test_id: $tid}) RETURN s.value AS v",
             params={"tid": test_run_id},
@@ -50,7 +50,7 @@ def verify_sentinel(config: "StackConfig", test_run_id: str) -> tuple[bool, str]
 
 def cleanup_sentinel(config: "StackConfig", test_run_id: str) -> None:
     try:
-        run_cypher_on_bastion(
+        run_cypher(
             config,
             "MATCH (s:ResilienceSentinel {test_id: $tid}) DELETE s",
             params={"tid": test_run_id},

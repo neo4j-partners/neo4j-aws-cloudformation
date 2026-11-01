@@ -2,7 +2,7 @@
 name = "validate-private"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["boto3>=1.34"]
+dependencies = ["boto3>=1.34", "neo4j>=6,<7"]
 
 [project.scripts]
 validate-private = "validate_private.cli:main"

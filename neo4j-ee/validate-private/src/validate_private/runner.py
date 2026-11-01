@@ -1,67 +1,136 @@
-"""Send Cypher queries to the Neo4j cluster via SSM RunShellScript on the operator bastion."""
+"""Run Cypher on the cluster over an SSM tunnel, and shell commands via SSM.
+
+Cypher runs in this process. The neo4j driver connects through an SSM
+port-forward to the internal NLB, relayed by the operator bastion. The
+password comes from the operator's own AWS credentials and stays in memory.
+It is never written to disk and never sent in an SSM command.
+"""
 
 from __future__ import annotations
 
-import base64
-import json
+import atexit
 import logging
-import time
+import threading
 from typing import TYPE_CHECKING
 
-from botocore.config import Config
+from neo4j import Driver, GraphDatabase, Query
+from neo4j.exceptions import DriverError, Neo4jError
+
+from validate_private.tunnel import PortForward
 
 if TYPE_CHECKING:
     from validate_private.config import StackConfig
 
 log = logging.getLogger(__name__)
 
-_RETRY_CFG = Config(retries={"mode": "standard"})
+BOLT_PORT = 7687
 
-# Script that runs ON the bastion. It reads stack/region from argv, fetches
-# credentials from Secrets Manager and NLB DNS from SSM Parameter Store using
-# the bastion's own IAM role, then executes the Cypher query.
-_BASTION_SCRIPT = """\
-import sys
-import json
-import boto3
-from neo4j import GraphDatabase
-
-stack = sys.argv[1]
-region = sys.argv[2]
-bolt_scheme = sys.argv[3]
-
-data = json.load(sys.stdin)
-cypher = data["cypher"]
-params = data.get("params") or {}
-database = data.get("database")
-
-sm = boto3.client("secretsmanager", region_name=region)
-password = sm.get_secret_value(SecretId=f"neo4j/{stack}/password")["SecretString"]
-
-ssm_client = boto3.client("ssm", region_name=region)
-nlb_dns = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
-
-driver = GraphDatabase.driver(f"{bolt_scheme}://{nlb_dns}:7687", auth=("neo4j", password))
-try:
-    kwargs = {"parameters_": params}
-    if database:
-        kwargs["database_"] = database
-    result = driver.execute_query(cypher, **kwargs)
-    print(json.dumps([r.data() for r in result.records]))
-except Exception as exc:
-    print(json.dumps({"error": str(exc)}))
-    sys.exit(1)
-finally:
-    driver.close()
-"""
-
-
-class BastionCommandError(RuntimeError):
-    pass
+_lock = threading.Lock()
+_tunnels: dict[str, PortForward] = {}
+_drivers: dict[tuple[str, str], Driver] = {}
 
 
 class Neo4jQueryError(RuntimeError):
     pass
+
+
+def bolt_tunnel(config: "StackConfig") -> PortForward:
+    """Return the stack's Bolt tunnel, starting or restarting it as needed.
+
+    A restart picks a new local port, so the drivers bound to the old port
+    are closed and rebuilt on next use.
+    """
+    with _lock:
+        return _live_tunnel(config)
+
+
+def _live_tunnel(config: "StackConfig") -> PortForward:
+    tunnel = _tunnels.get(config.stack_name)
+    if tunnel is None:
+        tunnel = PortForward(config.region, config.bastion_id, config.nlb_dns, BOLT_PORT)
+        _tunnels[config.stack_name] = tunnel
+    if not tunnel.alive():
+        for key in [k for k in _drivers if k[0] == config.stack_name]:
+            _drivers.pop(key).close()
+        log.debug("Opening Bolt tunnel for %s", config.stack_name)
+        tunnel.start()
+    return tunnel
+
+
+def open_driver(
+    config: "StackConfig",
+    auth: tuple[str, str] | None = None,
+) -> Driver:
+    """Open a new driver over the stack's Bolt tunnel. The caller closes it.
+
+    The resolver sends every address to the tunnel, including the addresses
+    in the routing table, so routing behaves as it does for an in-VPC client
+    of the NLB. The resolver also replaces the TLS server name with
+    127.0.0.1. The operator tooling uses the +ssc scheme, which skips
+    hostname verification, so that is safe here.
+    """
+    port = bolt_tunnel(config).local_port
+    return _new_driver(config, port, auth)
+
+
+def _new_driver(
+    config: "StackConfig",
+    port: int,
+    auth: tuple[str, str] | None,
+) -> Driver:
+    return GraphDatabase.driver(
+        f"{config.bolt_scheme}://{config.nlb_dns}:{BOLT_PORT}",
+        auth=auth or ("neo4j", config.password),
+        resolver=lambda _address: [("127.0.0.1", port)],
+        connection_timeout=15,
+    )
+
+
+def _shared_driver(config: "StackConfig", auth: tuple[str, str] | None) -> Driver:
+    username = auth[0] if auth else "neo4j"
+    key = (config.stack_name, username)
+    with _lock:
+        tunnel = _live_tunnel(config)
+        driver = _drivers.get(key)
+        if driver is None:
+            driver = _new_driver(config, tunnel.local_port, auth)
+            _drivers[key] = driver
+        return driver
+
+
+def run_cypher(
+    config: "StackConfig",
+    cypher: str,
+    params: dict | None = None,
+    database: str | None = None,
+    timeout_s: int = 60,
+    auth: tuple[str, str] | None = None,
+) -> list[dict]:
+    """Execute a Cypher query over the Bolt tunnel and return the rows.
+
+    Pass database="system" for admin queries like SHOW SERVERS. Pass auth to
+    run as a user other than neo4j. Server and driver errors raise
+    Neo4jQueryError. A tunnel that cannot open raises TunnelError.
+    """
+    driver = _shared_driver(config, auth)
+    kwargs: dict = {"parameters_": params or {}}
+    if database:
+        kwargs["database_"] = database
+    try:
+        result = driver.execute_query(Query(cypher, timeout=timeout_s), **kwargs)
+    except (Neo4jError, DriverError) as exc:
+        raise Neo4jQueryError(f"Query failed: {exc}") from exc
+    return [record.data() for record in result.records]
+
+
+@atexit.register
+def close_all() -> None:
+    """Close every driver and tunnel this process opened."""
+    with _lock:
+        while _drivers:
+            _drivers.popitem()[1].close()
+        while _tunnels:
+            _tunnels.popitem()[1].close()
 
 
 def run_ssm_command(
@@ -103,84 +172,6 @@ def run_ssm_command(
         )
     return inv.get("Status", "Unknown"), stdout, stderr
 
-
-def run_cypher_on_bastion(
-    config: "StackConfig",
-    cypher: str,
-    params: dict | None = None,
-    database: str | None = None,
-    timeout_s: int = 60,
-) -> list[dict]:
-    """Execute a Cypher query via SSM RunShellScript on the operator bastion.
-
-    The bastion resolves the password from Secrets Manager and the NLB DNS from
-    SSM Parameter Store using its own IAM role. Base64 encoding sidesteps all
-    shell-quoting issues — the Cypher can contain single quotes, double quotes,
-    backticks, or newlines without special handling.
-
-    Pass database="system" for admin queries like SHOW SERVERS.
-    """
-    import boto3
-    from botocore.exceptions import ClientError
-
-    b64_script = base64.b64encode(_BASTION_SCRIPT.encode()).decode()
-
-    payload = json.dumps({
-        "cypher": cypher,
-        "params": params or {},
-        "database": database,
-    })
-    b64_payload = base64.b64encode(payload.encode()).decode()
-
-    command = (
-        f"echo {b64_script} | base64 -d > /tmp/vprun.py && "
-        f"echo {b64_payload} | base64 -d | python3.11 /tmp/vprun.py "
-        f"{config.stack_name} {config.region} {config.bolt_scheme}"
-    )
-
-    ssm = boto3.Session(region_name=config.region).client("ssm", config=_RETRY_CFG)
-
-    try:
-        resp = ssm.send_command(
-            InstanceIds=[config.bastion_id],
-            DocumentName="AWS-RunShellScript",
-            Parameters={"commands": [command]},
-        )
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code == "InvalidInstanceId":
-            raise BastionCommandError(
-                f"Bastion {config.bastion_id} is not SSM-registered. "
-                "Run uv run preflight from neo4j-ee/validate-private to diagnose."
-            ) from exc
-        raise
-
-    command_id = resp["Command"]["CommandId"]
-    log.debug("SSM command %s dispatched to bastion %s", command_id, config.bastion_id)
-
-    status, stdout, stderr = run_ssm_command(ssm, command_id, config.bastion_id, timeout_s)
-
-    if status != "Success":
-        raise BastionCommandError(
-            f"SSM command failed (status={status}).\nstdout: {stdout}\nstderr: {stderr}"
-        )
-
-    try:
-        result = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise BastionCommandError(
-            f"Bastion returned non-JSON output (output may be truncated at 24,000 chars): {stdout!r}"
-        ) from exc
-
-    if isinstance(result, dict) and "error" in result:
-        raise Neo4jQueryError(f"Query failed on bastion: {result['error']}")
-
-    if not isinstance(result, list):
-        raise BastionCommandError(
-            f"Bastion returned unexpected output (expected JSON array): {stdout!r}"
-        )
-
-    return result
 
 
 def run_shell_on_instance(

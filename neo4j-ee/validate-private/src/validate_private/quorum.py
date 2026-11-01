@@ -6,7 +6,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from validate_private.runner import run_cypher_on_bastion
+from validate_private.runner import run_cypher
 
 if TYPE_CHECKING:
     from validate_private.config import StackConfig
@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 def preflight_healthy(config: "StackConfig", expected_nodes: int = 3) -> tuple[bool, str]:
     """Return (True, detail) if all expected nodes are Available, (False, reason) otherwise."""
     try:
-        rows = run_cypher_on_bastion(config, "SHOW SERVERS", database="system")
+        rows = run_cypher(config, "SHOW SERVERS", database="system")
         actual = len(rows)
         unhealthy = [
             r.get("name", r.get("serverId", "?"))
@@ -40,7 +40,7 @@ def _check_quorum_once(
     expected_writer_uuid: str | None,
 ) -> tuple[bool, str]:
     """Single quorum check attempt. Returns (passed, detail)."""
-    server_rows = run_cypher_on_bastion(config, "SHOW SERVERS", database="system")
+    server_rows = run_cypher(config, "SHOW SERVERS", database="system")
     actual_count = len(server_rows)
     unhealthy = [
         r.get("name", r.get("serverId", "?"))
@@ -48,7 +48,7 @@ def _check_quorum_once(
         if r.get("health") != "Available" or r.get("state") != "Enabled"
     ]
 
-    routing_rows = run_cypher_on_bastion(
+    routing_rows = run_cypher(
         config,
         "CALL dbms.routing.getRoutingTable({}) YIELD servers RETURN servers",
     )
@@ -68,7 +68,7 @@ def _check_quorum_once(
 
     if expected_writer_uuid is not None and writer_count == 1:
         try:
-            db_rows = run_cypher_on_bastion(
+            db_rows = run_cypher(
                 config,
                 "SHOW DATABASE neo4j YIELD serverID, writer WHERE writer = true",
                 database="system",

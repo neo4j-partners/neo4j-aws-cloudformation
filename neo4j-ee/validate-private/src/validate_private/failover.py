@@ -8,22 +8,26 @@ reads:             measure driver read failures during a follower bounce.
 
 from __future__ import annotations
 
-import base64
-import json
+import dataclasses
 import logging
+import threading
 import time
 import uuid
 from typing import TYPE_CHECKING
 
 from botocore.config import Config
+from neo4j.exceptions import DriverError, Neo4jError
 from validate_private.aws_helpers import asg_instances as _asg_instances
 from validate_private.aws_helpers import stack_resources as _stack_resources
 from validate_private.quorum import check_quorum, preflight_healthy
-from validate_private.runner import run_cypher_on_bastion, run_shell_on_instance, run_ssm_command
+from validate_private.runner import open_driver, run_cypher, run_shell_on_instance
 from validate_private.sentinel import cleanup_sentinel, verify_sentinel, write_sentinel
 from validate_private.server_ids import build_uuid_to_instance_map
+from validate_private.tunnel import TunnelError
 
 if TYPE_CHECKING:
+    from neo4j import Driver
+
     from validate_private.config import StackConfig
     from validate_private.reporting import TestReporter
 
@@ -32,36 +36,39 @@ log = logging.getLogger(__name__)
 _ASG_LOGICAL_IDS = ("Neo4jNode1ASG", "Neo4jNode2ASG", "Neo4jNode3ASG")
 _RETRY_CFG = Config(retries={"mode": "standard"})
 
-# Inline probe shipped to the bastion for run_reads. Resolves credentials from
-# Secrets Manager and NLB DNS from SSM Parameter Store using the bastion's IAM role.
-_READS_PROBE = """\
-import sys, json, time, boto3
-from neo4j import GraphDatabase
+_READ_PROBE_QUERY = "MATCH (n) RETURN count(n) AS c"
+_READ_PROBE_ITERATIONS = 30
+# Bound on the wait for the probe after the follower is back. Each read can
+# block on connection acquisition, so the probe can outlast its 30s cadence.
+_READ_PROBE_JOIN_TIMEOUT_S = 300
 
-stack, region, bolt_scheme, n_iter = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 
-sm = boto3.client("secretsmanager", region_name=region)
-password = sm.get_secret_value(SecretId=f"neo4j/{stack}/password")["SecretString"]
-ssm_client = boto3.client("ssm", region_name=region)
-nlb_dns = ssm_client.get_parameter(Name=f"/neo4j-ee/{stack}/nlb-dns")["Parameter"]["Value"]
+@dataclasses.dataclass
+class _ReadProbeResult:
+    iterations: int
+    failures: int = 0
+    exception_types: list[str] = dataclasses.field(default_factory=list)
 
-driver = GraphDatabase.driver(f"{bolt_scheme}://{nlb_dns}:7687", auth=("neo4j", password))
-failures = 0
-exc_types = []
-try:
-    for _ in range(n_iter):
-        try:
-            driver.execute_query("MATCH (n) RETURN count(n) AS c")
-        except Exception as exc:
-            failures += 1
-            t = type(exc).__name__
-            if t not in exc_types:
-                exc_types.append(t)
-        time.sleep(1)
-finally:
-    driver.close()
-print(json.dumps({"iterations": n_iter, "failures": failures, "exception_types": exc_types}))
-"""
+
+def _read_probe(driver: "Driver", result: _ReadProbeResult) -> None:
+    """Issue reads at a 1s cadence on the given driver, then close it.
+
+    Runs in a background thread during the follower bounce. The driver is a
+    separate one over the shared Bolt tunnel, so the probe does not share a
+    connection pool with the main thread's queries.
+    """
+    try:
+        for _ in range(result.iterations):
+            try:
+                driver.execute_query(_READ_PROBE_QUERY)
+            except (Neo4jError, DriverError) as exc:
+                result.failures += 1
+                name = type(exc).__name__
+                if name not in result.exception_types:
+                    result.exception_types.append(name)
+            time.sleep(1)
+    finally:
+        driver.close()
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +87,7 @@ def _get_cluster_instances(cfn, asg, config: "StackConfig") -> list[str]:
 
 def _classify_roles(config: "StackConfig") -> dict[str, bool]:
     """Return {server_uuid: is_writer} from SHOW DATABASE."""
-    rows = run_cypher_on_bastion(
+    rows = run_cypher(
         config, "SHOW DATABASE neo4j YIELD serverID, writer", database="system"
     )
     return {r["serverID"]: bool(r.get("writer")) for r in rows if r.get("serverID")}
@@ -96,7 +103,7 @@ def _wait_health(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            rows = run_cypher_on_bastion(config, "SHOW SERVERS", database="system")
+            rows = run_cypher(config, "SHOW SERVERS", database="system")
             for row in rows:
                 if row.get("name") == server_uuid:
                     if row.get("health") in target_states:
@@ -288,7 +295,7 @@ def run_leader(config: "StackConfig", reporter: "TestReporter") -> None:
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         try:
-            rows = run_cypher_on_bastion(
+            rows = run_cypher(
                 config,
                 "SHOW DATABASE neo4j YIELD serverID, writer WHERE writer = true",
                 database="system",
@@ -454,7 +461,6 @@ def run_rolling(config: "StackConfig", reporter: "TestReporter") -> None:
 def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
     """Measure driver read failures during a follower bounce."""
     import boto3
-    from botocore.exceptions import ClientError
 
     log.info("=== reads ===")
     log.info("")
@@ -489,33 +495,61 @@ def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
         time.monotonic() - start,
     )
 
-    # Fire the read probe on the bastion async — ssm.send_command returns immediately.
-    n_iter = 30
-    b64_probe = base64.b64encode(_READS_PROBE.encode()).decode()
-    probe_cmd = (
-        f"echo {b64_probe} | base64 -d > /tmp/vp_probe.py && "
-        f"python3.11 /tmp/vp_probe.py {config.stack_name} {config.region} "
-        f"{config.bolt_scheme} {n_iter}"
-    )
-
+    # Run the read probe on a separate driver in a background thread.
+    probe = _ReadProbeResult(iterations=_READ_PROBE_ITERATIONS)
     start = time.monotonic()
     try:
-        resp = ssm.send_command(
-            InstanceIds=[config.bastion_id],
-            DocumentName="AWS-RunShellScript",
-            Parameters={"commands": [probe_cmd]},
-        )
-    except ClientError as exc:
+        probe_driver = open_driver(config)
+    except (TunnelError, DriverError) as exc:
         reporter.record("Launch read probe", False, str(exc), time.monotonic() - start)
         return
-
-    probe_cmd_id = resp["Command"]["CommandId"]
+    probe_thread = threading.Thread(
+        target=_read_probe, args=(probe_driver, probe), name="read-probe", daemon=True
+    )
+    probe_thread.start()
     reporter.record(
         "Launch read probe", True,
-        f"Command {probe_cmd_id}, {n_iter} iterations at 1s cadence",
+        f"Separate driver over the Bolt tunnel, {probe.iterations} iterations "
+        "at 1s cadence",
         time.monotonic() - start,
     )
 
+    try:
+        if not _bounce_follower(config, reporter, ssm, target_instance, follower_uuid):
+            return
+    finally:
+        # The bounce takes longer than the 30s probe run, so the probe is
+        # usually done by now and the join returns at once.
+        probe_thread.join(timeout=_READ_PROBE_JOIN_TIMEOUT_S)
+
+    start = time.monotonic()
+    if probe_thread.is_alive():
+        reporter.record(
+            "Read probe result", False,
+            f"Probe still running after {_READ_PROBE_JOIN_TIMEOUT_S}s",
+            time.monotonic() - start,
+        )
+        return
+    if probe.exception_types:
+        detail = (
+            f"{probe.failures} of {probe.iterations} reads failed "
+            f"({', '.join(probe.exception_types)})"
+        )
+    else:
+        detail = f"{probe.failures} of {probe.iterations} reads failed"
+    reporter.record("Read probe result", probe.failures == 0, detail, time.monotonic() - start)
+
+    log.info("")
+
+
+def _bounce_follower(
+    config: "StackConfig",
+    reporter: "TestReporter",
+    ssm,
+    target_instance: str,
+    follower_uuid: str,
+) -> bool:
+    """Stop and restart the follower's Neo4j service. Returns False on a failed step."""
     # Brief pause so the probe begins reading before the follower goes down.
     time.sleep(2)
 
@@ -523,7 +557,7 @@ def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
     ok, detail = _stop_neo4j(ssm, target_instance)
     reporter.record("Stop follower", ok, detail, time.monotonic() - start)
     if not ok:
-        return
+        return False
 
     start = time.monotonic()
     gone = _wait_health(config, follower_uuid, {"Unavailable", "Unknown", "Down"}, timeout=90)
@@ -537,7 +571,7 @@ def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
     ok, detail = _start_neo4j(ssm, target_instance)
     reporter.record("Start follower", ok, detail, time.monotonic() - start)
     if not ok:
-        return
+        return False
 
     start = time.monotonic()
     back = _wait_health(config, follower_uuid, {"Available"}, timeout=180)
@@ -546,36 +580,4 @@ def run_reads(config: "StackConfig", reporter: "TestReporter") -> None:
         f"{follower_uuid[:8]}… rejoined Available" if back else "Timed out (180s)",
         time.monotonic() - start,
     )
-
-    # Collect probe results. The stop/start cycle takes longer than the 30s probe run,
-    # so the probe is already done by now; run_ssm_command returns immediately.
-    start = time.monotonic()
-    status, stdout, stderr = run_ssm_command(ssm, probe_cmd_id, config.bastion_id, timeout_s=120)
-
-    if status != "Success":
-        reporter.record(
-            "Read probe result", False,
-            f"Probe failed (status={status}): {stderr}",
-            time.monotonic() - start,
-        )
-        return
-
-    try:
-        probe_result = json.loads(stdout)
-        failures = probe_result.get("failures", -1)
-        exc_types = probe_result.get("exception_types", [])
-        n = probe_result.get("iterations", n_iter)
-        passed = failures == 0
-        if exc_types:
-            detail = f"{failures} of {n} reads failed ({', '.join(exc_types)})"
-        else:
-            detail = f"{failures} of {n} reads failed"
-        reporter.record("Read probe result", passed, detail, time.monotonic() - start)
-    except (json.JSONDecodeError, Exception) as exc:
-        reporter.record(
-            "Read probe result", False,
-            f"Could not parse probe output: {exc}",
-            time.monotonic() - start,
-        )
-
-    log.info("")
+    return True

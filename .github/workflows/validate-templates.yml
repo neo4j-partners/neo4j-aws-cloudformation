@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cfn-lint and test dependencies
-        run: pip install cfn-lint pyyaml boto3 python-dotenv
+        run: pip install cfn-lint pyyaml boto3 python-dotenv 'neo4j>=6,<7'
 
       - name: Verify template output is up to date
         run: python neo4j-ee/templates/build.py --verify

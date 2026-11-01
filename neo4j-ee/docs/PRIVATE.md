@@ -70,6 +70,12 @@ python3 --version   # 3.11+
 brew install uv     # package manager for validate-private and test suite
 ```
 
+**Neo4j tooling**
+
+```bash
+brew install cypher-shell   # required by uv run admin-shell
+```
+
 **IAM permissions**
 
 These are the minimum permissions the operator's local IAM principal (user or assumed role) needs to run the tools in this guide. Each permission corresponds to API calls made from the operator's machine. The cluster nodes use a separate IAM role scoped to what they need at boot.
@@ -79,8 +85,9 @@ These are the minimum permissions the operator's local IAM principal (user or as
 | `cloudformation:DescribeStacks`, `cloudformation:DescribeStackResources` | The stack ARN | `uv run preflight`, `deploy.py` (reads stack outputs) |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:StartSession`, `ssm:DescribeInstanceInformation` | The bastion instance | `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`, `admin-shell`, `run-cypher`, `validate-private`, `uv run preflight` (bastion ping check) |
 | `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract |
-| `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight` (secret existence check) |
-| `kms:Decrypt` | The stack key in `/neo4j-ee/<stack-name>/kms-key-arn` | `get-password.sh` |
+| `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight`, and every `uv run` tool that connects to Neo4j. The tools read the password with your credentials and keep it in memory. |
+| `secretsmanager:GetSecretValue` | `neo4j/<stack-name>/app-password` | `uv run validate-private --suite release`, which runs the APOC check as `neo4j_app` |
+| `kms:Decrypt` | The stack key in `/neo4j-ee/<stack-name>/kms-key-arn` | `get-password.sh` and every tool that reads a password secret |
 
 **Deploying identity**
 
@@ -125,9 +132,9 @@ Expected output on a healthy stack:
 
   [PASS] Stack status = CREATE_COMPLETE or UPDATE_COMPLETE
   [PASS] Bastion SSM PingStatus = Online
-  [PASS] neo4j Python driver installed on bastion
-  [PASS] cypher-shell installed on bastion
+  [PASS] session-manager-plugin on local PATH
   [PASS] Secret 'neo4j/test-ee-1776575131/password' exists
+  [PASS] SSM tunnel opens and RETURN 1 succeeds
   [PASS] TLS params set: CertificateArn, AdvertisedDNS
   [PASS] Contract SSM params: vpc-id, nlb-dns, external-sg-id, password-secret-arn, vpc-endpoint-sg-id
   [PASS] VPC interface endpoints: secretsmanager, logs, ssm, ssmmessages, ec2messages, ec2, cloudformation, autoscaling, acm
@@ -140,20 +147,30 @@ Expected output on a healthy stack:
   12 passed, 0 failed
 ```
 
-If the bastion SSM check fails immediately after a fresh deploy, the bastion UserData may still be running. Wait 2-3 minutes and retry.
+If the bastion SSM check fails immediately after a fresh deploy, the bastion UserData may still be running. Wait 2-3 minutes and retry. If the `session-manager-plugin` check fails, install the plugin as shown under [Prerequisites](#prerequisites).
 
 ### Access via Bastion
 
-All operator access goes through the `t4g.small` bastion via SSM. Tunnels are only needed when your laptop talks to the NLB directly. Run `uv run` commands from `neo4j-ee/validate-private/`.
+All operator access goes through the `t4g.small` bastion via SSM. The bastion holds no Neo4j credentials. It relays an SSM port-forward from your laptop to the NLB. The `uv run` tools open that port-forward themselves and run the Neo4j driver locally. Run `uv run` commands from `neo4j-ee/validate-private/`.
 
 | Tool | How it connects | Tunnel needed? |
 |---|---|---|
-| `uv run admin-shell` | SSM interactive session on the bastion | No |
-| `uv run run-cypher` | SSM `RunShellScript` on the bastion | No |
-| `uv run validate-private` | SSM `RunShellScript` on the bastion | No |
-| `uv run scripts/smoke-write.py` | SSM `RunShellScript` on the bastion | No |
+| `uv run admin-shell` | Local `cypher-shell` over a port-forward on 7687 the tool opens | No. It needs an `/etc/hosts` line. |
+| `uv run run-cypher` | Local driver over a port-forward the tool opens | No |
+| `uv run validate-private` | Local driver over a port-forward the tool opens | No |
+| `uv run scripts/smoke-write.py` | Local driver over a port-forward the tool opens | No |
 | Local driver or client tool | Bolt connection from your laptop | Yes — Bolt tunnel (7687) |
 | Neo4j Browser | HTTPS for the web UI + Bolt for queries | Yes — both tunnels (7473 + 7687) |
+
+#### Session logging
+
+The stack creates a Session Manager preferences document. Its name is the `Neo4jSessionDocumentName` stack output. Interactive shell sessions started with this document stream their input and output to the `/neo4j/<stack-name>/sessions` CloudWatch log group. The stack KMS key encrypts that log group. Pass the document when you open a shell on the bastion:
+
+```bash
+aws ssm start-session --target <bastion-instance-id> --document-name <Neo4jSessionDocumentName>
+```
+
+Port-forward sessions are not logged by this document. Session Manager does not record the bytes of a port-forward. The `uv run` tools, the tunnel scripts and `browse.py` all use port-forward sessions. Their audit trail is the CloudTrail `StartSession` event plus the Neo4j security log and query log on each node.
 
 ### Bolt Tunnel
 
@@ -206,7 +223,7 @@ PASSWORD=$(./scripts/get-password.sh 2>/dev/null)
 
 The password is stored in Secrets Manager at `neo4j/<stack-name>/password` as a plain string: the password value itself, not JSON. The stack KMS key encrypts it, so the caller needs `kms:Decrypt` on that key. See [IAM permissions](#prerequisites).
 
-Only the Browser Tunnel requires the password locally — you type it into the Neo4j Browser login form. `admin-shell` and `run-cypher` resolve the password on the bastion using the bastion's IAM role; it never appears on your local machine or in CloudTrail.
+The `uv run` tools read the password from Secrets Manager with your own AWS credentials. They keep it in process memory and never write it to disk or pass it on a command line. The bastion role has no access to the secret. For Neo4j Browser, you type the password into the login form.
 
 ### Single Sign-On (OIDC)
 
@@ -285,7 +302,9 @@ uv run admin-shell                     # most recent deployment
 uv run admin-shell <stack-name>        # specific deployment
 ```
 
-Opens `cypher-shell` on the bastion with a `neo4j+ssc://` URI, because Private stacks always terminate TLS at the NLB. The Neo4j driver fetches the routing table and directs writes to the current leader automatically. The password is resolved on the bastion using the bastion's IAM role. It does not appear on the local machine or in CloudTrail.
+Runs `cypher-shell` on your laptop over an SSM port-forward on `localhost:7687`. If a Bolt tunnel is already open on 7687, `admin-shell` reuses it. The shell connects with the routed `neo4j+ssc://` scheme, so writes go to the current leader. The password is read with your AWS credentials and passed to `cypher-shell` in its environment only.
+
+The routing table names the cluster's advertised Bolt host, so that host must resolve to `127.0.0.1` on your laptop. Add `127.0.0.1 <host>` to `/etc/hosts`. When the line is missing, `admin-shell` prints the exact line to add and exits. The same line serves Neo4j Browser when Bolt advertises `AdvertisedDNS`.
 
 ```
 neo4j@neo4j> CREATE (n:Test {msg: "hello"}) RETURN n;
@@ -510,13 +529,13 @@ cfn-lint templates/neo4j-private.template.yaml
 ```bash
 cd neo4j-ee/validate-private
 
-uv run preflight <stack-name>                  # 12 checks: stack, bastion, endpoints
+uv run preflight <stack-name>                  # 12 checks: stack, bastion, endpoints, tunnel
 
 uv run validate-private                        # most recent deployment
 uv run validate-private --stack <stack-name>   # specific deployment
 ```
 
-`validate-private` runs 8 checks via the bastion: Bolt connectivity, server edition, listen address, memory configuration, data directory, APOC, GDS, and cluster roles (1 writer, expected follower count). Each check takes 3-5 seconds. Total time under 35 seconds.
+`validate-private` runs 8 checks over an SSM tunnel through the bastion: Bolt connectivity, server edition, listen address, memory configuration, data directory, APOC, GDS, and cluster roles (1 writer, expected follower count). Each check takes 3-5 seconds. Total time under 35 seconds.
 
 ### Smoke Test
 
@@ -525,7 +544,7 @@ uv run scripts/smoke-write.py                       # 20 CREATE/DELETE iteration
 uv run scripts/smoke-write.py <stack-name> 50       # custom iteration count
 ```
 
-Runs write operations through the cluster via the bastion. Each iteration uses a fresh driver connection to exercise routing table handling.
+Runs write operations through the cluster with a local Neo4j driver over an SSM tunnel through the bastion. The driver routes each write to the current leader.
 
 ### Failover Suite
 
@@ -579,31 +598,13 @@ cd neo4j-ee && ./teardown.sh --delete-volumes <stack>
 The bastion UserData may still be running in the first 3 minutes after stack creation. Retry after waiting. If the check still fails after 10 minutes, confirm the bastion's IAM role has `AmazonSSMManagedInstanceCore` and the VPC has `ssm` and `ssmmessages` interface endpoints.
 
 **"AccessDenied" on `GetSecretValue` or `GetParameter`**
-The bastion's IAM role does not have access to the secret or SSM parameter for this stack. The policy scopes to `neo4j/<stack-name>/password` and `/neo4j-ee/<stack-name>/*`. Re-deploying the stack re-creates the policy with the correct scope.
+The operator tools read the secret and the SSM parameters with your own AWS credentials. The bastion role has no access to the secret. Grant your identity the permissions in [IAM permissions](#prerequisites).
+
+**"not on PATH: session-manager-plugin"**
+Every `uv run` tool that connects to Neo4j opens an SSM port-forward from your machine. Install the Session Manager plugin as shown under [Prerequisites](#prerequisites).
 
 **"NotALeader" error in Neo4j Browser**
 The NLB routed a write to a follower. Use `uv run admin-shell` for writes: `neo4j://` routing directs writes to the leader automatically.
-
-**Bastion Python checks fail but SSM is Online**
-The bastion installs Python 3.11 alongside the AL2023 system Python 3.9, with `neo4j` and `boto3` under 3.11. If package installation failed during UserData, reinstall via SSM:
-
-```bash
-aws ssm send-command \
-  --instance-ids <bastion-id> \
-  --document-name AWS-RunShellScript \
-  --parameters "commands=[\"python3.11 -m pip install 'neo4j>=6,<7' boto3\"]" \
-  --region <region>
-```
-
-Check `cloud-init-output.log` for the root cause first:
-
-```bash
-aws ssm send-command \
-  --instance-ids <bastion-id> \
-  --document-name AWS-RunShellScript \
-  --parameters 'commands=["tail -50 /var/log/cloud-init-output.log"]' \
-  --region <region>
-```
 
 **Mounting an existing EBS snapshot and resetting the password**
 

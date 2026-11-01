@@ -1,4 +1,8 @@
-"""Load EE Private stack configuration from the deploy file and Secrets Manager."""
+"""Load EE Private stack configuration from the deploy file and Secrets Manager.
+
+The password is read with the operator's own AWS credentials and held in
+memory only. The deploy file is never a password source.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ import sys
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 _NEO4J_EE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_NEO4J_EE_DIR / "src"))
@@ -24,7 +29,7 @@ class StackConfig:
     bastion_id: str
     nlb_dns: str
     bolt_scheme: str
-    password: str
+    password: str = dataclasses.field(repr=False)
     install_apoc: bool
     install_gds: bool
     install_bloom: bool
@@ -74,20 +79,23 @@ def load_config(
     secret_name = f"neo4j/{stack_name}/password"
     bolt_scheme = resolve_bolt_scheme(fields)
 
+    fetch_error = ""
     if password_override is not None:
         password = password_override
     else:
         try:
             password = _fetch_secret(secret_name, region)
-        except Exception:
-            password = fields.get("Password", "")
+        except (BotoCoreError, ClientError) as exc:
+            password = ""
+            fetch_error = f" Reading it failed: {exc}"
 
     if not password and sys.stdin.isatty():
         password = getpass.getpass("Enter neo4j password: ")
     if not password:
         raise ValueError(
-            f"No password available. Ensure the Secrets Manager secret "
-            f"'{secret_name}' exists, or provide --password."
+            f"No password available. Your AWS credentials need "
+            f"secretsmanager:GetSecretValue on '{secret_name}', or provide "
+            f"--password.{fetch_error}"
         )
 
     return StackConfig(

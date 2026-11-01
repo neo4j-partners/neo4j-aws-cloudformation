@@ -27,16 +27,8 @@
           set -euo pipefail
           exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-          dnf install -y python3.11 python3.11-pip
-          dnf update -y aws-cfn-bootstrap
-          python3.11 -m pip install 'neo4j>=6,<7' boto3
-
-          # Neo4j yum repo + cypher-shell for interactive admin via:
-          #   aws ssm start-session --target <bastion> → cypher-shell -a neo4j://<nlb>:7687
-          rpm --import https://debian.neo4j.com/neotechnology.gpg.key
-          printf '[neo4j]\nname=Neo4j RPM Repository\nbaseurl=https://yum.neo4j.com/stable/latest\nenabled=1\ngpgcheck=1\n' >/etc/yum.repos.d/neo4j.repo
-          dnf install -y cypher-shell
-
+          # The bastion is a port-forward relay only. It installs nothing:
+          # operator tools run the driver and cypher-shell locally.
           systemctl is-active amazon-ssm-agent
 
           /opt/aws/bin/cfn-signal --success true \
@@ -48,6 +40,42 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Sub '${AWS::StackName}-bastion'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  # Session Manager preferences for interactive shells on the bastion and
+  # the nodes. Operators pass this document with --document-name. Session
+  # Manager does not log port-forwarding sessions, so the operator tools'
+  # tunnels are not recorded here. CloudTrail StartSession events and the
+  # Neo4j security and query logs are the trail for those.
+  Neo4jSessionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/neo4j/${AWS::StackName}/sessions'
+      RetentionInDays: 90
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jSessionPreferences:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Session
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '1.0'
+        description: !Sub 'Interactive shell sessions for stack ${AWS::StackName}, logged to CloudWatch'
+        sessionType: Standard_Stream
+        inputs:
+          cloudWatchLogGroupName: !Ref Neo4jSessionLogGroup
+          cloudWatchEncryptionEnabled: true
+          cloudWatchStreamingEnabled: true
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 

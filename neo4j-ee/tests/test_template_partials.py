@@ -3193,5 +3193,166 @@ class SecurityReviewBatchCTests(unittest.TestCase):
                 self.assertEqual(code.count("cfnresponse.FAILED"), 2)
 
 
+class SecurityReviewBatchDTests(unittest.TestCase):
+    """Locks the operator bastion fixes from security-review.md batch D."""
+
+    PRIVATE = ("private", "existing_vpc")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = _assemble_all_templates()
+        cls.docs = {name: load_cfn(body) for name, body in cls.text.items()}
+
+    @staticmethod
+    def _statements(role: dict) -> list[dict]:
+        return [
+            stmt
+            for policy in role["Properties"].get("Policies", [])
+            for stmt in policy["PolicyDocument"]["Statement"]
+        ]
+
+    @staticmethod
+    def _actions(stmt: dict) -> list[str]:
+        action = stmt["Action"]
+        return [action] if isinstance(action, str) else action
+
+    def test_bastion_role_holds_no_credential_grants(self) -> None:
+        # The bastion relays bytes. Operators read the password with their
+        # own credentials, so the bastion role reads no secret and no key.
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                role = self.docs[name]["Resources"]["Neo4jBastionRole"]
+                actions = {
+                    action
+                    for stmt in self._statements(role)
+                    for action in self._actions(stmt)
+                }
+                self.assertFalse(
+                    {a for a in actions if a.startswith(("secretsmanager:", "kms:"))}
+                )
+                self.assertEqual(
+                    actions,
+                    {
+                        "ssm:GetParameter",
+                        "ssm:GetParameters",
+                        "ssm:GetParametersByPath",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                        "logs:DescribeLogStreams",
+                        "logs:DescribeLogGroups",
+                    },
+                )
+
+    def test_bastion_and_nodes_can_stream_to_the_session_log_group(self) -> None:
+        session_arn = {"Fn::Sub": "${Neo4jSessionLogGroup.Arn}:*"}
+        for name in self.PRIVATE:
+            for role_name in ("Neo4jBastionRole", "Neo4jRole"):
+                with self.subTest(template=name, role=role_name):
+                    role = self.docs[name]["Resources"][role_name]
+                    statements = self._statements(role)
+                    session = [s for s in statements if s.get("Resource") == session_arn]
+                    self.assertEqual(len(session), 1)
+                    self.assertEqual(
+                        set(self._actions(session[0])),
+                        {
+                            "logs:CreateLogStream",
+                            "logs:PutLogEvents",
+                            "logs:DescribeLogStreams",
+                        },
+                    )
+                    wildcard = [s for s in statements if s.get("Resource") == "*"]
+                    self.assertIn(
+                        ["logs:DescribeLogGroups"],
+                        [self._actions(s) for s in wildcard],
+                    )
+
+    def test_bastion_egress_is_endpoints_nlb_and_s3_only(self) -> None:
+        # H3: the bastion no longer has the default allow-all egress.
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                resources = self.docs[name]["Resources"]
+                sg = resources["Neo4jBastionSecurityGroup"]["Properties"]
+                rules = sg["SecurityGroupEgress"]
+                seen = set()
+                for rule in rules:
+                    self.assertEqual(rule["IpProtocol"], "tcp")
+                    self.assertEqual(rule["FromPort"], rule["ToPort"])
+                    self.assertNotIn("CidrIp", rule)
+                    self.assertNotIn("CidrIpv6", rule)
+                    if "DestinationPrefixListId" in rule:
+                        self.assertEqual(
+                            rule["DestinationPrefixListId"],
+                            {"Fn::GetAtt": "S3PrefixList.PrefixListId"},
+                        )
+                        seen.add(("s3", rule["FromPort"]))
+                        continue
+                    dest = json.dumps(rule["DestinationSecurityGroupId"])
+                    if "Neo4jNLBSecurityGroup" in dest:
+                        seen.add(("nlb", rule["FromPort"]))
+                    else:
+                        self.assertIn("VpcEndpointSecurityGroup", dest)
+                        seen.add(("endpoints", rule["FromPort"]))
+                self.assertEqual(len(seen), len(rules))
+                self.assertEqual(
+                    seen,
+                    {("endpoints", 443), ("nlb", 7473), ("nlb", 7687), ("s3", 443)},
+                )
+                egress = [
+                    r
+                    for r in resources.values()
+                    if r.get("Type") == "AWS::EC2::SecurityGroupEgress"
+                    and "Neo4jBastionSecurityGroup"
+                    in json.dumps(r["Properties"]["GroupId"])
+                ]
+                self.assertEqual(egress, [])
+
+    def test_bastion_userdata_installs_nothing(self) -> None:
+        # The driver and cypher-shell run on the operator machine.
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                bastion = self.docs[name]["Resources"]["Neo4jOperatorBastion"]
+                script = bastion["Properties"]["UserData"]["Fn::Base64"]["Fn::Sub"]
+                userdata = "\n".join(
+                    line
+                    for line in script.splitlines()
+                    if not line.lstrip().startswith("#")
+                )
+                for pattern in (
+                    r"\b(dnf|yum)\b",
+                    r"\bpip\b",
+                    r"cypher-shell",
+                    r"rpm --import",
+                    r"python3",
+                ):
+                    self.assertIsNone(re.search(pattern, userdata), pattern)
+                self.assertIn("/opt/aws/bin/cfn-signal --success true", userdata)
+
+    def test_session_preferences_log_to_the_encrypted_stack_log_group(self) -> None:
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                resources = self.docs[name]["Resources"]
+                group = resources["Neo4jSessionLogGroup"]["Properties"]
+                self.assertEqual(
+                    group["LogGroupName"],
+                    {"Fn::Sub": "/neo4j/${AWS::StackName}/sessions"},
+                )
+                self.assertEqual(group["KmsKeyId"], {"Fn::GetAtt": "Neo4jStackKey.Arn"})
+                self.assertEqual(group["RetentionInDays"], 90)
+                doc = resources["Neo4jSessionPreferences"]["Properties"]
+                self.assertEqual(doc["DocumentType"], "Session")
+                content = doc["Content"]
+                self.assertEqual(content["sessionType"], "Standard_Stream")
+                self.assertEqual(
+                    content["inputs"],
+                    {
+                        "cloudWatchLogGroupName": {"Ref": "Neo4jSessionLogGroup"},
+                        "cloudWatchEncryptionEnabled": True,
+                        "cloudWatchStreamingEnabled": True,
+                    },
+                )
+                output = self.docs[name]["Outputs"]["Neo4jSessionDocumentName"]
+                self.assertEqual(output["Value"], {"Ref": "Neo4jSessionPreferences"})
+
+
 if __name__ == "__main__":
     unittest.main()

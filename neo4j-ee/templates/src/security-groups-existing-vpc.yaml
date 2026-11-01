@@ -202,9 +202,43 @@
 
   Neo4jBastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    # The egress target names ExistingEndpointSgId, an optional String param
+    # (Default ''). cfn-lint resolves the empty default and emits W1030, but
+    # the If selects it only under UseExistingVpcEndpoints, where the
+    # ExistingEndpointSgIdRequired Rule guarantees a real sg- value.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupDescription: Operator bastion - no ingress; outbound via VPC endpoints and NLB
       VpcId: !Ref VpcId
+      # Bastion egress is HTTPS to the VPC interface endpoints for the SSM
+      # agent, the Neo4j ports to the NLB for port-forward sessions and
+      # data-plane probes, and same-region S3 for OS and SSM Agent updates
+      # (security review H3).
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !If [UseExistingVpcEndpoints, !Ref ExistingEndpointSgId, !GetAtt VpcEndpointSecurityGroup.GroupId]
+          Description: HTTPS to the VPC interface endpoints
+        - IpProtocol: tcp
+          FromPort: 7473
+          ToPort: 7473
+          DestinationSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          Description: Neo4j Browser to the NLB
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          DestinationSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          Description: Bolt to the NLB
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !GetAtt S3PrefixList.PrefixListId
+          Description: HTTPS to same-region S3
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'

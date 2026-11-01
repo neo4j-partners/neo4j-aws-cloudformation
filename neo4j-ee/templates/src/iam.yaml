@@ -62,6 +62,19 @@
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                 Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
+              # Session Manager streams interactive shell sessions to the
+              # session log group. The agent calls DescribeLogGroups to
+              # confirm the group is encrypted, and that action takes no
+              # resource scope.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub '${Neo4jSessionLogGroup.Arn}:*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
               - !If
                 - BloomEnabledAndLicensed
                 - Effect: Allow
@@ -102,25 +115,33 @@
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
-        - PolicyName: Neo4jBastionSecretAndConfigRead
+        # The bastion holds no Neo4j credentials. Operator tools read the
+        # password with the operator's own AWS credentials and connect
+        # through a port-forward tunnel. The SSM parameters are plain String
+        # values, so no KMS grant is needed.
+        - PolicyName: Neo4jBastionConfigAndSessionLogs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource: !Ref Neo4jPasswordSecret
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                Resource: !GetAtt Neo4jStackKey.Arn
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/*'
+              # Session Manager streams interactive shell sessions to the
+              # session log group. The agent calls DescribeLogGroups to
+              # confirm the group is encrypted, and that action takes no
+              # resource scope.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub '${Neo4jSessionLogGroup.Arn}:*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
 
   Neo4jBastionInstanceProfile:
     Type: AWS::IAM::InstanceProfile

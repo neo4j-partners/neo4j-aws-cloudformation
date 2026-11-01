@@ -14,7 +14,9 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from validate_private.runner import run_shell_on_instance
+from validate_private.config import load_config
+from validate_private.runner import run_cypher, run_shell_on_instance
+from validate_private.tunnel import missing_prerequisites
 
 log = logging.getLogger(__name__)
 
@@ -132,15 +134,18 @@ def _run_bastion_check(ctx: PreflightContext, command: str) -> CheckResult:
     return CheckResult(ok, detail)
 
 
-def _neo4j_driver_installed(ctx: PreflightContext) -> CheckResult:
-    return _run_bastion_check(
-        ctx,
-        "python3.11 -c 'import neo4j; print(neo4j.__version__)'",
-    )
+def _local_tunnel_tools(_ctx: PreflightContext) -> CheckResult:
+    missing = missing_prerequisites()
+    if missing:
+        return CheckResult(False, f"not on PATH: {', '.join(missing)}")
+    return CheckResult(True, "aws and session-manager-plugin found")
 
 
-def _cypher_shell_installed(ctx: PreflightContext) -> CheckResult:
-    return _run_bastion_check(ctx, "cypher-shell --version")
+def _bolt_over_tunnel(ctx: PreflightContext) -> CheckResult:
+    config = load_config(ctx.outputs_path)
+    rows = run_cypher(config, "RETURN 1 AS ok", timeout_s=30)
+    ok = rows == [{"ok": 1}]
+    return CheckResult(ok, f"RETURN 1 -> {rows}")
 
 
 def _secret_exists(ctx: PreflightContext) -> CheckResult:
@@ -301,9 +306,9 @@ def main() -> None:
             lambda: _stack_complete(ctx),
         ),
         ("Bastion SSM PingStatus = Online", lambda: _ssm_online(ctx)),
-        ("neo4j Python driver installed on bastion", lambda: _neo4j_driver_installed(ctx)),
-        ("cypher-shell installed on bastion", lambda: _cypher_shell_installed(ctx)),
+        ("session-manager-plugin on local PATH", lambda: _local_tunnel_tools(ctx)),
         (f"Secret 'neo4j/{ctx.stack_name}/password' exists", lambda: _secret_exists(ctx)),
+        ("SSM tunnel opens and RETURN 1 succeeds", lambda: _bolt_over_tunnel(ctx)),
         (
             "TLS params set: CertificateArn, AdvertisedDNS",
             lambda: _tls_params_set(ctx),
@@ -354,6 +359,10 @@ def main() -> None:
         log.info("")
         log.info("  Troubleshooting:")
         log.info("    Bastion not ready? UserData may still be running, wait 2-3 min and retry.")
+        log.info(
+            "    No session-manager-plugin? Install the AWS Session Manager plugin "
+            "for the AWS CLI."
+        )
         log.info(
             "    Check SSM status: aws ssm describe-instance-information "
             "--filters Key=InstanceIds,Values=%s --region %s",

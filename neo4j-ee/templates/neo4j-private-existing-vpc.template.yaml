@@ -600,6 +600,19 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                 Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/application:*'
+              # Session Manager streams interactive shell sessions to the
+              # session log group. The agent calls DescribeLogGroups to
+              # confirm the group is encrypted, and that action takes no
+              # resource scope.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub '${Neo4jSessionLogGroup.Arn}:*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
               - !If
                 - BloomEnabledAndLicensed
                 - Effect: Allow
@@ -640,25 +653,33 @@ Resources:
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
-        - PolicyName: Neo4jBastionSecretAndConfigRead
+        # The bastion holds no Neo4j credentials. Operator tools read the
+        # password with the operator's own AWS credentials and connect
+        # through a port-forward tunnel. The SSM parameters are plain String
+        # values, so no KMS grant is needed.
+        - PolicyName: Neo4jBastionConfigAndSessionLogs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource: !Ref Neo4jPasswordSecret
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                Resource: !GetAtt Neo4jStackKey.Arn
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/*'
+              # Session Manager streams interactive shell sessions to the
+              # session log group. The agent calls DescribeLogGroups to
+              # confirm the group is encrypted, and that action takes no
+              # resource scope.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub '${Neo4jSessionLogGroup.Arn}:*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
 
   Neo4jBastionInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -870,9 +891,43 @@ Resources:
 
   Neo4jBastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    # The egress target names ExistingEndpointSgId, an optional String param
+    # (Default ''). cfn-lint resolves the empty default and emits W1030, but
+    # the If selects it only under UseExistingVpcEndpoints, where the
+    # ExistingEndpointSgIdRequired Rule guarantees a real sg- value.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1030
     Properties:
       GroupDescription: Operator bastion - no ingress; outbound via VPC endpoints and NLB
       VpcId: !Ref VpcId
+      # Bastion egress is HTTPS to the VPC interface endpoints for the SSM
+      # agent, the Neo4j ports to the NLB for port-forward sessions and
+      # data-plane probes, and same-region S3 for OS and SSM Agent updates
+      # (security review H3).
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !If [UseExistingVpcEndpoints, !Ref ExistingEndpointSgId, !GetAtt VpcEndpointSecurityGroup.GroupId]
+          Description: HTTPS to the VPC interface endpoints
+        - IpProtocol: tcp
+          FromPort: 7473
+          ToPort: 7473
+          DestinationSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          Description: Neo4j Browser to the NLB
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          DestinationSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+          Description: Bolt to the NLB
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !GetAtt S3PrefixList.PrefixListId
+          Description: HTTPS to same-region S3
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2099,16 +2154,8 @@ Resources:
           set -euo pipefail
           exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-          dnf install -y python3.11 python3.11-pip
-          dnf update -y aws-cfn-bootstrap
-          python3.11 -m pip install 'neo4j>=6,<7' boto3
-
-          # Neo4j yum repo + cypher-shell for interactive admin via:
-          #   aws ssm start-session --target <bastion> → cypher-shell -a neo4j://<nlb>:7687
-          rpm --import https://debian.neo4j.com/neotechnology.gpg.key
-          printf '[neo4j]\nname=Neo4j RPM Repository\nbaseurl=https://yum.neo4j.com/stable/latest\nenabled=1\ngpgcheck=1\n' >/etc/yum.repos.d/neo4j.repo
-          dnf install -y cypher-shell
-
+          # The bastion is a port-forward relay only. It installs nothing:
+          # operator tools run the driver and cypher-shell locally.
           systemctl is-active amazon-ssm-agent
 
           /opt/aws/bin/cfn-signal --success true \
@@ -2120,6 +2167,42 @@ Resources:
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Sub '${AWS::StackName}-bastion'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  # Session Manager preferences for interactive shells on the bastion and
+  # the nodes. Operators pass this document with --document-name. Session
+  # Manager does not log port-forwarding sessions, so the operator tools'
+  # tunnels are not recorded here. CloudTrail StartSession events and the
+  # Neo4j security and query logs are the trail for those.
+  Neo4jSessionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/neo4j/${AWS::StackName}/sessions'
+      RetentionInDays: 90
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  Neo4jSessionPreferences:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Session
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '1.0'
+        description: !Sub 'Interactive shell sessions for stack ${AWS::StackName}, logged to CloudWatch'
+        sessionType: Standard_Stream
+        inputs:
+          cloudWatchLogGroupName: !Ref Neo4jSessionLogGroup
+          cloudWatchEncryptionEnabled: true
+          cloudWatchStreamingEnabled: true
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
@@ -3068,6 +3151,11 @@ Outputs:
   Neo4jAppLogGroupName:
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
+  Neo4jSessionDocumentName:
+    Description: >-
+      Session Manager preferences document that logs interactive shell sessions.
+      Pass it to aws ssm start-session with --document-name.
+    Value: !Ref Neo4jSessionPreferences
   Neo4jAlertTopicArn:
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic

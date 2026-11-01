@@ -74,6 +74,11 @@
   Neo4jAppLogGroupName:
     Description: CloudWatch Logs log group for Neo4j application logs
     Value: !Ref Neo4jAppLogGroup
+  Neo4jSessionDocumentName:
+    Description: >-
+      Session Manager preferences document that logs interactive shell sessions.
+      Pass it to aws ssm start-session with --document-name.
+    Value: !Ref Neo4jSessionPreferences
   Neo4jAlertTopicArn:
     Description: SNS topic ARN for Neo4j security alerts
     Value: !Ref Neo4jAlertTopic
