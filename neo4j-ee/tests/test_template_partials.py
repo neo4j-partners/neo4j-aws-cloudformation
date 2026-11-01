@@ -670,24 +670,6 @@ class ShellPartialTests(unittest.TestCase):
             },
         )
 
-    def test_configure_oidc_native_auth_flag(self) -> None:
-        # Security review M7: OidcNativeAuthEnabled=false drops native from
-        # both provider lists, so single sign-on is the only way in.
-        base = ("https://idp.example.com", "client-a", "", "", "", "", "")
-        for flag, expected in (("true", "oidc-sso,native"), ("false", "oidc-sso")):
-            with self.subTest(flag=flag):
-                result, calls = self._run_configure_oidc(*base, flag)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(
-                    calls["dbms.security.authentication_providers"], expected
-                )
-                self.assertEqual(
-                    calls["dbms.security.authorization_providers"], expected
-                )
-        result, _ = self._run_configure_oidc(*base, "maybe")
-        self.assertEqual(result.returncode, 42, result.stderr)
-        self.assertIn("OidcNativeAuthEnabled", self.fail_log.read_text())
-
     def test_configure_oidc_optional_values_omit_their_keys(self) -> None:
         cases = {
             "admin only": (("neo4j-admins", ""), '"neo4j-admins"=admin'),
@@ -1785,7 +1767,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             r'configure_tls\s+"\$\{advertisedDNS:-\}"\s+"\$\{loadBalancerDNSName\}"\s+"\$\{boltAdvertiseDns:-false\}"',
             r'configure_cluster\s+"\$\{nodeCount\}"\s+"\$\{region\}"\s+"\$\{_stack_id\}"',
             r'configure_plugin_settings\s+"\$\{installBloom\}"\s+"\$\{bloomLicenseSecretArn\}"\s+"\$\{installGDS\}"\s+"\$\{gdsLicenseSecretArn\}"',
-            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"\s+\\\s+"\$\{oidcNativeAuthEnabled\}"',
+            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"',
             r'create_app_user\s+neo4j_app\s+"\$\{applicationPassword\}"\s+"\$\{initialPassword\}"\s+"\$\{advertisedDNS:-\}"',
             r'start_neo4j\s+"\$\{initialPassword\}"\s+"\$\{isFirstBoot\}"',
         )
@@ -2898,31 +2880,6 @@ class SecurityReviewBatchBTests(unittest.TestCase):
                 self.assertLess(start, create)
                 guard = body.rindex('if [[ "${isFirstBoot}" == "true" ]]; then', 0, create)
                 self.assertLess(start, guard)
-
-    def test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata(self) -> None:
-        # M7: single sign-on only is opt-in, so existing deploys keep the
-        # operator password path.
-        for name, doc in self.docs.items():
-            with self.subTest(template=name):
-                param = doc["Parameters"]["OidcNativeAuthEnabled"]
-                self.assertEqual(param["Default"], "true")
-                self.assertEqual(sorted(param["AllowedValues"]), ["false", "true"])
-                lt = next(
-                    r
-                    for r in doc["Resources"].values()
-                    if r.get("Type") == "AWS::EC2::LaunchTemplate"
-                )
-                parts = lt["Properties"]["LaunchTemplateData"]["UserData"][
-                    "Fn::Base64"
-                ]["Fn::Join"][1]
-                i = parts.index("oidcNativeAuthEnabled=")
-                self.assertEqual(parts[i + 1], {"Ref": "OidcNativeAuthEnabled"})
-                groups = doc["Metadata"]["AWS::CloudFormation::Interface"][
-                    "ParameterGroups"
-                ]
-                self.assertTrue(
-                    any("OidcNativeAuthEnabled" in g["Parameters"] for g in groups)
-                )
 
 
 if __name__ == "__main__":

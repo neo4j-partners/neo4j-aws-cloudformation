@@ -446,11 +446,16 @@ an `@file` argument, so argv holds only the file path. The file is owned by
 `cypher-shell` reads the admin password from `NEO4J_PASSWORD` and the
 application password from a `:param` line on stdin.
 
-**Single sign-on can be the only way in.** `OidcNativeAuthEnabled` defaults to
-`true`, which keeps `native` next to `oidc-sso` in both provider lists.
-`false` leaves `oidc-sso` alone. Operator tools that sign in with the `neo4j`
-password stop working until the parameter is set back to `true`. That stack
-update is the break-glass path.
+**Password login stays on next to single sign-on.** With an OIDC issuer set,
+both provider lists are `oidc-sso,native`. The stack has no switch to remove
+`native`. The application user `neo4j_app` and service accounts sign in with
+passwords, so a stack without `native` could not serve applications. The
+bootstrap also creates `neo4j_app` over a password login. Security review
+finding M7 is an accepted risk for this reason. The `Password` parameter
+requires at least 12 alphanumeric characters. The failed-authentication
+alarm is always on. Single sign-on users get roles only through the group
+mapping. The `neo4j` admin password remains the break-glass path when the
+identity provider is down.
 
 ---
 
@@ -575,8 +580,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-20 | No template publishes `tls-self-signed` or the `IsSelfSignedTls` condition (AD-5) | `RenderedTemplateContractTests.test_tls_self_signed_contract_is_removed` |
 | NFR-21 | The application secret is generated, alphanumeric, retained and encrypted with the stack key; the node role reads it; the stack publishes `app-password-secret-arn` and `app-username`; the bootstrap creates `neo4j_app` with `architect` after start, on first boot only (AD-6) | `SecurityReviewBatchBTests.test_app_password_secret_is_generated_alphanumeric_and_retained`, `test_node_role_reads_both_password_secrets`, `test_app_user_ssm_parameters`, `test_bootstrap_creates_app_user_after_start_on_first_boot`; `ShellPartialTests.test_create_app_user_*` |
 | NFR-22 | The initial password is set as `neo4j` from a 0400 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
-| NFR-23 | `OidcNativeAuthEnabled` defaults to `true`; `false` sets both provider lists to `oidc-sso` (AD-6) | `ShellPartialTests.test_configure_oidc_native_auth_flag`; `SecurityReviewBatchBTests.test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata` |
-| NFR-24 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
+| NFR-23 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

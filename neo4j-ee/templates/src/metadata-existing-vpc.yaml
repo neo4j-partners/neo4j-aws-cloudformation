@@ -57,7 +57,6 @@
           - OidcGroupsClaim
           - OidcAdminGroup
           - OidcReaderGroup
-          - OidcNativeAuthEnabled
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -119,8 +118,6 @@
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
-      OidcNativeAuthEnabled:
-        default: Keep Password Login With OIDC
       Node1SnapshotId:
         default: Node 1 Snapshot ID
       BoltTlsScheme:

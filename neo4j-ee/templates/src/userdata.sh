@@ -42,7 +42,7 @@ export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertis
 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
 export password appPassword _stack_id _instance_id _az
 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
-export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64 oidcNativeAuthEnabled
+export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
 
 /opt/neo4j/bin/neo4j-bootstrap.sh
 # The secrets stay in this shell for no longer than the bootstrap needs them.

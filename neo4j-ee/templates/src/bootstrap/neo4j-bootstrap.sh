@@ -38,7 +38,6 @@ oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
-oidcNativeAuthEnabled="${oidcNativeAuthEnabled:-true}"
 
 # include partials/set-neo4j-conf.sh
 
@@ -81,8 +80,7 @@ configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
 remove_jdwp_default
 configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
-  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}" \
-  "${oidcNativeAuthEnabled}"
+  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
 assert_security_invariant
 start_neo4j "${initialPassword}" "${isFirstBoot}"
 # The application user lives in the replicated system database, so it is

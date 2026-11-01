@@ -210,7 +210,7 @@ Only the Browser Tunnel requires the password locally — you type it into the N
 
 ### Single Sign-On (OIDC)
 
-Neo4j Browser and Bloom can sign users in through an OpenID Connect identity provider. Setting `OidcIssuerUri` turns this on. By default, password login stays enabled next to it, and operator tools keep using the native `neo4j` password.
+Neo4j Browser and Bloom can sign users in through an OpenID Connect identity provider. Setting `OidcIssuerUri` turns this on. Password login stays enabled next to it, and operator tools keep using the native `neo4j` password.
 
 The step-by-step procedure, including the Hume integration, is in [oidc-run-book.md](oidc-run-book.md).
 
@@ -225,14 +225,11 @@ The step-by-step procedure, including the Hume integration, is in [oidc-run-book
 | `OidcGroupsClaim` | `--oidc-groups-claim` | `OIDC_GROUPS_CLAIM` | The ID token claim that lists the user's groups. |
 | `OidcAdminGroup` | `--oidc-admin-group` | `OIDC_ADMIN_GROUP` | The group mapped to the Neo4j `admin` role. |
 | `OidcReaderGroup` | `--oidc-reader-group` | `OIDC_READER_GROUP` | The group mapped to the built-in `reader` role. |
-| `OidcNativeAuthEnabled` | none | none | Keeps password login next to single sign-on. The default is `true`. `false` makes single sign-on the only way in. |
 | `AdvertisedDNS` | `--advertised-dns` | `ADVERTISED_DNS` | The name that Browser, the drivers and the redirect addresses use. |
 | `CreatePrivateDns` | `--create-private-dns` | `CREATE_PRIVATE_DNS` | Creates a Route 53 private record for the advertised name. |
 | `PrivateDnsZoneName` | `--private-dns-zone` | `PRIVATE_DNS_ZONE` | The private hosted zone to create. |
 
 A user in neither group signs in with only the `PUBLIC` role.
-
-With `OidcNativeAuthEnabled=false`, `validate-private`, `preflight` and every other tool that signs in with a password stop working. To get password access back, update the stack with `OidcNativeAuthEnabled=true`. The update replaces the nodes one at a time, and each new node starts with `native` back in both provider lists.
 
 Neo4j validates the ID token, not the access token. For Amazon Cognito, set the principal claim to `cognito:username` and the groups claim to `cognito:groups`. The Cognito access token has no `aud` claim, so Neo4j rejects it.
 
