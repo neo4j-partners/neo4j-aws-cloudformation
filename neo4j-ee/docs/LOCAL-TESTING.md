@@ -175,7 +175,7 @@ To create a Route 53 private record for the advertised name, pass `--create-priv
 
 With private DNS on, each node also advertises that name for Bolt routing instead of the NLB name. On Private this applies only to a zone the stack creates with `--private-dns-zone`. A zone passed with `--private-dns-hosted-zone-id` keeps Bolt on the NLB name.
 
-Setting the zone to `neo4j.local` makes the default advertised name resolve inside the VPC. A new record can take about 7 minutes to resolve, because Route 53 caches the earlier failed lookup.
+An explicit `--create-private-dns --private-dns-zone neo4j.local` also makes the default advertised name resolve inside the VPC. That shared zone name collides when two stacks share one VPC. Prefer the per-stack default instead. A new record can take about 7 minutes to resolve, because Route 53 caches the earlier failed lookup.
 
 ## Validate
 
