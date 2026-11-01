@@ -31,10 +31,10 @@ else
     exit 1
   fi
   REGION="${2:-us-east-2}"
-  ASG=$(aws cloudformation describe-stack-resources \
+  ASG=$(aws cloudformation list-stack-resources \
     --stack-name "$STACK" \
     --region "$REGION" \
-    --query "StackResources[?LogicalResourceId=='Neo4jNode1ASG'].PhysicalResourceId" \
+    --query "StackResourceSummaries[?LogicalResourceId=='Neo4jNode1ASG'].PhysicalResourceId" \
     --output text 2>/dev/null || true)
   if [[ -z "$ASG" || "$ASG" == "None" ]]; then
     echo "ERROR: could not find Neo4jNode1ASG in stack $STACK ($REGION)"

@@ -15,8 +15,12 @@ log = logging.getLogger(__name__)
 def get_stack_resources(session: boto3.Session, stack_name: str) -> dict[str, str]:
     """Return a mapping of LogicalResourceId -> PhysicalResourceId for the stack."""
     cfn = session.client("cloudformation")
-    resources = cfn.describe_stack_resources(StackName=stack_name)["StackResources"]
-    return {r["LogicalResourceId"]: r["PhysicalResourceId"] for r in resources}
+    paginator = cfn.get_paginator("list_stack_resources")
+    return {
+        r["LogicalResourceId"]: r["PhysicalResourceId"]
+        for page in paginator.paginate(StackName=stack_name)
+        for r in page["StackResourceSummaries"]
+    }
 
 
 def get_asg_instance_id(

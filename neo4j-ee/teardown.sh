@@ -316,9 +316,11 @@ echo ""
 # The guard cannot see a foreign instance whose ENIs carry only this stack's
 # security groups. Such an ENI looks stack-owned and does not block teardown.
 # ---------------------------------------------------------------------------
-STACK_RESOURCES=$(aws cloudformation describe-stack-resources \
+# describe-stack-resources returns at most 100 resources and the Private stack
+# has more. list-stack-resources paginates, and the CLI follows every page.
+STACK_RESOURCES=$(aws cloudformation list-stack-resources \
   --stack-name "${STACK_NAME}" --region "${REGION}" \
-  --query 'StackResources[].[LogicalResourceId,ResourceType,PhysicalResourceId]' \
+  --query 'StackResourceSummaries[].[LogicalResourceId,ResourceType,PhysicalResourceId]' \
   --output text 2>/dev/null || true)
 
 stack_physical_ids_of_type() {
