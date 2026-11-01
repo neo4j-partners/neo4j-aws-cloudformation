@@ -207,11 +207,12 @@ Key properties:
   never reaches `cfn-signal --success true`. This preserves protection against
   the worst Marketplace outcome, a wedged stack that is never signaled. Do not
   split the signaling owner between UserData and the bootstrap.
-- **The Secrets Manager password travels by exported environment variable,
+- **The Secrets Manager passwords travel by exported environment variable,
   never on the argument vector.** argv is visible in the process list and
   cloud-init logs. The bootstrap takes no positional arguments and reads no
   ambient global; every required runtime variable is validated in its prologue
-  and `fail()`s if unset.
+  and `fail()`s if unset. UserData unsets both passwords as soon as the
+  bootstrap returns (AD-6).
 - **Content is embedded as plain YAML literal blocks, not `Fn::Sub`.** The
   bootstrap uses bash `${...}` pervasively. `Fn::Sub` would require escaping
   every shell expansion and would break byte-determinism. Literal-block
@@ -402,6 +403,37 @@ forwarded hop cannot obtain an IMDSv2 token.
 **There is no `tls-self-signed` flag.** No template publishes a parameter or
 output that tells a client to skip certificate verification.
 
+### AD-6: Applications connect as a non-superuser, and no password reaches argv
+
+**Each stack has an application user.** The stack generates a second secret,
+`neo4j/<stack>/app-password`. It is 32 alphanumeric characters, encrypted with
+`Neo4jStackKey` and retained like the admin secret. The stack publishes its ARN
+as `app-password-secret-arn` and the username as `app-username`. The user is
+`neo4j_app` and holds the built-in `architect` role. Applications use it. The
+`neo4j` superuser is for operators.
+
+**Every node tries to create the user on its first boot.** The user lives in
+the replicated `system` database. Only the `system` leader accepts the write.
+The bootstrap connects to `localhost` over a direct Bolt connection, which gets
+no server-side routing. A `neo4j://` connection would follow the routing table
+to the advertised address, which is the load balancer. The leader therefore
+creates the user, and the other nodes retry until `SHOW USERS` shows it with
+the `architect` role. A node fails closed after 600 seconds. A node that
+reattaches an existing data volume skips the step.
+
+**The initial password is set before the first start.** `start_neo4j` runs
+`neo4j-admin dbms set-initial-password` before `service neo4j start`. The
+password is in a 0600 temporary file passed as an `@file` argument, so argv
+holds only the file path. The file is removed right after the command.
+`cypher-shell` reads the admin password from `NEO4J_PASSWORD` and the
+application password from a `:param` line on stdin.
+
+**Single sign-on can be the only way in.** `OidcNativeAuthEnabled` defaults to
+`true`, which keeps `native` next to `oidc-sso` in both provider lists.
+`false` leaves `oidc-sso` alone. Operator tools that sign in with the `neo4j`
+password stop working until the parameter is set back to `true`. That stack
+update is the break-glass path.
+
 ---
 
 ## 6. The AMI / Template / UserData / Bootstrap Split
@@ -410,8 +442,8 @@ output that tells a client to skip certificate verification.
 |---|---|---|---|
 | **AMI** (`marketplace/create-ami.sh`) | OS-level, immutable, Neo4j-independent concerns | AMI rebuild + Marketplace submission + instance replacement | OS patches; AWS CLI v2; `python3.11`, `jq`, `openssl`; `amazon-cloudwatch-agent`; `aws-cfn-bootstrap` (`cfn-init`, `cfn-signal`); Neo4j yum repo + GPG key; `neo4j` system user (uid/gid 500); SSH hardening; IMDSv2 enforcement |
 | **Template** (rendered by `build.py`) | Static Neo4j config and orchestration body as cfn-init metadata on `Neo4jLaunchTemplate`; the per-topology CloudFormation resources | Template update, zero Marketplace churn | `neo4j-base.conf` contents; the inlined bootstrap script; NLB TLS listeners and target groups; ACM `CertificateArn` and `AdvertisedDNS` parameters; the mandatory-TLS Rules; the optional Route 53 private DNS resources (AD-4) |
-| **UserData** (`templates/src/userdata.sh`) | CloudFormation signaling and metadata resolution that cannot be delegated | Template update | IMDSv2 token + instance-id/AZ fetch; stack-id and logical-id tag lookups; password fetch from Secrets Manager; `cfn-init`; export of runtime env vars; bootstrap invocation; `cfn-signal`; ERR trap |
-| **Bootstrap** (`templates/src/bootstrap/neo4j-bootstrap.sh` + partials) | Boot-time install, configuration application, security assertion, service start | Template update | `install_neo4j_from_yum`, `install_apoc`, `install_plugin`; `apply_base_conf`; runtime overlay functions including `configure_tls` (AD-4); `assert_security_invariant`; `start_neo4j` |
+| **UserData** (`templates/src/userdata.sh`) | CloudFormation signaling and metadata resolution that cannot be delegated | Template update | IMDSv2 token + instance-id/AZ fetch; stack-id and logical-id tag lookups; admin and application password fetch from Secrets Manager; `cfn-init`; export of runtime env vars; bootstrap invocation; unset of both passwords; `cfn-signal`; ERR trap |
+| **Bootstrap** (`templates/src/bootstrap/neo4j-bootstrap.sh` + partials) | Boot-time install, configuration application, security assertion, service start | Template update | `install_neo4j_from_yum`, `install_apoc`, `install_plugin`; `apply_base_conf`; runtime overlay functions including `configure_tls` (AD-4); `assert_security_invariant`; `start_neo4j`; `create_app_user` (AD-6) |
 
 The AMI carries no Neo4j configuration key, no value, and no conf-mutating
 logic. The same AMI is reused across all three topologies: Public, Private, and
@@ -461,8 +493,9 @@ regression, not an improvement.
   Neo4j version. Fragments would never be read.
 - **Do not blindly concatenate config files.** Neo4j does not resolve duplicate
   keys. Apply config only through `set_neo4j_conf`.
-- **Do not pass the Secrets Manager password as a positional argument.** argv
-  is visible in the process list and cloud-init logs.
+- **Do not pass a Secrets Manager password as a positional argument.** argv
+  is visible in the process list and cloud-init logs. This covers the
+  bootstrap, `neo4j-admin` and `cypher-shell` (AD-6).
 - **Do not widen the runtime security check into content validation.** It would
   fail good instances the first time the list is legitimately tuned, with no
   template fix and full ASG-self-heal blast radius.
@@ -522,6 +555,9 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-18 | Every launch template sets `HttpPutResponseHopLimit: 1` (AD-5) | `SecurityReviewHardeningTests.test_every_launch_template_sets_hop_limit_one` |
 | NFR-19 | `cloudformation:*` grants name the stack ARN; no ARN in any template hard-codes the `aws` partition | `RenderedTemplateSecurityTests.test_cloudformation_actions_are_scoped_to_this_stack`, `test_arns_use_the_partition_pseudo_parameter` |
 | NFR-20 | No template publishes `tls-self-signed` or the `IsSelfSignedTls` condition (AD-5) | `RenderedTemplateContractTests.test_tls_self_signed_contract_is_removed` |
+| NFR-21 | The application secret is generated, alphanumeric, retained and encrypted with the stack key; the node role reads it; the stack publishes `app-password-secret-arn` and `app-username`; the bootstrap creates `neo4j_app` with `architect` after start, on first boot only (AD-6) | `SecurityReviewBatchBTests.test_app_password_secret_is_generated_alphanumeric_and_retained`, `test_node_role_reads_both_password_secrets`, `test_app_user_ssm_parameters`, `test_bootstrap_creates_app_user_after_start_on_first_boot`; `ShellPartialTests.test_create_app_user_*` |
+| NFR-22 | The initial password is set from a 0600 `@file` before the first start; no password appears in argv; UserData unsets both passwords before signaling (AD-6) | `ShellPartialTests.test_install_neo4j_commands_and_first_boot_password`, `test_set_initial_password_failure_fails_closed_and_removes_file`; `SecurityReviewBatchBTests.test_userdata_fetches_app_password_and_unsets_secrets_before_signal` |
+| NFR-23 | `OidcNativeAuthEnabled` defaults to `true`; `false` sets both provider lists to `oidc-sso` (AD-6) | `ShellPartialTests.test_configure_oidc_native_auth_flag`; `SecurityReviewBatchBTests.test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

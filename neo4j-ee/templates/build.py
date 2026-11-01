@@ -115,6 +115,10 @@ _PREAMBLE_OIDC = [
     '"oidcReaderGroupB64="',
     "Fn::Base64: {Ref: OidcReaderGroup}",
     '"\\n"',
+    # AllowedValues limits this to true or false, so it needs no encoding.
+    '"oidcNativeAuthEnabled="',
+    "Ref: OidcNativeAuthEnabled",
+    '"\\n"',
 ]
 
 

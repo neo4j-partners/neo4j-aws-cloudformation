@@ -62,6 +62,7 @@ Metadata:
           - OidcGroupsClaim
           - OidcAdminGroup
           - OidcReaderGroup
+          - OidcNativeAuthEnabled
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -123,6 +124,8 @@ Metadata:
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
+      OidcNativeAuthEnabled:
+        default: Keep Password Login With OIDC
       Node1SnapshotId:
         default: Node 1 Snapshot ID
       BoltTlsScheme:
@@ -371,7 +374,8 @@ Parameters:
       https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
       the provider's discovery document at <issuer>/.well-known/openid-configuration.
       When set, users can sign in with an ID token from this provider. Password
-      login always stays enabled. Leave blank for password login only.
+      login stays enabled unless OidcNativeAuthEnabled is false. Leave blank for
+      password login only.
     Type: String
     Default: ''
     AllowedPattern: '^$|^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%/-]*)?$'
@@ -434,6 +438,17 @@ Parameters:
     ConstraintDescription: >-
       Must be blank or a group name without double quotes, equals signs,
       semicolons, commas, backslashes or control characters.
+  OidcNativeAuthEnabled:
+    Description: >-
+      Keep password login enabled next to single sign-on. Set to false to make
+      single sign-on the only way to sign in. Operator tools that use the neo4j
+      password then stop working until it is set back to true. Has no effect
+      when OidcIssuerUri is blank.
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
 Rules:
   BloomLicenseRequiredWhenInstalled:
@@ -613,7 +628,9 @@ Resources:
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref Neo4jPasswordSecret
+                Resource:
+                  - !Ref Neo4jPasswordSecret
+                  - !Ref Neo4jAppPasswordSecret
               # The password secrets use the stack key. The key policy allows
               # data-plane use only through Secrets Manager.
               - Effect: Allow
@@ -1076,12 +1093,14 @@ Resources:
                 # when the corresponding feature is off (advertisedDNS is empty only for Public
                 # without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
                 for _required in stackName region nodeCount loadBalancerDNSName \
-                  installGDS installBloom password _stack_id _instance_id _az; do
+                  installGDS installBloom password appPassword _stack_id _instance_id _az; do
                   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
                 done
 
                 initialPassword="${password}"
                 unset password
+                applicationPassword="${appPassword}"
+                unset appPassword
                 isFirstBoot=false
 
                 # The optional OIDC values arrive base64-encoded so that no parameter value
@@ -1093,6 +1112,7 @@ Resources:
                 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
                 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
                 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+                oidcNativeAuthEnabled="${oidcNativeAuthEnabled:-true}"
 
                 set_neo4j_conf() {
                   local key="$1"
@@ -1208,14 +1228,33 @@ Resources:
                   yum -y install neo4j-enterprise
                   systemctl enable neo4j
                 }
+                set_initial_password() {
+                  local initialPassword="$1"
+                  local dataDir="${NEO4J_DATA_DIR:-/var/lib/neo4j/data}"
+                  local argFile
+                  # neo4j-admin expands an @file argument, so the password is read from a
+                  # 0600 file and never appears in the process list. printf is a shell
+                  # builtin, so writing the file starts no process either.
+                  argFile=$(umask 077 && mktemp)
+                  printf '%s\n' "${initialPassword}" > "${argFile}"
+                  if ! neo4j-admin dbms set-initial-password "@${argFile}"; then
+                    rm -f "${argFile}"
+                    fail "neo4j-admin dbms set-initial-password failed."
+                  fi
+                  rm -f "${argFile}"
+                  # The command runs as root and writes the auth file the service user reads.
+                  chown -R neo4j:neo4j "${dataDir}/dbms"
+                }
                 start_neo4j() {
                   local initialPassword="$1"
                   local isFirstBoot="$2"
+                  # The initial password must be set before the first start creates the
+                  # system database.
+                  if [[ "${isFirstBoot}" == "true" ]]; then
+                    set_initial_password "${initialPassword}"
+                  fi
                   echo "Starting Neo4j..."
                   service neo4j start
-                  if [[ "${isFirstBoot}" == "true" ]]; then
-                    neo4j-admin dbms set-initial-password "${initialPassword}"
-                  fi
                 }
                 install_apoc() {
                   local neo4j_home="${NEO4J_HOME:-/var/lib/neo4j}"
@@ -1436,6 +1475,7 @@ Resources:
                   local groupsClaim="$5"
                   local adminGroup="$6"
                   local readerGroup="$7"
+                  local nativeAuthEnabled="${8:-true}"
                   local provider="dbms.security.oidc.sso"
                   local mappings=()
 
@@ -1462,10 +1502,17 @@ Resources:
                     fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
                   fi
 
-                  # native stays in both lists so password login (operator tooling and
-                  # service accounts) keeps working next to single sign-on.
-                  set_neo4j_conf dbms.security.authentication_providers "oidc-sso,native"
-                  set_neo4j_conf dbms.security.authorization_providers "oidc-sso,native"
+                  # By default native stays in both lists, so password login for operator
+                  # tooling and service accounts keeps working next to single sign-on.
+                  # OidcNativeAuthEnabled=false leaves single sign-on as the only way in.
+                  local providers="oidc-sso,native"
+                  case "${nativeAuthEnabled}" in
+                    true) ;;
+                    false) providers="oidc-sso" ;;
+                    *) fail "OidcNativeAuthEnabled must be true or false." ;;
+                  esac
+                  set_neo4j_conf dbms.security.authentication_providers "${providers}"
+                  set_neo4j_conf dbms.security.authorization_providers "${providers}"
                   set_neo4j_conf "${provider}.display_name" "SSO"
                   set_neo4j_conf "${provider}.auth_flow" pkce
                   set_neo4j_conf "${provider}.well_known_discovery_uri" \
@@ -1488,7 +1535,64 @@ Resources:
                     joined=$(IFS=';'; echo "${mappings[*]}")
                     set_neo4j_conf "${provider}.authorization.group_to_role_mapping" "${joined}"
                   fi
-                  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s))."
+                  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s), providers ${providers})."
+                }
+                # Runs a Cypher script from stdin against the system database as the neo4j
+                # admin user. The admin password travels in the NEO4J_PASSWORD environment
+                # variable and the script on stdin, so no secret reaches argv.
+                _system_cypher() {
+                  local address="$1"
+                  local adminPassword="$2"
+                  NEO4J_USERNAME=neo4j NEO4J_PASSWORD="${adminPassword}" \
+                    cypher-shell -a "${address}" -d system --format plain
+                }
+                create_app_user() {
+                  local appUsername="$1"
+                  local appPassword="$2"
+                  local adminPassword="$3"
+                  local advertisedDNS="$4"
+                  local timeoutSeconds="${5:-600}"
+                  local retrySeconds="${6:-10}"
+                  local address="bolt://localhost:7687"
+                  local deadline count
+
+                  [[ "${appUsername}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] \
+                    || fail "Application username is not a plain identifier."
+                  # The secret is generated without punctuation. Checking it here keeps the
+                  # quoted :param literal below safe from Cypher injection.
+                  [[ "${appPassword}" =~ ^[A-Za-z0-9]+$ ]] \
+                    || fail "Application password secret must be alphanumeric."
+                  command -v cypher-shell >/dev/null 2>&1 || fail "cypher-shell not found."
+                  # Bolt requires TLS whenever AdvertisedDNS is set. The node certificate
+                  # names AdvertisedDNS rather than localhost, so this loopback connection
+                  # skips name verification.
+                  [[ -z "${advertisedDNS}" ]] || address="bolt+ssc://localhost:7687"
+
+                  # Every node runs this on its first boot. Only the system database leader
+                  # accepts the write, and a direct bolt connection gets no server-side
+                  # routing. The other nodes retry until the user replicates to them.
+                  echo "Ensuring application user ${appUsername} exists..."
+                  deadline=$(( $(date +%s) + timeoutSeconds ))
+                  while true; do
+                    if printf '%s\n' \
+                      ":param {pw: '${appPassword}'}" \
+                      "CREATE USER ${appUsername} IF NOT EXISTS SET PASSWORD \$pw CHANGE NOT REQUIRED;" \
+                      "GRANT ROLE architect TO ${appUsername};" \
+                      | _system_cypher "${address}" "${adminPassword}" >/dev/null; then
+                      echo "Application user ${appUsername} is ready."
+                      return 0
+                    fi
+                    count=$(printf '%s\n' \
+                      "SHOW USERS YIELD user, roles WHERE user = '${appUsername}' AND 'architect' IN roles RETURN count(*) AS n;" \
+                      | _system_cypher "${address}" "${adminPassword}" 2>/dev/null | tail -n 1 || true)
+                    if [[ "${count}" == "1" ]]; then
+                      echo "Application user ${appUsername} replicated from the leader."
+                      return 0
+                    fi
+                    (( $(date +%s) < deadline )) \
+                      || fail "Timed out after ${timeoutSeconds}s creating application user ${appUsername}."
+                    sleep "${retrySeconds}"
+                  done
                 }
                 install_cloudwatch_agent() {
                   local stackName="$1"
@@ -1548,9 +1652,15 @@ Resources:
                 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
                 remove_jdwp_default
                 configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
-                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
+                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}" \
+                  "${oidcNativeAuthEnabled}"
                 assert_security_invariant
                 start_neo4j "${initialPassword}" "${isFirstBoot}"
+                # The application user lives in the replicated system database, so it is
+                # created once per cluster. A node that reattaches an existing volume skips it.
+                if [[ "${isFirstBoot}" == "true" ]]; then
+                  create_app_user neo4j_app "${applicationPassword}" "${initialPassword}" "${advertisedDNS:-}"
+                fi
             /opt/neo4j/conf/neo4j-base.conf:
               mode: '000644'
               owner: root
@@ -1651,6 +1761,9 @@ Resources:
               - "oidcReaderGroupB64="
               - Fn::Base64: {Ref: OidcReaderGroup}
               - "\n"
+              - "oidcNativeAuthEnabled="
+              - Ref: OidcNativeAuthEnabled
+              - "\n"
               - |
                 _token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
                 _instance_id=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/instance-id)
@@ -1678,6 +1791,10 @@ Resources:
                   --secret-id "neo4j/${stackName}/password" \
                   --query SecretString --output text \
                   --region "${region}")
+                appPassword=$(aws secretsmanager get-secret-value \
+                  --secret-id "neo4j/${stackName}/app-password" \
+                  --query SecretString --output text \
+                  --region "${region}")
 
                 # cfn-init writes the template-owned bootstrap and base conf from the shared
                 # LaunchTemplate's AWS::CloudFormation::Init metadata. A non-zero exit trips
@@ -1686,15 +1803,17 @@ Resources:
                 cfn-init --stack "$stackName" --resource Neo4jLaunchTemplate --region "$region"
 
                 # Hand every runtime value to the bootstrap as named, exported environment
-                # variables. The Secrets Manager password travels by env, never on argv, so it
-                # is not exposed in the process list or cloud-init logs.
+                # variables. The Secrets Manager passwords travel by env, never on argv, so
+                # they are not exposed in the process list or cloud-init logs.
                 export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
                 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
-                export password _stack_id _instance_id _az
+                export password appPassword _stack_id _instance_id _az
                 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
-                export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
+                export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64 oidcNativeAuthEnabled
 
                 /opt/neo4j/bin/neo4j-bootstrap.sh
+                # The secrets stay in this shell for no longer than the bootstrap needs them.
+                unset password appPassword
 
                 # cfn-signal shebang (#!/usr/bin/python3 -s) requires cfnbootstrap under python3.9;
                 # switch the default only after signaling so cfn-signal can find its dependencies.
@@ -2006,6 +2125,24 @@ Resources:
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
+  Neo4jAppPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub 'neo4j/${AWS::StackName}/app-password'
+      Description: !Sub 'Neo4j application user (neo4j_app) password for stack ${AWS::StackName}'
+      # Alphanumeric only: the bootstrap passes it to Cypher as a quoted literal.
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+      KmsKeyId: !Ref Neo4jStackKey
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
   Neo4jConfigVpcIdParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -2099,6 +2236,22 @@ Resources:
       Type: String
       Value: !Ref Neo4jPasswordSecret
       Description: Secrets Manager ARN for the Neo4j admin password (used by in-VPC Lambda clients).
+
+  Neo4jConfigAppPasswordSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/app-password-secret-arn'
+      Type: String
+      Value: !Ref Neo4jAppPasswordSecret
+      Description: Secrets Manager ARN for the neo4j_app application user password. Applications connect as this user, not as neo4j.
+
+  Neo4jConfigAppUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/app-username'
+      Type: String
+      Value: neo4j_app
+      Description: Neo4j application username. The user has the built-in architect role.
 
   Neo4jConfigBoltUrlParameter:
     Type: AWS::SSM::Parameter

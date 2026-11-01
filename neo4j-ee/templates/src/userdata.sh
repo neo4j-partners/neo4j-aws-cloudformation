@@ -24,6 +24,10 @@ password=$(aws secretsmanager get-secret-value \
   --secret-id "neo4j/${stackName}/password" \
   --query SecretString --output text \
   --region "${region}")
+appPassword=$(aws secretsmanager get-secret-value \
+  --secret-id "neo4j/${stackName}/app-password" \
+  --query SecretString --output text \
+  --region "${region}")
 
 # cfn-init writes the template-owned bootstrap and base conf from the shared
 # LaunchTemplate's AWS::CloudFormation::Init metadata. A non-zero exit trips
@@ -32,15 +36,17 @@ password=$(aws secretsmanager get-secret-value \
 cfn-init --stack "$stackName" --resource Neo4jLaunchTemplate --region "$region"
 
 # Hand every runtime value to the bootstrap as named, exported environment
-# variables. The Secrets Manager password travels by env, never on argv, so it
-# is not exposed in the process list or cloud-init logs.
+# variables. The Secrets Manager passwords travel by env, never on argv, so
+# they are not exposed in the process list or cloud-init logs.
 export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
-export password _stack_id _instance_id _az
+export password appPassword _stack_id _instance_id _az
 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
-export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
+export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64 oidcNativeAuthEnabled
 
 /opt/neo4j/bin/neo4j-bootstrap.sh
+# The secrets stay in this shell for no longer than the bootstrap needs them.
+unset password appPassword
 
 # cfn-signal shebang (#!/usr/bin/python3 -s) requires cfnbootstrap under python3.9;
 # switch the default only after signaling so cfn-signal can find its dependencies.

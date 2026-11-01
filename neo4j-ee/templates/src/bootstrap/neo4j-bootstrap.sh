@@ -19,12 +19,14 @@ fail() {
 # when the corresponding feature is off (advertisedDNS is empty only for Public
 # without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
 for _required in stackName region nodeCount loadBalancerDNSName \
-  installGDS installBloom password _stack_id _instance_id _az; do
+  installGDS installBloom password appPassword _stack_id _instance_id _az; do
   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
 done
 
 initialPassword="${password}"
 unset password
+applicationPassword="${appPassword}"
+unset appPassword
 isFirstBoot=false
 
 # The optional OIDC values arrive base64-encoded so that no parameter value
@@ -36,6 +38,7 @@ oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+oidcNativeAuthEnabled="${oidcNativeAuthEnabled:-true}"
 
 # include partials/set-neo4j-conf.sh
 
@@ -52,6 +55,8 @@ oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
 # include partials/configure-tls.sh
 
 # include partials/configure-oidc.sh
+
+# include partials/create-app-user.sh
 
 # include partials/configure-cloudwatch.sh
 
@@ -76,6 +81,12 @@ configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
 remove_jdwp_default
 configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
-  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
+  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}" \
+  "${oidcNativeAuthEnabled}"
 assert_security_invariant
 start_neo4j "${initialPassword}" "${isFirstBoot}"
+# The application user lives in the replicated system database, so it is
+# created once per cluster. A node that reattaches an existing volume skips it.
+if [[ "${isFirstBoot}" == "true" ]]; then
+  create_app_user neo4j_app "${applicationPassword}" "${initialPassword}" "${advertisedDNS:-}"
+fi

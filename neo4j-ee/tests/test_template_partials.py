@@ -670,6 +670,24 @@ class ShellPartialTests(unittest.TestCase):
             },
         )
 
+    def test_configure_oidc_native_auth_flag(self) -> None:
+        # Security review M7: OidcNativeAuthEnabled=false drops native from
+        # both provider lists, so single sign-on is the only way in.
+        base = ("https://idp.example.com", "client-a", "", "", "", "", "")
+        for flag, expected in (("true", "oidc-sso,native"), ("false", "oidc-sso")):
+            with self.subTest(flag=flag):
+                result, calls = self._run_configure_oidc(*base, flag)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    calls["dbms.security.authentication_providers"], expected
+                )
+                self.assertEqual(
+                    calls["dbms.security.authorization_providers"], expected
+                )
+        result, _ = self._run_configure_oidc(*base, "maybe")
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn("OidcNativeAuthEnabled", self.fail_log.read_text())
+
     def test_configure_oidc_optional_values_omit_their_keys(self) -> None:
         cases = {
             "admin only": (("neo4j-admins", ""), '"neo4j-admins"=admin'),
@@ -785,17 +803,32 @@ class ShellPartialTests(unittest.TestCase):
         self.assertIn("GDS JAR not found", self.fail_log.read_text())
 
     def test_install_neo4j_commands_and_first_boot_password(self) -> None:
+        # Security review M5: the initial password is set from a 0600 @file
+        # before the first start, and never appears in any argv.
         self.write_stub("yum", "echo \"yum $* accept=${NEO4J_ACCEPT_LICENSE_AGREEMENT:-}\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("systemctl", "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n")
         self.write_stub("service", "echo \"service $*\" >> \"$COMMAND_LOG\"\n")
-        self.write_stub("neo4j-admin", "echo \"neo4j-admin $*\" >> \"$COMMAND_LOG\"\n")
+        self.write_stub("chown", "echo \"chown $*\" >> \"$COMMAND_LOG\"\n")
+        self.write_stub(
+            "neo4j-admin",
+            """
+            echo "neo4j-admin $*" >> "$COMMAND_LOG"
+            arg="${*: -1}"
+            ls -l "${arg#@}" | cut -c1-10 > "$TEST_TMP/argfile.mode"
+            cat "${arg#@}" > "$TEST_TMP/argfile.content"
+            echo "${arg#@}" > "$TEST_TMP/argfile.path"
+            """,
+        )
+        data_dir = self.tmp / "data"
 
         result = self.run_shell(
             f"""
             set -euo pipefail
+            export NEO4J_DATA_DIR="{data_dir}"
             source "{PARTIALS / 'install-neo4j.sh'}"
+            {self.fail_function()}
             install_neo4j_from_yum
-            start_neo4j secret true
+            start_neo4j Secret123abc true
             """
         )
 
@@ -803,19 +836,153 @@ class ShellPartialTests(unittest.TestCase):
         log = self.command_log.read_text()
         self.assertIn("yum -y install neo4j-enterprise accept=yes", log)
         self.assertIn("systemctl enable neo4j", log)
-        self.assertIn("service neo4j start", log)
-        self.assertIn("neo4j-admin dbms set-initial-password secret", log)
+        self.assertNotIn("Secret123abc", log)
+        self.assertRegex(log, r"neo4j-admin dbms set-initial-password @\S+")
+        self.assertLess(
+            log.index("neo4j-admin dbms set-initial-password"),
+            log.index("service neo4j start"),
+        )
+        self.assertIn(f"chown -R neo4j:neo4j {data_dir}/dbms", log)
+        self.assertEqual((self.tmp / "argfile.mode").read_text().strip(), "-rw-------")
+        self.assertEqual(
+            (self.tmp / "argfile.content").read_text(), "Secret123abc\n"
+        )
+        argfile = Path((self.tmp / "argfile.path").read_text().strip())
+        self.assertFalse(argfile.exists(), "password file was not removed")
 
         self.command_log.write_text("")
         result = self.run_shell(
             f"""
             set -euo pipefail
             source "{PARTIALS / 'install-neo4j.sh'}"
-            start_neo4j secret false
+            {self.fail_function()}
+            start_neo4j Secret123abc false
             """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("set-initial-password", self.command_log.read_text())
+        self.assertIn("service neo4j start", self.command_log.read_text())
+
+    def test_set_initial_password_failure_fails_closed_and_removes_file(self) -> None:
+        self.write_stub(
+            "neo4j-admin",
+            """
+            arg="${*: -1}"
+            echo "${arg#@}" > "$TEST_TMP/argfile.path"
+            exit 3
+            """,
+        )
+        self.write_stub("service", "echo \"service $*\" >> \"$COMMAND_LOG\"\n")
+        result = self.run_shell(
+            f"""
+            set -euo pipefail
+            source "{PARTIALS / 'install-neo4j.sh'}"
+            {self.fail_function()}
+            start_neo4j Secret123abc true
+            """
+        )
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn("set-initial-password failed", self.fail_log.read_text())
+        self.assertFalse(self.command_log.exists(), "service started after failure")
+        argfile = Path((self.tmp / "argfile.path").read_text().strip())
+        self.assertFalse(argfile.exists(), "password file was not removed")
+
+    def _cypher_shell_stub(self) -> None:
+        # MODE=leader accepts every script. MODE=follower rejects the write and
+        # reports the replicated user. MODE=never rejects everything.
+        self.write_stub(
+            "cypher-shell",
+            """
+            echo "cypher-shell $* user=${NEO4J_USERNAME:-} pw=${NEO4J_PASSWORD:+set}" >> "$COMMAND_LOG"
+            input=$(cat)
+            printf '%s\\n---\\n' "$input" >> "$TEST_TMP/cypher.in"
+            case "${MODE}" in
+              leader) exit 0 ;;
+              follower)
+                if [[ "$input" == *"CREATE USER"* ]]; then exit 1; fi
+                printf 'n\\n1\\n' ;;
+              *) exit 1 ;;
+            esac
+            """,
+        )
+
+    def _run_create_app_user(
+        self, mode: str, *args: str
+    ) -> subprocess.CompletedProcess[str]:
+        quoted = " ".join(f"'{a}'" for a in args)
+        return self.run_shell(
+            f"""
+            set -euo pipefail
+            source "{PARTIALS / 'create-app-user.sh'}"
+            {self.fail_function()}
+            create_app_user {quoted}
+            """,
+            env={"MODE": mode},
+        )
+
+    def test_create_app_user_on_leader_keeps_secrets_off_argv(self) -> None:
+        self._cypher_shell_stub()
+        result = self._run_create_app_user(
+            "leader", "neo4j_app", "AppPw123", "AdminPw456", "neo4j.example.com", "5", "0"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.command_log.read_text()
+        self.assertNotIn("AppPw123", log)
+        self.assertNotIn("AdminPw456", log)
+        self.assertIn(
+            "cypher-shell -a bolt+ssc://localhost:7687 -d system --format plain "
+            "user=neo4j pw=set",
+            log,
+        )
+        script = (self.tmp / "cypher.in").read_text()
+        self.assertIn(":param {pw: 'AppPw123'}", script)
+        self.assertIn(
+            "CREATE USER neo4j_app IF NOT EXISTS SET PASSWORD $pw CHANGE NOT REQUIRED;",
+            script,
+        )
+        self.assertIn("GRANT ROLE architect TO neo4j_app;", script)
+
+    def test_create_app_user_uses_plain_bolt_without_advertised_dns(self) -> None:
+        self._cypher_shell_stub()
+        result = self._run_create_app_user(
+            "leader", "neo4j_app", "AppPw123", "AdminPw456", "", "5", "0"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-a bolt://localhost:7687 ", self.command_log.read_text())
+
+    def test_create_app_user_on_follower_waits_for_replication(self) -> None:
+        self._cypher_shell_stub()
+        result = self._run_create_app_user(
+            "follower", "neo4j_app", "AppPw123", "AdminPw456", "", "5", "0"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("replicated from the leader", result.stdout)
+        self.assertIn("SHOW USERS", (self.tmp / "cypher.in").read_text())
+
+    def test_create_app_user_times_out_closed(self) -> None:
+        self._cypher_shell_stub()
+        result = self._run_create_app_user(
+            "never", "neo4j_app", "AppPw123", "AdminPw456", "", "0", "0"
+        )
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn("Timed out", self.fail_log.read_text())
+
+    def test_create_app_user_rejects_values_that_could_inject_cypher(self) -> None:
+        self._cypher_shell_stub()
+        cases = {
+            "quote in password": ("neo4j_app", 'pw"x'),
+            "dollar in password": ("neo4j_app", "pw$x"),
+            "punctuation in password": ("neo4j_app", "pw-x"),
+            "space in username": ("neo4j app", "AppPw123"),
+        }
+        for label, (user, pw) in cases.items():
+            with self.subTest(case=label):
+                self.fail_log.write_text("")
+                result = self._run_create_app_user(
+                    "leader", user, pw, "AdminPw456", "", "5", "0"
+                )
+                self.assertEqual(result.returncode, 42, result.stderr)
+                self.assertFalse(self.command_log.exists())
 
     def test_cloudwatch_config_is_valid_json_and_invokes_agent_control(self) -> None:
         self.write_stub("amazon-cloudwatch-agent-ctl", "echo \"cwctl $*\" >> \"$COMMAND_LOG\"\n")
@@ -1591,7 +1758,8 @@ class RenderedTemplateContractTests(unittest.TestCase):
             r'configure_tls\s+"\$\{advertisedDNS:-\}"\s+"\$\{loadBalancerDNSName\}"\s+"\$\{boltAdvertiseDns:-false\}"',
             r'configure_cluster\s+"\$\{nodeCount\}"\s+"\$\{region\}"\s+"\$\{_stack_id\}"',
             r'configure_plugin_settings\s+"\$\{installBloom\}"\s+"\$\{bloomLicenseSecretArn\}"\s+"\$\{installGDS\}"\s+"\$\{gdsLicenseSecretArn\}"',
-            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"',
+            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"\s+\\\s+"\$\{oidcNativeAuthEnabled\}"',
+            r'create_app_user\s+neo4j_app\s+"\$\{applicationPassword\}"\s+"\$\{initialPassword\}"\s+"\$\{advertisedDNS:-\}"',
             r'start_neo4j\s+"\$\{initialPassword\}"\s+"\$\{isFirstBoot\}"',
         )
         for name, template in self.templates.items():
@@ -1726,6 +1894,8 @@ class RenderedTemplateContractTests(unittest.TestCase):
         expected_keys = {
             "nlb-dns",
             "password-secret-arn",
+            "app-password-secret-arn",
+            "app-username",
             "advertised-dns",
             "bolt-url",
             "https-url",
@@ -1775,6 +1945,8 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "private-route-table-1-id",
             "private-subnet-2-id",
             "password-secret-arn",
+            "app-password-secret-arn",
+            "app-username",
             "external-sg-id",
             "vpc-endpoint-sg-id",
             "public-subnet-1-id",
@@ -1827,6 +1999,8 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "private-route-table-1-id",
             "private-subnet-2-id",
             "password-secret-arn",
+            "app-password-secret-arn",
+            "app-username",
             "external-sg-id",
             "vpc-endpoint-sg-id",
         }
@@ -2075,13 +2249,19 @@ class RenderedTemplateSecurityTests(unittest.TestCase):
                                     f"actions {offenders}",
                                 )
                             if "secretsmanager:GetSecretValue" in actions:
-                                self.assertIsInstance(
-                                    resource,
-                                    dict,
-                                    f"{name}: secret grant not scoped to a Ref",
+                                refs = (
+                                    resource
+                                    if isinstance(resource, list)
+                                    else [resource]
                                 )
-                                self.assertIn("Ref", resource)
-                                self.assertNotEqual(resource.get("Ref"), "*")
+                                for ref in refs:
+                                    self.assertIsInstance(
+                                        ref,
+                                        dict,
+                                        f"{name}: secret grant not scoped to a Ref",
+                                    )
+                                    self.assertIn("Ref", ref)
+                                    self.assertNotEqual(ref.get("Ref"), "*")
 
     def test_cloudformation_actions_are_scoped_to_this_stack(self) -> None:
         # Security review M8: a node may describe and signal only its own
@@ -2584,6 +2764,120 @@ class SecurityReviewHardeningTests(unittest.TestCase):
             with self.subTest(template=name):
                 for port in (2003, 2004, 3637):
                     self.assertNotIn(f"FromPort: {port}", body)
+
+
+
+class SecurityReviewBatchBTests(unittest.TestCase):
+    """Locks the bootstrap fixes from security-review.md batch B."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = _assemble_all_templates()
+        cls.docs = {name: load_cfn(body) for name, body in cls.text.items()}
+
+    @staticmethod
+    def _userdata_text(doc: dict) -> str:
+        lt = next(
+            r
+            for r in doc["Resources"].values()
+            if r.get("Type") == "AWS::EC2::LaunchTemplate"
+        )
+        join = lt["Properties"]["LaunchTemplateData"]["UserData"]["Fn::Base64"][
+            "Fn::Join"
+        ]
+        return "".join(p for p in join[1] if isinstance(p, str))
+
+    def test_app_password_secret_is_generated_alphanumeric_and_retained(self) -> None:
+        # H1: applications get their own non-superuser credentials.
+        for name in self.docs:
+            with self.subTest(template=name):
+                secret = self.docs[name]["Resources"]["Neo4jAppPasswordSecret"]
+                self.assertEqual(secret.get("DeletionPolicy"), "Retain")
+                self.assertEqual(secret.get("UpdateReplacePolicy"), "Retain")
+                props = secret["Properties"]
+                self.assertEqual(
+                    props["Name"], {"Fn::Sub": "neo4j/${AWS::StackName}/app-password"}
+                )
+                self.assertEqual(props.get("KmsKeyId"), {"Ref": "Neo4jStackKey"})
+                self.assertNotIn("SecretString", props)
+                gen = props["GenerateSecretString"]
+                self.assertEqual(gen.get("PasswordLength"), 32)
+                self.assertIs(gen.get("ExcludePunctuation"), True)
+
+    def test_node_role_reads_both_password_secrets(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                role = self.docs[name]["Resources"]["Neo4jRole"]
+                resources = [
+                    stmt["Resource"]
+                    for pol in role["Properties"]["Policies"]
+                    for stmt in pol["PolicyDocument"]["Statement"]
+                    if isinstance(stmt, dict)
+                    and "secretsmanager:GetSecretValue" in stmt.get("Action", [])
+                    and isinstance(stmt.get("Resource"), list)
+                ]
+                self.assertIn(
+                    [{"Ref": "Neo4jPasswordSecret"}, {"Ref": "Neo4jAppPasswordSecret"}],
+                    resources,
+                )
+
+    def test_app_user_ssm_parameters(self) -> None:
+        for name in self.docs:
+            with self.subTest(template=name):
+                res = self.docs[name]["Resources"]
+                arn = res["Neo4jConfigAppPasswordSecretArnParameter"]["Properties"]
+                self.assertEqual(arn["Value"], {"Ref": "Neo4jAppPasswordSecret"})
+                user = res["Neo4jConfigAppUsernameParameter"]["Properties"]
+                self.assertEqual(user["Value"], "neo4j_app")
+
+    def test_userdata_fetches_app_password_and_unsets_secrets_before_signal(self) -> None:
+        # M5: no secret outlives the bootstrap in the UserData shell.
+        for name, doc in self.docs.items():
+            with self.subTest(template=name):
+                ud = self._userdata_text(doc)
+                self.assertIn('--secret-id "neo4j/${stackName}/app-password"', ud)
+                self.assertRegex(ud, r"export\b[^\n]*\bappPassword\b")
+                # rindex: comments earlier in the wrapper name both strings.
+                boot = ud.rindex("\n/opt/neo4j/bin/neo4j-bootstrap.sh")
+                unset = ud.index("unset password appPassword")
+                signal = ud.rindex("cfn-signal --success true")
+                self.assertLess(boot, unset)
+                self.assertLess(unset, signal)
+
+    def test_bootstrap_creates_app_user_after_start_on_first_boot(self) -> None:
+        for name, body in self.text.items():
+            with self.subTest(template=name):
+                self.assertIn("unset appPassword", body)
+                start = body.rindex('start_neo4j "${initialPassword}" "${isFirstBoot}"')
+                create = body.rindex("create_app_user neo4j_app")
+                self.assertLess(start, create)
+                guard = body.rindex('if [[ "${isFirstBoot}" == "true" ]]; then', 0, create)
+                self.assertLess(start, guard)
+
+    def test_oidc_native_auth_parameter_defaults_true_and_reaches_userdata(self) -> None:
+        # M7: single sign-on only is opt-in, so existing deploys keep the
+        # operator password path.
+        for name, doc in self.docs.items():
+            with self.subTest(template=name):
+                param = doc["Parameters"]["OidcNativeAuthEnabled"]
+                self.assertEqual(param["Default"], "true")
+                self.assertEqual(sorted(param["AllowedValues"]), ["false", "true"])
+                lt = next(
+                    r
+                    for r in doc["Resources"].values()
+                    if r.get("Type") == "AWS::EC2::LaunchTemplate"
+                )
+                parts = lt["Properties"]["LaunchTemplateData"]["UserData"][
+                    "Fn::Base64"
+                ]["Fn::Join"][1]
+                i = parts.index("oidcNativeAuthEnabled=")
+                self.assertEqual(parts[i + 1], {"Ref": "OidcNativeAuthEnabled"})
+                groups = doc["Metadata"]["AWS::CloudFormation::Interface"][
+                    "ParameterGroups"
+                ]
+                self.assertTrue(
+                    any("OidcNativeAuthEnabled" in g["Parameters"] for g in groups)
+                )
 
 
 if __name__ == "__main__":

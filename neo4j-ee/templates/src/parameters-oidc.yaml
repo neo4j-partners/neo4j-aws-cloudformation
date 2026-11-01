@@ -4,7 +4,8 @@
       https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
       the provider's discovery document at <issuer>/.well-known/openid-configuration.
       When set, users can sign in with an ID token from this provider. Password
-      login always stays enabled. Leave blank for password login only.
+      login stays enabled unless OidcNativeAuthEnabled is false. Leave blank for
+      password login only.
     Type: String
     Default: ''
     AllowedPattern: '^$|^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%/-]*)?$'
@@ -67,3 +68,14 @@
     ConstraintDescription: >-
       Must be blank or a group name without double quotes, equals signs,
       semicolons, commas, backslashes or control characters.
+  OidcNativeAuthEnabled:
+    Description: >-
+      Keep password login enabled next to single sign-on. Set to false to make
+      single sign-on the only way to sign in. Operator tools that use the neo4j
+      password then stop working until it is set back to true. Has no effect
+      when OidcIssuerUri is blank.
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'

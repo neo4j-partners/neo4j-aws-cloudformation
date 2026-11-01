@@ -13,6 +13,24 @@
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
+  Neo4jAppPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub 'neo4j/${AWS::StackName}/app-password'
+      Description: !Sub 'Neo4j application user (neo4j_app) password for stack ${AWS::StackName}'
+      # Alphanumeric only: the bootstrap passes it to Cypher as a quoted literal.
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+      KmsKeyId: !Ref Neo4jStackKey
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
   Neo4jConfigVpcIdParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -106,6 +124,22 @@
       Type: String
       Value: !Ref Neo4jPasswordSecret
       Description: Secrets Manager ARN for the Neo4j admin password (used by in-VPC Lambda clients).
+
+  Neo4jConfigAppPasswordSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/app-password-secret-arn'
+      Type: String
+      Value: !Ref Neo4jAppPasswordSecret
+      Description: Secrets Manager ARN for the neo4j_app application user password. Applications connect as this user, not as neo4j.
+
+  Neo4jConfigAppUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/app-username'
+      Type: String
+      Value: neo4j_app
+      Description: Neo4j application username. The user has the built-in architect role.
 
   Neo4jConfigBoltUrlParameter:
     Type: AWS::SSM::Parameter

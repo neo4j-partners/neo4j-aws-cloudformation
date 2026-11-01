@@ -6,6 +6,7 @@ configure_oidc() {
   local groupsClaim="$5"
   local adminGroup="$6"
   local readerGroup="$7"
+  local nativeAuthEnabled="${8:-true}"
   local provider="dbms.security.oidc.sso"
   local mappings=()
 
@@ -32,10 +33,17 @@ configure_oidc() {
     fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
   fi
 
-  # native stays in both lists so password login (operator tooling and
-  # service accounts) keeps working next to single sign-on.
-  set_neo4j_conf dbms.security.authentication_providers "oidc-sso,native"
-  set_neo4j_conf dbms.security.authorization_providers "oidc-sso,native"
+  # By default native stays in both lists, so password login for operator
+  # tooling and service accounts keeps working next to single sign-on.
+  # OidcNativeAuthEnabled=false leaves single sign-on as the only way in.
+  local providers="oidc-sso,native"
+  case "${nativeAuthEnabled}" in
+    true) ;;
+    false) providers="oidc-sso" ;;
+    *) fail "OidcNativeAuthEnabled must be true or false." ;;
+  esac
+  set_neo4j_conf dbms.security.authentication_providers "${providers}"
+  set_neo4j_conf dbms.security.authorization_providers "${providers}"
   set_neo4j_conf "${provider}.display_name" "SSO"
   set_neo4j_conf "${provider}.auth_flow" pkce
   set_neo4j_conf "${provider}.well_known_discovery_uri" \
@@ -58,5 +66,5 @@ configure_oidc() {
     joined=$(IFS=';'; echo "${mappings[*]}")
     set_neo4j_conf "${provider}.authorization.group_to_role_mapping" "${joined}"
   fi
-  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s))."
+  echo "OIDC enabled (provider sso, ${#mappings[@]} group mapping(s), providers ${providers})."
 }

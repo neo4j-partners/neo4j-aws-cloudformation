@@ -79,7 +79,9 @@
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref Neo4jPasswordSecret
+                Resource:
+                  - !Ref Neo4jPasswordSecret
+                  - !Ref Neo4jAppPasswordSecret
               # The password secrets use the stack key. The key policy allows
               # data-plane use only through Secrets Manager.
               - Effect: Allow
