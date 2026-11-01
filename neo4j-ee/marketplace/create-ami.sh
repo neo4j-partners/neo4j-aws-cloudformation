@@ -318,9 +318,10 @@ NEO4J_ACCEPT_LICENSE_AGREEMENT=yes dnf install -y \
 sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/neo4j.repo
 
 # Neo4j must never start in the AMI. A first start creates the system
-# database, and the boot-time set-initial-password would then fail.
+# database, and the boot-time set-initial-password would then fail. The RPM
+# creates /var/lib/neo4j/data/databases empty, and a first start populates it.
 systemctl disable neo4j 2>/dev/null || true
-if systemctl is-active --quiet neo4j || [ -e /var/lib/neo4j/data/databases ]; then
+if systemctl is-active --quiet neo4j || [ -n "$(ls -A /var/lib/neo4j/data/databases 2>/dev/null)" ]; then
   echo "ERROR: Neo4j started during the AMI build."
   exit 1
 fi

@@ -276,7 +276,7 @@ COMMAND_ID=$(aws ssm send-command \
     "rpm -q --qf \"neo4j-enterprise-version=%{VERSION}\\n\" neo4j-enterprise",
     "rpm -q --qf \"cypher-shell-version=%{VERSION}\\n\" cypher-shell",
     "systemctl is-enabled neo4j 2>/dev/null | grep -qx enabled && echo FAIL: neo4j service enabled || echo PASS: neo4j service not enabled",
-    "test ! -e /var/lib/neo4j/data/databases && echo PASS: Neo4j never started || echo FAIL: Neo4j databases directory present",
+    "test -z \"$(ls -A /var/lib/neo4j/data/databases 2>/dev/null)\" && echo PASS: Neo4j never started || echo FAIL: Neo4j databases directory present",
     "ls /var/lib/neo4j/labs/apoc-*-core.jar > /dev/null 2>&1 && echo PASS: APOC core jar in labs || echo FAIL: APOC core jar missing",
     "ls /var/lib/neo4j/products/bloom-plugin-*.jar > /dev/null 2>&1 && echo PASS: Bloom jar in products || echo FAIL: Bloom jar missing",
     "ls /var/lib/neo4j/products/neo4j-graph-data-science-*.jar > /dev/null 2>&1 && echo PASS: GDS jar in products || echo FAIL: GDS jar missing"
