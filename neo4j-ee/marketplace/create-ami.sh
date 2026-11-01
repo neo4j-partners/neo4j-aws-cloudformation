@@ -237,6 +237,8 @@ dnf update -y
 echo "Installing static deployment tooling..."
 dnf remove -y awscli-2 2>/dev/null || true
 dnf install -y unzip python3.11 jq openssl amazon-cloudwatch-agent aws-cfn-bootstrap
+# gnupg2-minimal has no gpg-agent, and the gpg --import below needs one.
+dnf swap -y gnupg2-minimal gnupg2-full
 
 # The AWS CLI zip is verified against the AWS CLI team's PGP key before it is
 # unpacked. The key block is copied from the AWS CLI install guide, which also
