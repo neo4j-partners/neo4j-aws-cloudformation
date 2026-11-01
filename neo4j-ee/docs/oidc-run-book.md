@@ -163,11 +163,11 @@ The command prints an instance ID that starts with `i-`.
 
 If `private-subnet-2-id` is missing, the stack has one node. Tear it down and deploy again with `NUMBER_OF_SERVERS=3`.
 
-**Back to Hume.** Go to the **Allow the Neo4j sign-in addresses** step in the Hume run book, `docs/run-book.md#allow-the-neo4j-sign-in-addresses`. Its later steps take the stack name in `$NEO4J_STACK`. Come back to [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser) if you want to test sign-in from your laptop.
+**Back to Hume.** Go to the **Read the Neo4j values** step in the Hume run book, `docs/run-book.md#read-the-neo4j-values`. It sets the stack name in `$NEO4J_STACK`. Come back to [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser) if you want to test sign-in from your laptop.
 
 ## Sign in to Neo4j Browser
 
-This step is optional. Before you start it, register the redirect addresses with the identity provider. For the Hume Cognito pool, that is the **Allow the Neo4j sign-in addresses** step in the Hume run book.
+This step is optional. Before you start it, register the redirect addresses with the identity provider. For the Hume Cognito pool, `cognito.py env` registered them in the **Write the OIDC settings** step of the Hume run book. Rerun it if the advertised name changed.
 
 Point the advertised name at your laptop. It only resolves inside the VPC, so map it to localhost:
 
