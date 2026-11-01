@@ -180,3 +180,17 @@
       Type: String
       Value: !If [CreateVpcEndpoints, !GetAtt VpcEndpointSecurityGroup.GroupId, !Ref ExistingEndpointSgId]
       Description: Security group ID on all interface VPC endpoints. In-VPC apps add this as an ingress rule source so their SG can reach SSM, Secrets Manager, and CloudWatch Logs via PrivateLink.
+
+  # Template-owned trust anchor. Each node overwrites the placeholder with the
+  # PEM chain of CertificateArn before it signals. Consumers treat "pending",
+  # or any value that does not start with -----BEGIN CERTIFICATE-----, as not
+  # yet published and fail closed. Keep these properties fixed: a stack update
+  # that changes them rewrites the placeholder until a node is replaced.
+  Neo4jConfigCaPemParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/neo4j-ee/${AWS::StackName}/ca-pem'
+      Type: String
+      Tier: Advanced
+      Value: pending
+      Description: PEM trust anchor for the NLB certificate. Verify Bolt and HTTPS connections against it.

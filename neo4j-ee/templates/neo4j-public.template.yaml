@@ -951,10 +951,11 @@ Resources:
 
                 # Fail closed if any required runtime variable is unset. The value is never
                 # echoed, so the Secrets Manager password cannot leak into the log. Optional
-                # variables (advertisedDNS, boltAdvertiseDns, bloomLicenseSecretArn,
-                # gdsLicenseSecretArn) are intentionally absent: they are legitimately empty
-                # when the corresponding feature is off (advertisedDNS is empty only for Public
-                # without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
+                # variables (advertisedDNS, boltAdvertiseDns, certificateArnB64,
+                # publishTrustAnchor, bloomLicenseSecretArn, gdsLicenseSecretArn) are
+                # intentionally absent: they are legitimately empty when the corresponding
+                # feature is off (advertisedDNS is empty only for Public without TLS;
+                # boltAdvertiseDns and publishTrustAnchor are unset on Public).
                 for _required in stackName region nodeCount loadBalancerDNSName \
                   installGDS installBloom password appPassword _stack_id _instance_id _az; do
                   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
@@ -966,8 +967,9 @@ Resources:
                 unset appPassword
                 isFirstBoot=false
 
-                # The optional OIDC values arrive base64-encoded so that no parameter value
-                # can run as shell code in the UserData assignments. Blank decodes to blank.
+                # The optional OIDC values and the certificate ARN arrive base64-encoded so
+                # that no parameter value can run as shell code in the UserData assignments.
+                # Blank decodes to blank.
                 oidcIssuerUri=$(printf '%s' "${oidcIssuerUriB64:-}" | base64 -d)
                 oidcClientId=$(printf '%s' "${oidcClientIdB64:-}" | base64 -d)
                 oidcBrowserClientId=$(printf '%s' "${oidcBrowserClientIdB64:-}" | base64 -d)
@@ -975,6 +977,7 @@ Resources:
                 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
                 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
                 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+                certificateArn=$(printf '%s' "${certificateArnB64:-}" | base64 -d)
 
                 set_neo4j_conf() {
                   local key="$1"
@@ -1341,6 +1344,36 @@ Resources:
                   set_neo4j_conf dbms.ssl.policy.https.public_certificate public.crt
                   set_neo4j_conf dbms.ssl.policy.https.client_auth NONE
                 }
+                publish_trust_anchor() {
+                  local certificateArn="$1"
+                  local region="$2"
+                  local stackName="$3"
+                  local parameterName="/neo4j-ee/${stackName}/ca-pem"
+                  local chain pem
+
+                  # Clients verify the NLB certificate against this value. A self-signed or
+                  # imported certificate with no chain is its own trust anchor, so the leaf
+                  # is published when ACM returns no chain. Every node publishes the same
+                  # value, so a replacement node refreshes it.
+                  [[ -n "${certificateArn}" ]] || fail "publish_trust_anchor requires the CertificateArn."
+                  echo "Publishing the certificate trust anchor to ${parameterName}..."
+                  chain=$(aws acm get-certificate --certificate-arn "${certificateArn}" \
+                    --region "${region}" --query CertificateChain --output text) \
+                    || fail "acm get-certificate failed for ${certificateArn}."
+                  if [[ -z "${chain}" || "${chain}" == "None" ]]; then
+                    pem=$(aws acm get-certificate --certificate-arn "${certificateArn}" \
+                      --region "${region}" --query Certificate --output text) \
+                      || fail "acm get-certificate failed for ${certificateArn}."
+                  else
+                    pem="${chain}"
+                  fi
+                  # A malformed ACM response must never overwrite a good anchor.
+                  [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* ]] \
+                    || fail "ACM returned no PEM certificate for ${certificateArn}."
+                  aws ssm put-parameter --name "${parameterName}" --value "${pem}" \
+                    --type String --tier Advanced --overwrite --region "${region}" >/dev/null \
+                    || fail "ssm put-parameter failed for ${parameterName}."
+                }
                 configure_oidc() {
                   local issuerUri="$1"
                   local clientIds="$2"
@@ -1513,6 +1546,11 @@ Resources:
                 fi
                 apply_base_conf
                 configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}" "${boltAdvertiseDns:-false}"
+                # Private and ExistingVpc set publishTrustAnchor. Public never does, because
+                # Public clients trust the public CA of their ACM certificate.
+                if [[ "${publishTrustAnchor:-false}" == "true" ]]; then
+                  publish_trust_anchor "${certificateArn}" "${region}" "${stackName}"
+                fi
                 configure_memory_recommendation
                 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
                 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
@@ -1602,6 +1640,9 @@ Resources:
               - "advertisedDNS="
               - Ref: AdvertisedDNS
               - "\n"
+              - "certificateArnB64="
+              - Fn::Base64: {Ref: CertificateArn}
+              - "\n"
               - "oidcIssuerUriB64="
               - Fn::Base64: {Ref: OidcIssuerUri}
               - "\n"
@@ -1665,6 +1706,7 @@ Resources:
                 # variables. The Secrets Manager passwords travel by env, never on argv, so
                 # they are not exposed in the process list or cloud-init logs.
                 export stackName region nodeCount loadBalancerDNSName advertisedDNS boltAdvertiseDns
+                export certificateArnB64 publishTrustAnchor
                 export installGDS installBloom gdsLicenseSecretArn bloomLicenseSecretArn
                 export password appPassword _stack_id _instance_id _az
                 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64

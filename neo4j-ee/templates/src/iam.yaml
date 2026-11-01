@@ -5,6 +5,16 @@
         - Ref: Neo4jRole
   Neo4jRole:
     Type: AWS::IAM::Role
+    # acm:GetCertificate names CertificateArn, a String param with Default ''.
+    # The CertificateArnRequired Rule guarantees a real ARN on every template
+    # that includes this role. A bare Ref makes cfn-lint report W1030 at the
+    # parameter, where a resource-level ignore cannot reach it. The Sub form
+    # reports W1031 on this resource instead, so the ignore stays scoped here.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1031
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -75,6 +85,15 @@
               - Effect: Allow
                 Action: logs:DescribeLogGroups
                 Resource: '*'
+              # Each node publishes the NLB certificate chain as the stack
+              # trust anchor. The parameter is a plain String, so no KMS
+              # grant is needed.
+              - Effect: Allow
+                Action: acm:GetCertificate
+                Resource: !Sub '${CertificateArn}'
+              - Effect: Allow
+                Action: ssm:PutParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neo4j-ee/${AWS::StackName}/ca-pem'
               - !If
                 - BloomEnabledAndLicensed
                 - Effect: Allow

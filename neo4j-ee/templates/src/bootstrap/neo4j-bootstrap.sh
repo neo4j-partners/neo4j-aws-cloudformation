@@ -14,10 +14,11 @@ fail() {
 
 # Fail closed if any required runtime variable is unset. The value is never
 # echoed, so the Secrets Manager password cannot leak into the log. Optional
-# variables (advertisedDNS, boltAdvertiseDns, bloomLicenseSecretArn,
-# gdsLicenseSecretArn) are intentionally absent: they are legitimately empty
-# when the corresponding feature is off (advertisedDNS is empty only for Public
-# without TLS; boltAdvertiseDns is unset on Public, which has no private DNS).
+# variables (advertisedDNS, boltAdvertiseDns, certificateArnB64,
+# publishTrustAnchor, bloomLicenseSecretArn, gdsLicenseSecretArn) are
+# intentionally absent: they are legitimately empty when the corresponding
+# feature is off (advertisedDNS is empty only for Public without TLS;
+# boltAdvertiseDns and publishTrustAnchor are unset on Public).
 for _required in stackName region nodeCount loadBalancerDNSName \
   installGDS installBloom password appPassword _stack_id _instance_id _az; do
   [[ -n "${!_required:-}" ]] || fail "Required environment variable ${_required} is unset."
@@ -29,8 +30,9 @@ applicationPassword="${appPassword}"
 unset appPassword
 isFirstBoot=false
 
-# The optional OIDC values arrive base64-encoded so that no parameter value
-# can run as shell code in the UserData assignments. Blank decodes to blank.
+# The optional OIDC values and the certificate ARN arrive base64-encoded so
+# that no parameter value can run as shell code in the UserData assignments.
+# Blank decodes to blank.
 oidcIssuerUri=$(printf '%s' "${oidcIssuerUriB64:-}" | base64 -d)
 oidcClientId=$(printf '%s' "${oidcClientIdB64:-}" | base64 -d)
 oidcBrowserClientId=$(printf '%s' "${oidcBrowserClientIdB64:-}" | base64 -d)
@@ -38,6 +40,7 @@ oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+certificateArn=$(printf '%s' "${certificateArnB64:-}" | base64 -d)
 
 # include partials/set-neo4j-conf.sh
 
@@ -52,6 +55,8 @@ oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
 # include partials/configure-neo4j.sh
 
 # include partials/configure-tls.sh
+
+# include partials/publish-trust-anchor.sh
 
 # include partials/configure-oidc.sh
 
@@ -75,6 +80,11 @@ if [[ "${installGDS}" == "true" ]]; then
 fi
 apply_base_conf
 configure_tls "${advertisedDNS:-}" "${loadBalancerDNSName}" "${boltAdvertiseDns:-false}"
+# Private and ExistingVpc set publishTrustAnchor. Public never does, because
+# Public clients trust the public CA of their ACM certificate.
+if [[ "${publishTrustAnchor:-false}" == "true" ]]; then
+  publish_trust_anchor "${certificateArn}" "${region}" "${stackName}"
+fi
 configure_memory_recommendation
 configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"

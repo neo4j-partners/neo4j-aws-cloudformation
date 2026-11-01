@@ -17,6 +17,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 _NEO4J_EE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_NEO4J_EE_DIR / "src"))
 from neo4j_ee.outputs import read_outputs, resolve_bolt_scheme, truthy  # noqa: E402
+from validate_private.trust_anchor import read_ca_pem, read_parameter  # noqa: E402
 
 
 _REQUIRED_FIELDS = ("StackName", "Region", "Neo4jOperatorBastionId", "Neo4jInternalDNS")
@@ -36,6 +37,10 @@ class StackConfig:
     advertised_dns: str
     certificate_arn: str
     create_private_dns: bool
+    # True when /neo4j-ee/<stack>/bolt-url uses neo4j+s. The tools then
+    # verify the NLB chain against ca_pem instead of using bolt_scheme's +ssc.
+    verify_tls: bool
+    ca_pem: str = dataclasses.field(repr=False)
 
 
 def _fetch_secret(secret_name: str, region: str) -> str:
@@ -79,6 +84,17 @@ def load_config(
     secret_name = f"neo4j/{stack_name}/password"
     bolt_scheme = resolve_bolt_scheme(fields)
 
+    bolt_url_name = f"/neo4j-ee/{stack_name}/bolt-url"
+    try:
+        bolt_url = read_parameter(bolt_url_name, region)
+    except (BotoCoreError, ClientError) as exc:
+        raise ValueError(
+            f"Could not read {bolt_url_name}. Your AWS credentials need "
+            f"ssm:GetParameter on it. {exc}"
+        ) from exc
+    verify_tls = bolt_url.startswith("neo4j+s://")
+    ca_pem = read_ca_pem(stack_name, region) if verify_tls else ""
+
     fetch_error = ""
     if password_override is not None:
         password = password_override
@@ -118,4 +134,6 @@ def load_config(
         # authoritative signal that the stack owns an in-VPC record for
         # AdvertisedDNS (no extra AWS call needed).
         create_private_dns=bool(fields.get("Neo4jPrivateDnsHostedZoneId")),
+        verify_tls=verify_tls,
+        ca_pem=ca_pem,
     )

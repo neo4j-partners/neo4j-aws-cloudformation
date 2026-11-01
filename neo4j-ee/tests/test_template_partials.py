@@ -603,6 +603,79 @@ class ShellPartialTests(unittest.TestCase):
         source = (PARTIALS / "configure-tls.sh").read_text()
         self.assertNotRegex(source, r"\b(dnf|yum)\s+install\b")
 
+    _CHAIN_PEM = "-----BEGIN CERTIFICATE-----\nCHAIN\n-----END CERTIFICATE-----"
+    _LEAF_PEM = "-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----"
+
+    def _run_publish_trust_anchor(
+        self, *, chain: str, certificate: str, arn: str = "arn:aws:acm:r:1:certificate/x"
+    ) -> subprocess.CompletedProcess[str]:
+        # The stub answers each --query from the env, so a test can return a
+        # chain, the literal None the CLI prints for a missing field, or
+        # garbage. put-parameter records its full argv, one arg per line.
+        self.write_stub(
+            "aws",
+            """
+            if [[ "$1 $2" == "acm get-certificate" ]]; then
+              for _arg in "$@"; do
+                case "${_arg}" in
+                  CertificateChain) printf '%s\\n' "${STUB_CHAIN}"; exit 0 ;;
+                  Certificate) printf '%s\\n' "${STUB_CERT}"; exit 0 ;;
+                esac
+              done
+              exit 3
+            fi
+            if [[ "$1 $2" == "ssm put-parameter" ]]; then
+              printf '%s\\n' "$@" > "$COMMAND_LOG"
+              exit 0
+            fi
+            exit 4
+            """,
+        )
+        return self.run_shell(
+            f"""
+            set -euo pipefail
+            {self.fail_function()}
+            source "{PARTIALS / 'publish-trust-anchor.sh'}"
+            publish_trust_anchor "{arn}" us-east-1 demo
+            """,
+            env={"STUB_CHAIN": chain, "STUB_CERT": certificate},
+        )
+
+    def test_publish_trust_anchor_publishes_the_chain(self) -> None:
+        result = self._run_publish_trust_anchor(
+            chain=self._CHAIN_PEM, certificate=self._LEAF_PEM
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.command_log.read_text()
+        self.assertIn("--name\n/neo4j-ee/demo/ca-pem\n", args)
+        self.assertIn(f"--value\n{self._CHAIN_PEM}\n", args)
+        self.assertNotIn("LEAF", args)
+        for flag in ("--type\nString\n", "--tier\nAdvanced\n", "--overwrite\n"):
+            self.assertIn(flag, args)
+
+    def test_publish_trust_anchor_falls_back_to_the_certificate(self) -> None:
+        # A self-signed or chainless imported certificate is its own anchor.
+        # The CLI prints None for a missing CertificateChain.
+        result = self._run_publish_trust_anchor(
+            chain="None", certificate=self._LEAF_PEM
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"--value\n{self._LEAF_PEM}\n", self.command_log.read_text())
+
+    def test_publish_trust_anchor_never_overwrites_with_non_pem(self) -> None:
+        result = self._run_publish_trust_anchor(chain="garbage", certificate="garbage")
+        self.assertEqual(result.returncode, 42)
+        self.assertIn("no PEM certificate", self.fail_log.read_text())
+        self.assertFalse(self.command_log.exists())
+
+    def test_publish_trust_anchor_fails_closed_without_an_arn(self) -> None:
+        result = self._run_publish_trust_anchor(
+            chain=self._CHAIN_PEM, certificate=self._LEAF_PEM, arn=""
+        )
+        self.assertEqual(result.returncode, 42)
+        self.assertIn("requires the CertificateArn", self.fail_log.read_text())
+        self.assertFalse(self.command_log.exists())
+
     def _run_configure_oidc(
         self, *args: str
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
@@ -2056,6 +2129,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "app-password-secret-arn",
             "app-username",
             "kms-key-arn",
+            "ca-pem",
             "external-sg-id",
             "vpc-endpoint-sg-id",
             "public-subnet-1-id",
@@ -2111,6 +2185,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "app-password-secret-arn",
             "app-username",
             "kms-key-arn",
+            "ca-pem",
             "external-sg-id",
             "vpc-endpoint-sg-id",
         }
@@ -3352,6 +3427,119 @@ class SecurityReviewBatchDTests(unittest.TestCase):
                 )
                 output = self.docs[name]["Outputs"]["Neo4jSessionDocumentName"]
                 self.assertEqual(output["Value"], {"Ref": "Neo4jSessionPreferences"})
+
+
+class SecurityReviewBatchETests(unittest.TestCase):
+    """Locks the ca-pem trust anchor from security-review.md batch E."""
+
+    PRIVATE = ("private", "existing_vpc")
+    CA_PEM_ARN = {
+        "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}"
+        ":parameter/neo4j-ee/${AWS::StackName}/ca-pem"
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = _assemble_all_templates()
+        cls.docs = {name: load_cfn(body) for name, body in cls.text.items()}
+
+    @staticmethod
+    def _statements(role: dict) -> list[dict]:
+        return [
+            stmt
+            for policy in role["Properties"].get("Policies", [])
+            for stmt in flatten_policy_statements(policy["PolicyDocument"]["Statement"])
+        ]
+
+    @staticmethod
+    def _actions(stmt: dict) -> list[str]:
+        action = stmt["Action"]
+        return [action] if isinstance(action, str) else action
+
+    @staticmethod
+    def _userdata_items(doc: dict) -> list:
+        data = doc["Resources"]["Neo4jLaunchTemplate"]["Properties"]["LaunchTemplateData"]
+        return data["UserData"]["Fn::Base64"]["Fn::Join"][1]
+
+    def test_ca_pem_parameter_properties_stay_fixed(self) -> None:
+        # Changing any of these properties makes a stack update rewrite the
+        # placeholder over the published anchor.
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                param = self.docs[name]["Resources"]["Neo4jConfigCaPemParameter"]
+                self.assertNotIn("Condition", param)
+                self.assertEqual(
+                    param["Properties"],
+                    {
+                        "Name": {"Fn::Sub": "/neo4j-ee/${AWS::StackName}/ca-pem"},
+                        "Type": "String",
+                        "Tier": "Advanced",
+                        "Value": "pending",
+                        "Description": (
+                            "PEM trust anchor for the NLB certificate. Verify "
+                            "Bolt and HTTPS connections against it."
+                        ),
+                    },
+                )
+
+    def test_public_publishes_no_trust_anchor(self) -> None:
+        public = self.docs["public"]
+        self.assertNotIn("Neo4jConfigCaPemParameter", public["Resources"])
+        self.assertNotIn('"publishTrustAnchor=true\\n"', self.text["public"])
+        self.assertNotIn("publishTrustAnchor=true", self._userdata_items(public))
+        self.assertNotIn("ca-pem", self.text["public"].split("publish_trust_anchor() {")[0])
+
+    def test_every_asg_waits_for_the_ca_pem_parameter(self) -> None:
+        for name in self.PRIVATE:
+            for node in (1, 2, 3):
+                with self.subTest(template=name, node=node):
+                    asg = self.docs[name]["Resources"][f"Neo4jNode{node}ASG"]
+                    self.assertIn("Neo4jConfigCaPemParameter", asg["DependsOn"])
+
+    def test_node_role_can_read_the_certificate_and_write_only_ca_pem(self) -> None:
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                role = self.docs[name]["Resources"]["Neo4jRole"]
+                statements = self._statements(role)
+                acm = [s for s in statements if "acm:GetCertificate" in self._actions(s)]
+                self.assertEqual(len(acm), 1)
+                self.assertEqual(acm[0]["Resource"], {"Fn::Sub": "${CertificateArn}"})
+                put = [s for s in statements if "ssm:PutParameter" in self._actions(s)]
+                self.assertEqual(len(put), 1)
+                self.assertEqual(self._actions(put[0]), ["ssm:PutParameter"])
+                self.assertEqual(put[0]["Resource"], self.CA_PEM_ARN)
+
+    def test_private_userdata_passes_the_arn_base64_and_the_publish_flag(self) -> None:
+        for name in self.PRIVATE:
+            with self.subTest(template=name):
+                items = self._userdata_items(self.docs[name])
+                arn_at = items.index("certificateArnB64=")
+                self.assertEqual(
+                    items[arn_at + 1], {"Fn::Base64": {"Ref": "CertificateArn"}}
+                )
+                self.assertIn("publishTrustAnchor=true\n", items)
+                self.assertNotIn("certificateArn=", items)
+
+    def test_trust_anchor_published_after_tls_and_before_start_and_signal(self) -> None:
+        for name in self.PRIVATE + ("public",):
+            with self.subTest(template=name):
+                template = self.text[name]
+                definitions = re.findall(
+                    r"^\s*publish_trust_anchor\(\)\s*\{", template, re.MULTILINE
+                )
+                self.assertEqual(len(definitions), 1)
+                call = re.search(
+                    r'if \[\[ "\$\{publishTrustAnchor:-false\}" == "true" \]\]; then\n'
+                    r'\s*publish_trust_anchor "\$\{certificateArn\}" "\$\{region\}" '
+                    r'"\$\{stackName\}"\n',
+                    template,
+                )
+                self.assertIsNotNone(call)
+                tls_call = re.search(r'^\s*configure_tls "', template, re.MULTILINE)
+                start_call = re.search(r'^\s*start_neo4j "', template, re.MULTILINE)
+                self.assertLess(tls_call.start(), call.start())
+                self.assertLess(call.start(), start_call.start())
+                self.assertLess(call.start(), template.index("cfn-signal --success true"))
 
 
 if __name__ == "__main__":

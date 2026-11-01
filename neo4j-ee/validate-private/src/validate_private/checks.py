@@ -7,7 +7,12 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from validate_private.runner import Neo4jQueryError, run_cypher
+from validate_private.runner import Neo4jQueryError, bolt_tunnel, run_cypher
+from validate_private.trust_anchor import (
+    TrustAnchorError,
+    read_ca_pem,
+    verify_handshake,
+)
 from validate_private.tunnel import TunnelError
 
 if TYPE_CHECKING:
@@ -908,6 +913,25 @@ def run_version_inventory(
     log.info("")
 
 
+def check_trust_anchor(config: "StackConfig", reporter: "TestReporter") -> None:
+    """Verify the NLB certificate against the published ca-pem.
+
+    Runs on neo4j+s and neo4j+ssc stacks alike. A consumer that trusts ca-pem
+    must be able to complete a handshake with the NLB.
+    """
+    name = "ca-pem published and verifies the NLB chain"
+    log.info("")
+    log.info("--- %s ---", name)
+    start = time.monotonic()
+    try:
+        ca_pem = read_ca_pem(config.stack_name, config.region)
+        version = verify_handshake(ca_pem, bolt_tunnel(config).local_port)
+        passed, detail = True, f"{version} handshake on 7687 verified against ca-pem"
+    except (TrustAnchorError, TunnelError, OSError) as exc:
+        passed, detail = False, str(exc)
+    reporter.record(name, passed, detail, time.monotonic() - start)
+
+
 def run_release_gate(
     config: "StackConfig",
     reporter: "TestReporter",
@@ -918,6 +942,7 @@ def run_release_gate(
 ) -> None:
     """Run the deploy-time release checks for a Private EE stack."""
     run_checks(config, reporter)
+    check_trust_anchor(config, reporter)
     check_apoc_app_user(config, reporter)
     run_version_inventory(
         config,

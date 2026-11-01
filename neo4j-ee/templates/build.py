@@ -69,13 +69,25 @@ _PREAMBLE_COMMON = [
     '"\\n"',
 ]
 
-# Present in all three templates. The instance only needs the advertised
-# hostname (for its self-signed cert advertised_address); the ACM certificate
-# is terminated at the NLB, so CertificateArn is never passed to the instance.
+# Present in all three templates. The instance needs the advertised hostname
+# for its self-signed cert advertised_address. The NLB terminates TLS with the
+# ACM certificate. Private and ExistingVpc nodes also read CertificateArn to
+# publish the certificate trust anchor to SSM. Public nodes never use it. The
+# ARN pattern ends in .+, so it is base64-encoded like the OIDC values below
+# and can never run as shell code.
 _PREAMBLE_TLS = [
     '"advertisedDNS="',
     "Ref: AdvertisedDNS",
     '"\\n"',
+    '"certificateArnB64="',
+    "Fn::Base64: {Ref: CertificateArn}",
+    '"\\n"',
+]
+
+# Private and ExistingVpc only: their nodes publish /neo4j-ee/<stack>/ca-pem.
+# Public clients trust the public CA of their ACM certificate instead.
+_PREAMBLE_TRUST_ANCHOR = [
+    '"publishTrustAnchor=true\\n"',
 ]
 
 # Private and ExistingVpc only: Public has no private DNS, so boltAdvertiseDns
@@ -135,6 +147,7 @@ class TemplateSpec:
     outputs_partial: str
     rules_blank_between_partials: bool = True
     bolt_advertise_dns: str = ""
+    publish_trust_anchor: bool = False
 
 
 def _read(filename: str) -> str:
@@ -233,6 +246,8 @@ def _userdata_block(spec: TemplateSpec, base_indent: int = 8) -> str:
     items.extend(_PREAMBLE_TLS)
     if spec.bolt_advertise_dns:
         items.extend(['"boltAdvertiseDns="', spec.bolt_advertise_dns, '"\\n"'])
+    if spec.publish_trust_anchor:
+        items.extend(_PREAMBLE_TRUST_ANCHOR)
     items.extend(_PREAMBLE_OIDC)
 
     result = [
@@ -352,6 +367,7 @@ _PRIVATE_SPEC = TemplateSpec(
     userdata_resource_partial="asg.yaml",
     outputs_partial="outputs-private.yaml",
     bolt_advertise_dns=_BOLT_ADVERTISE_DNS_PRIVATE,
+    publish_trust_anchor=True,
 )
 
 _PUBLIC_SPEC = TemplateSpec(
@@ -411,6 +427,7 @@ _EXISTING_VPC_SPEC = TemplateSpec(
     outputs_partial="outputs-existing-vpc.yaml",
     rules_blank_between_partials=False,
     bolt_advertise_dns=_BOLT_ADVERTISE_DNS_EXISTING_VPC,
+    publish_trust_anchor=True,
 )
 
 _TEMPLATE_SPECS = [

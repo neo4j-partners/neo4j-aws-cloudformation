@@ -16,6 +16,7 @@
     Type: AWS::AutoScaling::AutoScalingGroup
     DependsOn:
       - Neo4jNode1DataVolume
+      - Neo4jConfigCaPemParameter
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -56,6 +57,7 @@
     Condition: CreateCluster
     DependsOn:
       - Neo4jNode2DataVolume
+      - Neo4jConfigCaPemParameter
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -96,6 +98,7 @@
     Condition: CreateCluster
     DependsOn:
       - Neo4jNode3DataVolume
+      - Neo4jConfigCaPemParameter
     CreationPolicy:
       ResourceSignal:
         Count: 1

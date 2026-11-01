@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from neo4j import Driver, GraphDatabase, Query
 from neo4j.exceptions import DriverError, Neo4jError
 
+from validate_private.trust_anchor import ssl_context
 from validate_private.tunnel import PortForward
 
 if TYPE_CHECKING:
@@ -66,8 +67,9 @@ def open_driver(
     The resolver sends every address to the tunnel, including the addresses
     in the routing table, so routing behaves as it does for an in-VPC client
     of the NLB. The resolver also replaces the TLS server name with
-    127.0.0.1. The operator tooling uses the +ssc scheme, which skips
-    hostname verification, so that is safe here.
+    127.0.0.1, so the driver never checks the hostname. On a neo4j+s stack
+    the driver still verifies the chain against the published ca-pem. On a
+    neo4j+ssc stack it uses the +ssc scheme and verifies nothing.
     """
     port = bolt_tunnel(config).local_port
     return _new_driver(config, port, auth)
@@ -78,11 +80,19 @@ def _new_driver(
     port: int,
     auth: tuple[str, str] | None,
 ) -> Driver:
+    scheme = config.bolt_scheme
+    options: dict = {}
+    if config.verify_tls:
+        # ssl_context is accepted only with the plain neo4j:// or bolt://
+        # scheme, and it turns encryption on.
+        scheme = scheme.split("+", 1)[0]
+        options["ssl_context"] = ssl_context(config.ca_pem)
     return GraphDatabase.driver(
-        f"{config.bolt_scheme}://{config.nlb_dns}:{BOLT_PORT}",
+        f"{scheme}://{config.nlb_dns}:{BOLT_PORT}",
         auth=auth or ("neo4j", config.password),
         resolver=lambda _address: [("127.0.0.1", port)],
         connection_timeout=15,
+        **options,
     )
 
 

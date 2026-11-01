@@ -440,6 +440,48 @@ forwarded hop cannot obtain an IMDSv2 token.
 **There is no `tls-self-signed` flag.** No template publishes a parameter or
 output that tells a client to skip certificate verification.
 
+**The stack publishes the certificate trust anchor.** Private and ExistingVpc
+own the SSM parameter `/neo4j-ee/<stack>/ca-pem`. The template creates it with
+the placeholder `pending`, and every ASG depends on it. Every node replaces
+the placeholder before it signals CloudFormation. The bootstrap function
+`publish_trust_anchor` runs right after `configure_tls`. It reads the
+`CertificateArn` certificate from ACM and publishes its chain. When ACM
+returns no chain, as for a self-signed import, it publishes the certificate
+itself. The parameter is a `String` on the Advanced tier, so a long chain
+fits. A failed ACM read, a value that does not start with
+`-----BEGIN CERTIFICATE-----`, or a failed write stops the node before
+`cfn-signal`. A malformed ACM response therefore never overwrites a good
+anchor. The node role holds `acm:GetCertificate` on the certificate and
+`ssm:PutParameter` on the ca-pem ARN only. UserData passes the ARN
+base64-encoded, like the OIDC values, because the `CertificateArn` pattern
+admits shell metacharacters.
+
+**Public publishes no trust anchor.** The Public template creates no ca-pem
+parameter and never calls `publish_trust_anchor`. A Public TLS client trusts
+the public CA that issued its ACM certificate.
+
+**Consumers fail closed until the anchor is published.** The parameter is
+part of the platform contract:
+
+| Parameter | Value | Consumer rule |
+|---|---|---|
+| `/neo4j-ee/<stack>/ca-pem` | PEM chain of the NLB certificate, or the certificate itself when ACM holds no chain | `pending`, or any value that does not start with `-----BEGIN CERTIFICATE-----`, means the anchor is not yet published. The consumer refuses to connect. |
+
+A consumer needs `ssm:GetParameter` on the ca-pem ARN, or
+`ssm:GetParametersByPath` on `/neo4j-ee/<stack>/` for readers that load the
+whole path, no KMS. The parameter is not encrypted with the stack key.
+
+**A stack update can reset the anchor to `pending`.** CloudFormation rewrites
+the placeholder when an update changes any property of the parameter. A
+contract test pins every property, so no template change does that by
+accident. After a reset, consumers fail closed until a node is replaced.
+
+**The anchor refreshes only when a node is replaced.** The ASGs carry no
+`UpdatePolicy`. A `CertificateArn` change updates the NLB listeners and the
+launch template, and running nodes keep running. ca-pem keeps the old chain
+until a replacement node publishes the new one. Certificate rotation
+therefore ends with replacing one node.
+
 ### AD-6: Applications connect as a non-superuser, and no password reaches argv
 
 **Each stack has an application user.** The stack generates a second secret,
@@ -724,6 +766,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-25 | No security group has an empty egress list; Private and ExistingVpc node egress is the endpoint SG on 443, cluster self rules and OIDC-conditional 443 only; Public node egress is 443 and cluster only; the interface endpoints cover the nine node services, each with an account-scoped policy; endpoint SG ingress comes from the nodes and the bastion (AD-7) | `SecurityReviewBatchCTests.test_no_security_group_has_an_empty_egress_list`, `test_node_security_groups_declare_inline_egress`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only`, `test_public_node_egress_is_https_and_cluster_only`, `test_interface_endpoints_cover_every_node_service`, `test_every_vpc_endpoint_has_an_account_scoped_policy`, `test_endpoint_sg_ingress_comes_from_nodes_and_bastion` |
 | NFR-26 | Private and ExistingVpc node egress to S3 is port 443 to the prefix list returned by the `S3PrefixList` custom resource for `com.amazonaws.${AWS::Region}.s3`; the lookup Lambda runs outside the VPC, its role grants only `ec2:DescribePrefixLists` and its own log group, and it fails unless exactly one prefix list matches; Public has no lookup (AD-7) | `SecurityReviewBatchCTests.test_s3_egress_uses_the_looked_up_prefix_list`, `test_s3_prefix_list_function_is_least_privilege_and_fails_loudly`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only` |
 | NFR-27 | The bastion role grants no `secretsmanager` or `kms` action; bastion egress is the endpoint SG and the S3 prefix list on 443 and the NLB SG on 7473 and 7687 only; the bastion UserData installs no package; the Session Manager preferences document streams to the encrypted `/neo4j/<stack>/sessions` group and is a stack output (AD-6) | `SecurityReviewBatchDTests.test_bastion_role_holds_no_credential_grants`, `test_bastion_and_nodes_can_stream_to_the_session_log_group`, `test_bastion_egress_is_endpoints_nlb_and_s3_only`, `test_bastion_userdata_installs_nothing`, `test_session_preferences_log_to_the_encrypted_stack_log_group` |
+| NFR-28 | Private and ExistingVpc own `ca-pem` with fixed properties and the value `pending`; every ASG depends on it; the node role reads only the stack certificate and writes only ca-pem; UserData passes the ARN base64-encoded; every node publishes a PEM value after `configure_tls` and before start and `cfn-signal`, fails closed otherwise and never writes a non-PEM value; Public publishes nothing (AD-5) | `SecurityReviewBatchETests.test_ca_pem_parameter_properties_stay_fixed`, `test_public_publishes_no_trust_anchor`, `test_every_asg_waits_for_the_ca_pem_parameter`, `test_node_role_can_read_the_certificate_and_write_only_ca_pem`, `test_private_userdata_passes_the_arn_base64_and_the_publish_flag`, `test_trust_anchor_published_after_tls_and_before_start_and_signal`; `ShellPartialTests.test_publish_trust_anchor_*`; the release-suite check "ca-pem published and verifies the NLB chain" |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

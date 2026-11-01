@@ -84,7 +84,7 @@ These are the minimum permissions the operator's local IAM principal (user or as
 |---|---|---|
 | `cloudformation:DescribeStacks`, `cloudformation:DescribeStackResources` | The stack ARN | `uv run preflight`, `deploy.py` (reads stack outputs) |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:StartSession`, `ssm:DescribeInstanceInformation` | The bastion instance | `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`, `admin-shell`, `run-cypher`, `validate-private`, `uv run preflight` (bastion ping check) |
-| `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract |
+| `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract. Every `uv run` tool that connects to Neo4j reads `bolt-url`, and on a `neo4j+s` stack it also reads `ca-pem`. The release suite reads `ca-pem` on every stack. |
 | `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight`, and every `uv run` tool that connects to Neo4j. The tools read the password with your credentials and keep it in memory. |
 | `secretsmanager:GetSecretValue` | `neo4j/<stack-name>/app-password` | `uv run validate-private --suite release`, which runs the APOC check as `neo4j_app` |
 | `kms:Decrypt` | The stack key in `/neo4j-ee/<stack-name>/kms-key-arn` | `get-password.sh` and every tool that reads a password secret |
@@ -456,6 +456,7 @@ The stack publishes resource IDs via SSM under `/neo4j-ee/<stack-name>/` so that
 | `/neo4j-ee/<stack>/app-password-secret-arn` | Secrets Manager ARN for the `neo4j_app` application user password |
 | `/neo4j-ee/<stack>/app-username` | Application username, `neo4j_app`. The user has the built-in `architect` role. |
 | `/neo4j-ee/<stack>/kms-key-arn` | Full ARN of the stack KMS key that encrypts both password secrets |
+| `/neo4j-ee/<stack>/ca-pem` | PEM trust anchor for the NLB certificate. The value is `pending` until a node publishes it. See [Bolt TLS](#bolt-tls). |
 
 **VPC interface endpoints.** The regional service hostnames for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` resolve to private IPs inside the VPC. No endpoint URL overrides are needed in application code, and no NAT data-processing charges apply to AWS service calls.
 
@@ -492,6 +493,16 @@ For production, use a stable customer-owned DNS name rather than the generated N
 1. Obtain or import an ACM certificate whose SAN and CN are that DNS name.
 2. Create a private DNS record that points the name to the internal NLB, or pass `--create-private-dns` to `deploy.py`.
 3. Set `CertificateArn` and `AdvertisedDNS` as CloudFormation parameters when deploying the stack.
+
+**Trust anchor.** Every node publishes the chain of the `CertificateArn` certificate to `/neo4j-ee/<stack>/ca-pem` before it signals CloudFormation. When ACM holds no chain, as for a self-signed import, the node publishes the certificate itself. Clients verify the NLB certificate against this value. A consumer needs `ssm:GetParameter` on the ca-pem ARN, or `ssm:GetParametersByPath` on `/neo4j-ee/<stack>/` for readers that load the whole path, no KMS. The parameter is not encrypted with the stack key.
+
+**Consumers fail closed until the anchor is published.** The template creates the parameter with the value `pending`. A value of `pending`, or any value that does not start with `-----BEGIN CERTIFICATE-----`, means no node has published the anchor yet. A consumer must refuse to connect in that case. A stack update that changes the parameter's properties resets the value to `pending` until a node is replaced.
+
+**Certificate rotation.** A `CertificateArn` update changes the NLB listeners at once, but running nodes do not republish the anchor. Rotating the certificate ends with replacing one node: terminate it, and the ASG launches a replacement that republishes the anchor.
+
+**Existing VPC.** Nodes read the certificate through the `acm` interface endpoint. With `CreateVpcEndpoints=false`, your endpoints must include `acm`, as [VPC Interface Endpoint Design](PRIVATE-EXISTING-VPC.md#vpc-interface-endpoint-design) describes.
+
+**Operator tools.** On a `neo4j+s` stack the `uv run` tools verify the NLB chain against `ca-pem`. They skip the hostname check because the SSM tunnel replaces the server name. On a `neo4j+ssc` stack they use `+ssc`. `admin-shell` uses `+ssc` on both.
 
 **Residual risk.** Cluster-internal ports (5000, 6000, 7000, 7688) remain plaintext between cluster members, protected by the cluster security group. An actor with `ec2:RunInstances` permission to launch into the cluster subnet with the cluster security group, `ec2:CreateTrafficMirrorSession` targeting a cluster ENI, or root on any cluster node can observe replication traffic on the wire. For regulated workloads or shared-tenancy accounts where IAM blast radius extends beyond the cluster operator team, request cluster TLS before deploying.
 
