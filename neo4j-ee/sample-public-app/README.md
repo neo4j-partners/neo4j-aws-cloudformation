@@ -77,7 +77,7 @@ hard-code the NLB DNS name, secret ARN, or scheme choice.
 | `/neo4j-ee/<stack>/bolt-url` | Producer-formatted Bolt URI; used directly, no scheme derivation |
 | `/neo4j-ee/<stack>/password-secret-arn` | Import the Neo4j password secret by ARN |
 | `/neo4j-ee/<stack>/nlb-dns` | NLB DNS name; published for consumers that need the raw host |
-| `/neo4j-ee/<stack>/advertised-dns` | Advertised DNS; published only when `UsePublicTLS` is set |
+| `/neo4j-ee/<stack>/advertised-dns` | The sample does not read it. The stack publishes it only when `UsePublicTLS` is set. |
 | `/neo4j-ee/<stack>/number-of-servers` | `1` for single-node, `3` for cluster; signals the Public stack type to off-VPC consumers |
 | `/neo4j-ee/<stack>/region` | Records the deploy region so consumers do not need a separate config |
 | `/neo4j-ee/<stack>/stack-name` | Records the stack name for back-reference |

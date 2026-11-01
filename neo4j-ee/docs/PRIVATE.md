@@ -582,7 +582,7 @@ cd neo4j-ee/validate-private
 uv run validate-private --stack <stack-name> --suite failover
 ```
 
-Four cases using `systemctl stop`/`start` via SSM; no instance termination:
+The four cases stop and start the Neo4j service with `systemctl` via SSM. The suite terminates no instance itself. Under the current template, each service bounce still triggers an ASG replacement of the node, because Bolt stays down longer than the node ASG's ELB health check tolerates. The ASG activity history records these replacements.
 
 | Case | What it does | Typical runtime |
 |---|---|---|
@@ -637,7 +637,7 @@ The NLB routed a write to a follower. Use `uv run admin-shell` for writes: `neo4
 
 **Mounting an existing EBS snapshot and resetting the password**
 
-> **TL;DR:** Disable auth → set password via Cypher → re-enable auth. Repeat steps 2-3 per node in a cluster.
+> **TL;DR:** Disable auth on every node, set the password via Cypher, then re-enable auth on every node. In a cluster, the password change succeeds only on the system database leader, which replicates it to every node.
 
 When a data volume is restored from a snapshot, the Neo4j system database on that volume already contains the auth store from the original deployment. The password in Secrets Manager will not match, producing `Neo.ClientError.Security.Unauthorized` on every connection.
 
@@ -688,7 +688,27 @@ aws autoscaling describe-auto-scaling-groups \
   --output text
 ```
 
-The `<Neo4jNode1ASGName>` value is in `.deploy/<stack-name>.txt`. For a three-node cluster, repeat steps 2 and 3 for each node's ASG (`Neo4jNode2ASGName`, `Neo4jNode3ASGName`).
+The `<Neo4jNode1ASGName>` value is in `.deploy/<stack-name>.txt`. A three-node cluster also has `Neo4jNode2ASGName` and `Neo4jNode3ASGName`.
+
+**Three-node cluster:** The auth store lives in the replicated system database. `ALTER USER` succeeds only on the system database leader, and the system database replicates the change to every node. On a follower, step 2 fails with `51N29`: "The command 'ALTER USER' must be executed on the current 'LEADER' server". That error is expected. Run the steps in this order:
+
+1. Run step 1 on every node. The leader cannot be chosen in advance, because restarting a node to disable auth moves leadership.
+2. Run step 2 on every node. Exactly one node succeeds. The followers return `51N29`.
+3. Run step 3 on every node.
+
+This order needs no leader discovery. To find the leader anyway, run this query with cypher-shell on any node after step 1:
+
+```cypher
+SHOW DATABASE system YIELD serverID, writer WHERE writer RETURN serverID
+```
+
+Match the result against each node's server ID. The `server_id` file holds one version byte followed by the 16-byte UUID:
+
+```bash
+python3 -c "import uuid; print(uuid.UUID(bytes=open('/var/lib/neo4j/data/server_id','rb').read()[1:]))"
+```
+
+> **Warning:** Each stop and start in steps 1 and 3 keeps Bolt down longer than the node ASG's ELB health check tolerates. The target group checks TCP every 10 seconds and marks a node unhealthy after 2 failed checks. The ASG then replaces the node. The replacement re-runs the bootstrap, which rewrites `neo4j.conf` with auth enabled. Under the current template, the restarts in this procedure are not safe, and a node can come back with auth enabled partway through.
 
 > **Note:** `dbms.security.auth_enabled` may appear multiple times in `neo4j.conf` if the recovery procedure is run more than once. Neo4j 5 treats duplicate keys as a fatal config error and refuses to start. The `sed -i "/dbms.security.auth_enabled/d"` step above removes all occurrences before adding a single clean entry, which prevents this.
 

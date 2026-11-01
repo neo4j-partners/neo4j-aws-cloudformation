@@ -1,9 +1,9 @@
 """Entry point for `uv run sample-public-app`.
 
-Reads the seven-key public SSM contract published by a neo4j-ee Public stack
-under `/neo4j-ee/<stack>/`, fetches the admin password from Secrets Manager,
-opens a Bolt driver against the public NLB, runs a self-contained fintech
-demo, and prints a JSON result.
+Reads the six required keys of the public SSM contract published by a
+neo4j-ee Public stack under `/neo4j-ee/<stack>/`, fetches the admin password
+from Secrets Manager, opens a Bolt driver against the public NLB, runs a
+self-contained fintech demo, and prints a JSON result.
 """
 
 from __future__ import annotations
