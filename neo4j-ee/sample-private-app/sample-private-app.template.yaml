@@ -160,6 +160,9 @@ Resources:
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !Ref KmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.${AWS::URLSuffix}'
 
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -312,6 +315,9 @@ Resources:
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !Ref KmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.${AWS::URLSuffix}'
               - Effect: Allow
                 Action: ec2:DescribeInstances
                 Resource: '*'
