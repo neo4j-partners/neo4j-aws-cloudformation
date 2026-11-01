@@ -131,9 +131,11 @@ Structurally identical to `neo4j-private.template.yaml`: same operator bastion, 
 
 **Node egress**
 
-- Node security groups allow outbound traffic only to the endpoint SG on port 443 and to other cluster members on ports 5000, 6000, 7000, and 7688.
+- Node security groups allow outbound traffic only to the endpoint SG on port 443, to same-region S3 on port 443, and to other cluster members on ports 5000, 6000, 7000, and 7688.
 - When `OidcIssuerUri` is set, nodes also allow outbound port 443 to any address so Neo4j can fetch the identity provider's discovery document and signing keys.
-- The NLB and endpoint security groups have no usable egress. Each carries a single placeholder rule to `127.0.0.1/32`, because CloudFormation adds an allow-all egress rule when the list is empty.
+- The S3 rule targets the region's AWS-managed S3 prefix list, so nodes reach only same-region S3. It keeps SSM Agent updates, patch baselines, and Hume seeding working. A Lambda-backed custom resource looks up the prefix-list ID at deploy time.
+- This template creates no S3 gateway endpoint. If your VPC has one, its policy decides which buckets the nodes can read. Without one, S3 traffic leaves through your NAT route and can reach any same-region bucket.
+- CloudFormation adds an allow-all egress rule to a security group whose egress list is empty. The endpoint SG therefore carries a single placeholder rule to `127.0.0.1/32` and has no other egress. The NLB SG carries the same placeholder plus egress to the instances on the Browser and Bolt ports.
 
 ### What the Caller's VPC Must Provide
 

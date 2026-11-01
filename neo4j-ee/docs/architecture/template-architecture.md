@@ -489,9 +489,9 @@ identity provider is down.
 ### AD-7: Node egress reaches only VPC endpoints, cluster peers and the identity provider
 
 **Private and ExistingVpc nodes have no general internet route.** The node
-security groups allow outbound port 443 to the endpoint security group and the
-cluster ports 5000, 6000, 7000 and 7688 to the Internal security group. When
-`OidcIssuerUri` is set, the `OidcEnabled` condition adds outbound port 443 to
+security groups allow outbound port 443 to the endpoint security group and to
+the S3 prefix list. They also allow the cluster ports 5000, 6000, 7000 and
+7688 to the Internal security group. When `OidcIssuerUri` is set, the `OidcEnabled` condition adds outbound port 443 to
 any address. Neo4j needs that rule to fetch the identity provider's discovery
 document and signing keys. Security review finding H2 flagged the old
 allow-all egress as an exfiltration path for a compromised node.
@@ -515,10 +515,29 @@ five endpoints added for H2 are `ec2messages`, `ec2`, `cloudformation`,
 `autoscaling` and `acm`. Across three zones they cost about $110 a month per
 stack, before data processing charges.
 
+**Nodes reach only same-region S3.** A node egress rule allows port 443 to
+the region's AWS-managed S3 prefix list. It restores SSM Agent updates, patch
+baselines and Hume seeding from a same-region bucket. The prefix list is
+regional, so a cross-region S3 URL still fails from a node. In Private, the
+traffic uses the stack's S3 gateway endpoint, so nodes reach only the AWS-owned
+package and agent buckets and buckets in the stack account. ExistingVpc creates
+no gateway endpoint. There, the customer's gateway endpoint policy limits the
+buckets, or traffic leaves through the customer's NAT route to any same-region
+bucket.
+
+**A custom resource looks up the S3 prefix list.** CloudFormation has no
+intrinsic that returns a managed prefix-list ID. `S3PrefixList` is backed by
+an inline Lambda that calls `ec2:DescribePrefixLists` for
+`com.amazonaws.<region>.s3`. Its role grants only that call and writes to its
+own log group. The Lambda runs outside the VPC. The custom resource fails the
+stack operation unless exactly one prefix list matches.
+
 **Empty egress lists carry a placeholder rule.** CloudFormation adds an
 allow-all egress rule to a security group whose `SecurityGroupEgress` list is
-empty. The NLB and endpoint security groups therefore carry one rule to
-`127.0.0.1/32`, which removes the default and matches no real traffic.
+empty. The endpoint security group therefore carries one rule to
+`127.0.0.1/32`, which removes the default and matches no real traffic. The
+NLB security group carries the same placeholder plus egress to the External
+security group on the Browser and Bolt ports.
 
 **In ExistingVpc, the endpoint security group admits `AllowedCIDR`.** Private
 DNS on a created endpoint applies to the whole VPC. Other workloads in the
@@ -679,6 +698,7 @@ are kept fixed and gaps in the list below are intentional.
 | NFR-23 | Every template publishes `kms-key-arn` unconditionally as `!GetAtt Neo4jStackKey.Arn` (AD-5) | `RenderedTemplateContractTests.test_kms_key_arn_is_published_unconditionally_as_full_arn`, the three `test_*_publishes_exact_ssm_contract` tests |
 | NFR-24 | Neo4j and `cypher-shell` are baked into the AMI at the pinned version with the repo and service disabled; the node boot path installs no package and fails closed without them (AD-1) | `ShellPartialTests.test_create_ami_bakes_pinned_neo4j_and_never_starts_it`, `test_verify_neo4j_installed_*`; `RenderedTemplateContractTests.test_node_boot_path_installs_no_packages`; `test-ami.sh` CHECK 7, 8, 10 and 12 |
 | NFR-25 | No security group has an empty egress list; Private and ExistingVpc node egress is the endpoint SG on 443, cluster self rules and OIDC-conditional 443 only; Public node egress is 443 and cluster only; the interface endpoints cover the nine node services, each with an account-scoped policy; endpoint SG ingress comes from the nodes and the bastion (AD-7) | `SecurityReviewBatchCTests.test_no_security_group_has_an_empty_egress_list`, `test_node_security_groups_declare_inline_egress`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only`, `test_public_node_egress_is_https_and_cluster_only`, `test_interface_endpoints_cover_every_node_service`, `test_every_vpc_endpoint_has_an_account_scoped_policy`, `test_endpoint_sg_ingress_comes_from_nodes_and_bastion` |
+| NFR-26 | Private and ExistingVpc node egress to S3 is port 443 to the prefix list returned by the `S3PrefixList` custom resource for `com.amazonaws.${AWS::Region}.s3`; the lookup Lambda runs outside the VPC, its role grants only `ec2:DescribePrefixLists` and its own log group, and it fails unless exactly one prefix list matches; Public has no lookup (AD-7) | `SecurityReviewBatchCTests.test_s3_egress_uses_the_looked_up_prefix_list`, `test_s3_prefix_list_function_is_least_privilege_and_fails_loudly`, `test_private_node_egress_is_endpoints_cluster_and_oidc_only` |
 
 `RenderedTemplateContractTests` additionally assert the rendered cfn-init
 metadata, the single-LaunchTemplate placement, and the embedded base-conf

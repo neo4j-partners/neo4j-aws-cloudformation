@@ -169,6 +169,19 @@
       CidrIp: 0.0.0.0/0
       Description: HTTPS to the OIDC identity provider
 
+  # Same-region S3 through its AWS-managed prefix list. SSM Agent updates,
+  # patch baselines and Hume seeding read S3 objects. The prefix list holds
+  # only same-region S3 addresses, so a cross-region S3 URL still fails.
+  Neo4jInternalSGEgressS3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !GetAtt S3PrefixList.PrefixListId
+      Description: HTTPS to same-region S3
+
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
   # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point

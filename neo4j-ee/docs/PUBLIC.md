@@ -219,7 +219,7 @@ Each node has a dedicated GP3 EBS data volume. `DeletionPolicy: Retain` keeps th
 
 This pattern works for any marketplace deployment without knowing the VPC CIDR at template-authoring time.
 
-**Egress residual risk:** Public nodes have no VPC endpoints, so they reach AWS APIs over the internet. Their security groups therefore allow outbound port 443 to any address. A compromised node can still send data out over HTTPS. Use the Private template when the cluster must have no internet egress. The NLB security group carries a single placeholder egress rule to `127.0.0.1/32`, because CloudFormation adds an allow-all egress rule when the list is empty.
+**Egress residual risk:** Public nodes have no VPC endpoints, so they reach AWS APIs over the internet. Their security groups therefore allow outbound port 443 to any address. A compromised node can still send data out over HTTPS. Use the Private template when the cluster must have no internet egress. The NLB security group allows egress only to the instances on the Browser and Bolt ports. It also carries a placeholder rule to `127.0.0.1/32`, because CloudFormation adds an allow-all egress rule when the list is empty.
 
 ---
 

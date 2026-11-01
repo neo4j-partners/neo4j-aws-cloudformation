@@ -342,6 +342,7 @@ _PRIVATE_SPEC = TemplateSpec(
     resource_partials=(
         "iam.yaml",
         "security-groups.yaml",
+        "s3-prefix-list.yaml",
         "ebs-volumes.yaml",
         "asg.yaml",
         "networking-private.yaml",
@@ -399,6 +400,7 @@ _EXISTING_VPC_SPEC = TemplateSpec(
     resource_partials=(
         "iam.yaml",
         "security-groups-existing-vpc.yaml",
+        "s3-prefix-list.yaml",
         "ebs-volumes.yaml",
         "asg-existing-vpc.yaml",
         "networking-existing-vpc.yaml",

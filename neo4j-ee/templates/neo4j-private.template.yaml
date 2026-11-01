@@ -774,6 +774,19 @@ Resources:
       CidrIp: 0.0.0.0/0
       Description: HTTPS to the OIDC identity provider
 
+  # Same-region S3 through its AWS-managed prefix list. SSM Agent updates,
+  # patch baselines and Hume seeding read S3 objects. The prefix list holds
+  # only same-region S3 addresses, so a cross-region S3 URL still fails.
+  Neo4jInternalSGEgressS3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt Neo4jInternalSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !GetAtt S3PrefixList.PrefixListId
+      Description: HTTPS to same-region S3
+
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
   # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point
@@ -841,6 +854,125 @@ Resources:
       ToPort: 443
       SourceSecurityGroupId: !GetAtt Neo4jBastionSecurityGroup.GroupId
       Description: HTTPS from the operator bastion
+
+  # ---------------------------------------------------------------------------
+  # S3 prefix-list lookup (Private and ExistingVpc)
+  # Node egress is limited to VPC endpoints and cluster peers. Nodes still need
+  # same-region S3 for SSM Agent updates, patch baselines and Hume seeding. The
+  # node SG reaches S3 through its AWS-managed prefix list, and CloudFormation
+  # has no intrinsic that returns that prefix-list ID. This custom resource
+  # looks it up once per stack operation. The Lambda runs outside the VPC and
+  # can call only ec2:DescribePrefixLists and write its own log group.
+  # ---------------------------------------------------------------------------
+  S3PrefixListLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      # Under /neo4j/<stack>/ so the existing stack key policy covers it.
+      LogGroupName: !Sub '/neo4j/${AWS::StackName}/s3-prefix-list'
+      RetentionInDays: 90
+      KmsKeyId: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  S3PrefixListFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: S3PrefixListLookup
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Describe calls do not support resource-level permissions.
+              - Effect: Allow
+                Action:
+                  - ec2:DescribePrefixLists
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/neo4j/${AWS::StackName}/s3-prefix-list:*'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  S3PrefixListFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Looks up the same-region S3 managed prefix list for the node egress rule
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      Handler: index.handler
+      MemorySize: 128
+      Timeout: 30
+      Role: !GetAtt S3PrefixListFunctionRole.Arn
+      # The Ref also keeps the log group alive until after the Delete call.
+      LoggingConfig:
+        LogGroup: !Ref S3PrefixListLogGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+
+          def handler(event, context):
+              if event["RequestType"] == "Delete":
+                  cfnresponse.send(
+                      event, context, cfnresponse.SUCCESS, {},
+                      event.get("PhysicalResourceId"),
+                  )
+                  return
+              name = event["ResourceProperties"]["PrefixListName"]
+              # Any failure must reach CloudFormation as FAILED. An uncaught
+              # exception leaves the stack waiting on the resource for an hour.
+              try:
+                  lists = boto3.client("ec2").describe_prefix_lists(
+                      Filters=[{"Name": "prefix-list-name", "Values": [name]}]
+                  )["PrefixLists"]
+              except Exception as exc:
+                  cfnresponse.send(
+                      event, context, cfnresponse.FAILED, {},
+                      reason=f"DescribePrefixLists for {name} failed: {exc}",
+                  )
+                  return
+              if len(lists) != 1:
+                  cfnresponse.send(
+                      event, context, cfnresponse.FAILED, {},
+                      reason=f"Expected one prefix list named {name}, found {len(lists)}",
+                  )
+                  return
+              prefix_list_id = lists[0]["PrefixListId"]
+              print(f"{name} is {prefix_list_id}")
+              cfnresponse.send(
+                  event, context, cfnresponse.SUCCESS,
+                  {"PrefixListId": prefix_list_id}, prefix_list_id,
+              )
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+
+  S3PrefixList:
+    Type: Custom::S3PrefixList
+    Properties:
+      ServiceToken: !GetAtt S3PrefixListFunction.Arn
+      PrefixListName: !Sub 'com.amazonaws.${AWS::Region}.s3'
 
   # ---------------------------------------------------------------------------
   # Per-node persistent data volumes

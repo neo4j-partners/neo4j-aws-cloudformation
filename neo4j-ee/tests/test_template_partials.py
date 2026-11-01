@@ -3056,7 +3056,8 @@ class SecurityReviewBatchCTests(unittest.TestCase):
 
     def test_private_node_egress_is_endpoints_cluster_and_oidc_only(self) -> None:
         # H2: Private and ExistingVpc nodes reach AWS through the interface
-        # endpoints. The only internet rule is HTTPS for OIDC, under OidcEnabled.
+        # endpoints and same-region S3. The only internet rule is HTTPS for
+        # OIDC, under OidcEnabled.
         for name in ("private", "existing_vpc"):
             with self.subTest(template=name):
                 internet = []
@@ -3066,6 +3067,10 @@ class SecurityReviewBatchCTests(unittest.TestCase):
                         self.assertEqual(rname, "Neo4jInternalSGEgressOidc")
                         self.assertEqual(resource.get("Condition"), "OidcEnabled")
                         self.assertEqual(rule["CidrIp"], "0.0.0.0/0")
+                        self.assertEqual((rule["FromPort"], rule["ToPort"]), (443, 443))
+                        continue
+                    if "DestinationPrefixListId" in rule:
+                        self.assertEqual(rname, "Neo4jInternalSGEgressS3")
                         self.assertEqual((rule["FromPort"], rule["ToPort"]), (443, 443))
                         continue
                     dest = rule.get("DestinationSecurityGroupId")
@@ -3138,6 +3143,54 @@ class SecurityReviewBatchCTests(unittest.TestCase):
                     {"Fn::GetAtt": "Neo4jInternalSecurityGroup.GroupId"},
                 )
                 self.assertIn("VpcEndpointSGIngressFromBastion", self.docs[name]["Resources"])
+
+    def test_s3_egress_uses_the_looked_up_prefix_list(self) -> None:
+        # Nodes reach same-region S3 only through its managed prefix list,
+        # which the S3PrefixList custom resource looks up.
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                resources = self.docs[name]["Resources"]
+                rule = resources["Neo4jInternalSGEgressS3"]
+                self.assertNotIn("Condition", rule)
+                self.assertEqual(
+                    rule["Properties"]["DestinationPrefixListId"],
+                    {"Fn::GetAtt": "S3PrefixList.PrefixListId"},
+                )
+                lookup = resources["S3PrefixList"]
+                self.assertEqual(lookup["Type"], "Custom::S3PrefixList")
+                self.assertEqual(
+                    lookup["Properties"]["ServiceToken"],
+                    {"Fn::GetAtt": "S3PrefixListFunction.Arn"},
+                )
+                self.assertEqual(
+                    lookup["Properties"]["PrefixListName"],
+                    {"Fn::Sub": "com.amazonaws.${AWS::Region}.s3"},
+                )
+        self.assertNotIn("S3PrefixList", self.docs["public"]["Resources"])
+
+    def test_s3_prefix_list_function_is_least_privilege_and_fails_loudly(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                resources = self.docs[name]["Resources"]
+                role = resources["S3PrefixListFunctionRole"]["Properties"]
+                self.assertNotIn("ManagedPolicyArns", role)
+                grants = {
+                    action: stmt["Resource"]
+                    for policy in role["Policies"]
+                    for stmt in policy["PolicyDocument"]["Statement"]
+                    for action in stmt["Action"]
+                }
+                self.assertEqual(
+                    set(grants),
+                    {"ec2:DescribePrefixLists", "logs:CreateLogStream", "logs:PutLogEvents"},
+                )
+                self.assertEqual(grants["ec2:DescribePrefixLists"], "*")
+                self.assertIn("s3-prefix-list:*", grants["logs:PutLogEvents"]["Fn::Sub"])
+                function = resources["S3PrefixListFunction"]["Properties"]
+                self.assertNotIn("VpcConfig", function)
+                code = function["Code"]["ZipFile"]
+                self.assertIn("if len(lists) != 1:", code)
+                self.assertEqual(code.count("cfnresponse.FAILED"), 2)
 
 
 if __name__ == "__main__":
