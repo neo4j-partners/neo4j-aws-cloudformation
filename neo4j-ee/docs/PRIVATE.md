@@ -344,7 +344,7 @@ cd neo4j-ee
 - One NAT Gateway
 - One `t4g.small` operator bastion
 
-The `AvailabilityZones` parameter is optional. A cluster needs exactly three zones in it. A shorter list fails stack creation with an `Fn::Select` template error. Leave it blank to use the first zones that `Fn::GetAZs` returns.
+The `AvailabilityZones` parameter is optional. Every deployment, including a single node, needs exactly three zones in it. A shorter list fails stack creation with an `Fn::Select` template error. Leave it blank to use the first three zones that `Fn::GetAZs` returns.
 
 ### AWS Resources Created
 
