@@ -83,7 +83,7 @@ These are the minimum permissions the operator's local IAM principal (user or as
 | Permission | Resource | Used by |
 |---|---|---|
 | `cloudformation:DescribeStacks`, `cloudformation:DescribeStackResources` | The stack ARN | `uv run preflight`, `deploy.py` (reads stack outputs) |
-| `cloudformation:ListStackResources` | The stack ARN | `uv run validate-private`, which finds the node ASGs, and `teardown.sh` and `recover.sh` |
+| `cloudformation:ListStackResources` | The stack ARN | `uv run validate-private`, which finds the node ASGs, and `teardown.sh` |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:StartSession`, `ssm:DescribeInstanceInformation` | The bastion instance | `uv run scripts/browser-tunnel.py`, `uv run scripts/bolt-tunnel.py`, `admin-shell`, `run-cypher`, `validate-private`, `uv run preflight` (bastion ping check) |
 | `ssm:GetParameter`, `ssm:GetParametersByPath` | `/neo4j-ee/<stack-name>/*` | Any tool that resolves the NLB DNS or security group IDs from the platform contract. Every `uv run` tool that connects to Neo4j reads `bolt-url`, and on a `neo4j+s` stack it also reads `ca-pem`. The release suite reads `ca-pem` on every stack. |
 | `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` | `neo4j/<stack-name>/password` | `get-password.sh`, `uv run preflight`, and every `uv run` tool that connects to Neo4j. The tools read the password with your credentials and keep it in memory. |

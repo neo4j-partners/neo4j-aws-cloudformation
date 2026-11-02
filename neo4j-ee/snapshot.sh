@@ -1,5 +1,5 @@
 #!/bin/bash
-# snapshot.sh — Create or list EBS snapshots for a deployed Neo4j EE stack
+# snapshot.sh: Create or list EBS snapshots for a deployed Neo4j EE stack
 #
 # Reads .deploy/<stack-name>.txt to get volume IDs and region.
 # Snapshots are stored in AWS-managed S3 (not in your S3 bucket).

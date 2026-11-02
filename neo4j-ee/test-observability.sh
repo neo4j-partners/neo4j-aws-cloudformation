@@ -1,8 +1,8 @@
 #!/bin/bash
-# test-observability.sh — Automated Phase 1 observability checks for Neo4j EE
+# test-observability.sh: Automated observability checks for Neo4j EE
 #
 # Reads .deploy/<stack-name>.txt written by deploy.py and verifies each
-# Phase 1 observability component is working. Prints [PASS] or [FAIL] for
+# observability component is working. Prints [PASS] or [FAIL] for
 # each automated check and a [MANUAL REQUIRED] reminder for SNS email delivery.
 #
 # Usage:
@@ -91,18 +91,18 @@ ALERT_TOPIC_ARN=$(read_field "${OUTPUTS_FILE}" "Neo4jAlertTopicArn")
 BROWSER_URL=$(read_field "${OUTPUTS_FILE}" "Neo4jHttpsUrl")
 NUMBER_OF_SERVERS=$(read_field "${OUTPUTS_FILE}" "NumberOfServers")
 
-# These outputs were added in the Phase 1 template update. Fall back to
+# Older .deploy files may lack these outputs. Fall back to
 # deriving from the stack name if an older .deploy file is missing them.
 FLOW_LOG_GROUP=$(read_field "${OUTPUTS_FILE}" "VpcFlowLogGroupName")
 if [ -z "${FLOW_LOG_GROUP}" ]; then
   FLOW_LOG_GROUP="/aws/vpc/flowlogs/${STACK_NAME}"
-  echo "  (VpcFlowLogGroupName not in deploy file — derived from stack name)"
+  echo "  (VpcFlowLogGroupName not in deploy file, derived from stack name)"
 fi
 
 ALARM_NAME=$(read_field "${OUTPUTS_FILE}" "FailedAuthAlarmName")
 if [ -z "${ALARM_NAME}" ]; then
   ALARM_NAME="Neo4j-FailedAuth-${STACK_NAME}"
-  echo "  (FailedAuthAlarmName not in deploy file — derived from stack name)"
+  echo "  (FailedAuthAlarmName not in deploy file, derived from stack name)"
 fi
 
 # Neo4jHttpsUrl is http://<nlb>:7474 on plaintext stacks and
@@ -117,7 +117,7 @@ fi
 
 echo ""
 echo "============================================="
-echo "  Neo4j EE Phase 1 Observability Test"
+echo "  Neo4j EE Observability Test"
 echo "============================================="
 echo "  Stack:   ${STACK_NAME}"
 echo "  Region:  ${REGION}"
@@ -133,13 +133,13 @@ hdr "Step 1: CloudWatch Agent Status (SSM)"
 COMMAND_ID=$(aws ssm send-command \
   --document-name "AWS-RunShellScript" \
   --parameters 'commands=["systemctl is-active amazon-cloudwatch-agent"]' \
-  --targets "Key=tag:Role,Values=neo4j-cluster-node" \
+  --targets "Key=tag:aws:cloudformation:stack-name,Values=${STACK_NAME}" "Key=tag:Role,Values=neo4j-cluster-node" \
   --region "${REGION}" \
   --query "Command.CommandId" \
   --output text 2>/dev/null || echo "")
 
 if [ -z "${COMMAND_ID}" ]; then
-  fail "SSM send-command failed — instances may not be SSM-managed. Ensure AmazonSSMManagedInstanceCore is attached to the instance role and that the instances have registered with SSM (allow a minute after boot)."
+  fail "SSM send-command failed. Instances may not be SSM-managed. Ensure AmazonSSMManagedInstanceCore is attached to the instance role and that the instances have registered with SSM (allow a minute after boot)."
 else
   info "Command ${COMMAND_ID} sent. Polling for results (up to 60s)..."
 
@@ -173,7 +173,7 @@ else
     --output text 2>/dev/null || true)
 
   if [ "${INVOCATION_COUNT}" -eq 0 ]; then
-    fail "No SSM invocations returned — instances may not be SSM-registered yet. Wait a minute and retry."
+    fail "No SSM invocations returned. Instances may not be SSM-registered yet. Wait a minute and retry."
   elif [ "${ACTIVE_COUNT}" -eq "${INVOCATION_COUNT}" ]; then
     pass "CloudWatch agent active on all ${ACTIVE_COUNT} node(s)"
   fi
@@ -200,7 +200,7 @@ info "Streams found: ${STREAM_COUNT} (expected ${EXPECTED_TOTAL})"
 if [ "${STREAM_COUNT}" -ge "${EXPECTED_TOTAL}" ]; then
   pass "Stream count: ${STREAM_COUNT}"
 else
-  fail "Stream count: ${STREAM_COUNT} of expected ${EXPECTED_TOTAL} — streams may still be initializing"
+  fail "Stream count: ${STREAM_COUNT} of expected ${EXPECTED_TOTAL}. Streams may still be initializing."
 fi
 
 for SUFFIX in security debug cloud-init-output; do
@@ -243,7 +243,7 @@ if [ "${GROUP_EXISTS}" -ge 1 ]; then
   if [ "${FLOW_STREAM_COUNT}" -ge 1 ]; then
     pass "Flow log streams present: ${FLOW_STREAM_COUNT} ENI stream(s)"
   else
-    fail "No flow log streams in ${FLOW_LOG_GROUP} — may still be initializing, retry in a few minutes"
+    fail "No flow log streams in ${FLOW_LOG_GROUP}. They may still be initializing, retry in a few minutes."
   fi
 else
   fail "Flow log group not found: ${FLOW_LOG_GROUP}"
@@ -299,7 +299,7 @@ while [ $SECONDS -lt $ALARM_DEADLINE ]; do
   if [ "${ALARM_STATE}" = "ALARM" ]; then
     break
   fi
-  info "Alarm state: ${ALARM_STATE} — checking again in 30s..."
+  info "Alarm state: ${ALARM_STATE}. Checking again in 30s..."
   sleep 30
 done
 
@@ -312,7 +312,7 @@ else
 fi
 
 # SNS email delivery cannot be verified programmatically
-manual "Check your inbox for an alarm notification from no-reply@sns.amazonaws.com for alarm '${ALARM_NAME}'. If no email arrived, see the SNS section in TESTING_GUIDE.md."
+manual "Check your inbox for an alarm notification from no-reply@sns.amazonaws.com for alarm '${ALARM_NAME}'. If no email arrived, confirm the subscription on the SNS topic."
 fi
 
 # ===========================================================================
@@ -323,7 +323,8 @@ hdr "Step 5: CloudTrail (Account-Level)"
 
 EVENT_COUNT=$(aws cloudtrail lookup-events \
   --region "${REGION}" \
-  --start-time "$(date -u -v-24H '+%Y-%m-%dT%H:%M:%SZ')" \
+  --start-time "$(date -u -r "$(( $(date +%s) - 86400 ))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+                 || date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')" \
   --max-results 1 \
   --query "length(Events)" \
   --output text 2>/dev/null || echo "0")
@@ -331,7 +332,7 @@ EVENT_COUNT=$(aws cloudtrail lookup-events \
 if [ "${EVENT_COUNT}" -ge 1 ]; then
   pass "CloudTrail is recording management events in ${REGION}"
 else
-  fail "No CloudTrail events found in ${REGION} in the last 24h — verify a trail is enabled for this region"
+  fail "No CloudTrail events found in ${REGION} in the last 24h. Verify a trail is enabled for this region."
 fi
 fi
 
@@ -340,7 +341,7 @@ fi
 # ===========================================================================
 echo ""
 echo "============================================="
-echo "  Phase 1 Observability Test Summary"
+echo "  Observability Test Summary"
 echo "============================================="
 printf "  Passed:  %d\n" "${PASS}"
 printf "  Failed:  %d\n" "${FAIL}"
@@ -357,12 +358,10 @@ fi
 if [ "${FAIL}" -eq 0 ]; then
   echo "  All automated checks passed."
   if [ "${#MANUAL_STEPS[@]}" -gt 0 ]; then
-    echo "  Complete the manual step(s) above, then update security.md."
-  else
-    echo "  Phase 1 complete — update security.md."
+    echo "  Complete the manual step(s) above."
   fi
 else
-  echo "  Some checks failed. Review the output above before marking Phase 1 complete."
+  echo "  Some checks failed. Review the output above."
 fi
 
 echo "============================================="

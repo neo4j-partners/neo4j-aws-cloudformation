@@ -1,5 +1,5 @@
 #!/bin/bash
-# teardown.sh — Delete a Neo4j EE CloudFormation stack and clean up resources
+# teardown.sh: Delete a Neo4j EE CloudFormation stack and clean up resources
 #
 # Reads .deploy/<stack-name>.txt (written by deploy.py) to determine the stack
 # name, region, SSM parameter path, and any copied AMI to clean up.
@@ -215,7 +215,7 @@ force_delete_vpc() {
   if aws ec2 delete-vpc --region "${REGION}" --vpc-id "${vpc}" >/dev/null 2>&1; then
     echo "VPC ${vpc} deleted."
   else
-    echo "  WARNING: delete-vpc did not succeed — some dependents may still" \
+    echo "  WARNING: delete-vpc did not succeed. Some dependents may still" \
          "be detaching. Check the VPC console for ${vpc}."
   fi
 }
@@ -431,7 +431,7 @@ case "${DEPLOYMENT_MODE}" in
         echo "  Stack VPC: ${ACCEL_VPC_ID}"
         accelerate_vpc_teardown "${ACCEL_VPC_ID}"
       else
-        echo "  No stack VPC found via tag:StackID — skipping acceleration."
+        echo "  No stack VPC found via tag:StackID. Skipping acceleration."
       fi
     fi
     ;;
@@ -453,7 +453,7 @@ else
     --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "GONE")
   echo "  Stack status: ${STATUS}" >&2
   if [ "${STATUS}" = "GONE" ]; then
-    echo "  Stack no longer exists — treating as deleted."
+    echo "  Stack no longer exists. Treating as deleted."
   elif [ -n "${ACCEL_VPC_ID}" ]; then
     force_delete_vpc "${ACCEL_VPC_ID}"
     echo "Re-issuing stack delete now that VPC blockers are gone..."
@@ -463,12 +463,12 @@ else
          --stack-name "${STACK_NAME}" --region "${REGION}" 2>/dev/null; then
       echo "Stack deleted."
     else
-      echo "  WARNING: stack still not deleted — inspect it in the" \
+      echo "  WARNING: stack still not deleted. Inspect it in the" \
            "CloudFormation console: ${STACK_NAME} (${REGION})." >&2
       TEARDOWN_FAILED=true
     fi
   else
-    echo "  No stack VPC discovered to force-delete — inspect the stack in" \
+    echo "  No stack VPC discovered to force-delete. Inspect the stack in" \
          "the CloudFormation console: ${STACK_NAME} (${REGION})." >&2
     TEARDOWN_FAILED=true
   fi
@@ -523,7 +523,7 @@ if [ -n "${AUTO_IMPORTED_CERT_ARN}" ]; then
   done
   if [ "${CERT_GONE}" = false ]; then
     echo "  WARNING: Could not delete ACM certificate (it may still be" \
-         "detaching from the NLB) — check the ACM console."
+         "detaching from the NLB). Check the ACM console."
     TEARDOWN_FAILED=true
   fi
   echo "ACM certificate cleanup done."
@@ -572,7 +572,7 @@ if [ -n "${STACK_ID}" ]; then
       if aws ec2 delete-volume --region "${REGION}" --volume-id "${vol_id}"; then
         echo "  Deleted ${vol_id}."
       else
-        echo "  WARNING: Failed to delete ${vol_id} — check AWS console."
+        echo "  WARNING: Failed to delete ${vol_id}. Check the AWS console."
         TEARDOWN_FAILED=true
       fi
     done <<< "${VOLUME_IDS}"
@@ -582,7 +582,7 @@ if [ -n "${STACK_ID}" ]; then
       echo "All data volumes deleted."
     fi
   else
-    echo "Retained data volumes (not deleted — pass --delete-volumes to remove):"
+    echo "Retained data volumes (not deleted, pass --delete-volumes to remove):"
     while IFS=$'\t' read -r vol_id size az created; do
       echo "  ${vol_id}  ${size}GB  ${az}  created ${created}"
     done <<< "${VOLUME_IDS}"
