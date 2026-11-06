@@ -1,6 +1,6 @@
 # Neo4j EE: Local Testing
 
-This guide covers deploying a test stack from source with `deploy.py`. It applies to all three topologies. For day-to-day use of a running stack, see the Operator Guide in the guide for your topology: [Public](PUBLIC.md), [Private](PRIVATE.md), or [Private Existing VPC](PRIVATE-EXISTING-VPC.md).
+This guide covers deploying a test stack from source with `deploy.py`. It applies to all three topologies. For day-to-day use of a running stack, see the Operator Guide for your topology: [Public](../topologies/public/operator-guide.md), [Private](../topologies/private/operator-guide.md), or [Private Existing VPC](../topologies/private-existing-vpc/operator-guide.md).
 
 ## Contents
 
@@ -17,7 +17,7 @@ This guide covers deploying a test stack from source with `deploy.py`. It applie
 
 ## Prerequisites
 
-- **AWS credentials:** Set `AWS_PROFILE`, or the `default` profile is used. The profile must be able to create every resource in the stack, plus the ACM certificate, SSM parameter, Secrets Manager secrets, and temporary S3 bucket that `deploy.py` creates. Creating the stack's password secrets also needs `kms:GenerateDataKey` through Secrets Manager. See [Deploying identity in PRIVATE.md](PRIVATE.md#prerequisites).
+- **AWS credentials:** Set `AWS_PROFILE`, or the `default` profile is used. The profile must be able to create every resource in the stack, plus the ACM certificate, SSM parameter, Secrets Manager secrets, and temporary S3 bucket that `deploy.py` creates. Creating the stack's password secrets also needs `kms:GenerateDataKey` through Secrets Manager. See [Deploying identity in the Private Operator Guide](../topologies/private/operator-guide.md#prerequisites).
 - **Tools:** `uv`, `openssl`, the AWS CLI for `teardown.sh` and the checks below, and the Session Manager plugin for private stacks. `deploy.py` is a `uv` script, so it installs `boto3` on first run.
 - **Neo4j licence terms:** The bootstrap sets `NEO4J_ACCEPT_LICENSE_AGREEMENT=yes` on every node. Review the Neo4j Enterprise Edition terms before you deploy.
 - **Plugin licences:** `deploy.py` installs Bloom and GDS by default, which differs from the Marketplace defaults. Place licence files at `.licenses/bloom.license` and `.licenses/gds.license`, or pass `--no-bloom --no-gds` to skip both plugins.
@@ -50,7 +50,7 @@ NO_GDS=true
 - **Feedback:** When `deploy.py` takes values from `.env`, it prints their names at the start of the run.
 - **Validation:** A value that is not valid for its flag stops the deploy before any AWS call. The message names the key.
 
-`./deploy.py --help` lists every flag. The single sign-on keys are listed in [Sign-In Settings](PRIVATE.md#sign-in-settings). A Private stack with `OIDC_ISSUER_URI` also needs `ENABLE_INTERNET_EGRESS=true`.
+`./deploy.py --help` lists every flag. The single sign-on keys are listed in [Sign-In Settings](../reference/oidc-sign-in.md#sign-in-settings). A Private stack with `OIDC_ISSUER_URI` also needs `ENABLE_INTERNET_EGRESS=true`.
 
 ## Choose an AMI
 
@@ -86,7 +86,7 @@ AWS_PROFILE=marketplace ./marketplace/create-ami.sh
 - **SSM parameter:** The script writes the AMI id to `/neo4j-ee/test/<stack-name>/ami-id` and passes that path as the stack's `ImageId`. `teardown.sh` deletes the parameter.
 - **Subscription:** The account must be subscribed to the Neo4j Marketplace listing. A successful lookup does not prove the subscription. The instance launch is the real check.
 - **AMI contents:** The repo's templates expect an AMI built by the current `marketplace/create-ami.sh`. That AMI supplies the `neo4j` system user, the Neo4j yum repo and GPG key, `python3.11`, and `amazon-cloudwatch-agent`. A listing AMI built before that change fails at bootstrap, so `deploy.py --marketplace` exits before creating anything when the newest listing AMI was created before 2026-05-15. `--allow-old-marketplace-ami` overrides the check. The date is `MIN_BOOTSTRAP_AMI_DATE` in `src/neo4j_ee/amis.py`, and it needs a bump if `create-ami.sh` changes what the AMI must carry.
-- **Template default:** The `ImageId` default in `templates/src/parameters-common.yaml` is the pinned path `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1`. That path did not exist in `us-east-1` on 2026-10-22. A deploy that relies on the default fails at parameter resolution.
+- **Template default:** The `ImageId` default in `templates/src/parameters-common.yaml` is the pinned path `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1`. That path exists only after version 2026.10.1 is published to the listing with that SSM alias. Until then, a deploy that relies on the default fails at parameter resolution.
 
 ## Deploy
 
@@ -125,7 +125,7 @@ For one node, add `--number-of-servers 1` and drop `--subnet-2` and `--subnet-3`
 
 The script exits with an error when `--private-route-table-1` is missing. Passing `--vpc-id` also turns off automatic use of a VPC file.
 
-To skip these flags, run `scripts/create-test-vpc.py`. It builds a throwaway VPC and writes `.deploy/vpc-<ts>.txt`. When you pass no `--vpc-id`, `deploy.py` reads the VPC, subnets, route table, and endpoint settings from that file. See [Create a Test VPC](PRIVATE-EXISTING-VPC.md#create-a-test-vpc). ExistingVpc itself creates no NAT Gateways, but the test VPC does.
+To skip these flags, run `scripts/create-test-vpc.py`. It builds a throwaway VPC and writes `.deploy/vpc-<ts>.txt`. When you pass no `--vpc-id`, `deploy.py` reads the VPC, subnets, route table, and endpoint settings from that file. See [Create a Test VPC](../topologies/private-existing-vpc/local-testing.md#create-a-test-vpc). ExistingVpc itself creates no NAT Gateways, but the test VPC does.
 
 ## TLS and DNS
 
@@ -158,7 +158,7 @@ A verifying client that uses `neo4j+s://` also needs `<AdvertisedDNS>` to resolv
 
 Pass `--cert-arn <acm-arn> --advertised-dns <name>`. The certificate must be in the stack's region. `deploy.py` checks that the certificate covers the advertised name before it creates the stack, and it treats the certificate as a real one, so clients use `neo4j+s://`.
 
-`scripts/certificate.py` creates DNS-validated or self-signed ACM certificates. A self-signed certificate made that way and passed as `--cert-arn` is still treated as real by `deploy.py`, but clients still need `neo4j+ssc://` to connect. See [Certificates](PUBLIC.md#certificates).
+`scripts/certificate.py` creates DNS-validated or self-signed ACM certificates. A self-signed certificate made that way and passed as `--cert-arn` is still treated as real by `deploy.py`, but clients still need `neo4j+ssc://` to connect. See [Certificates](../topologies/public/local-testing.md#certificates).
 
 ### Public TLS
 
@@ -187,7 +187,7 @@ uv run validate-private --stack <stack-name>
 uv run validate-private --stack <stack-name> --suite release --expected-cypher-default <v>
 ```
 
-The failover and resilience suites are described in [PRIVATE.md](PRIVATE.md#failover-suite). Public stacks use the suite described in [PUBLIC.md](PUBLIC.md#functional-and-cluster-tests).
+The failover and resilience suites are described in [Private Local Testing](../topologies/private/local-testing.md#failover-suite). Public stacks use the suite described in [Public Local Testing](../topologies/public/local-testing.md#functional-and-cluster-tests).
 
 ## Tear down
 

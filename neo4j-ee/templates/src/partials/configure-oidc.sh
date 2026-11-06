@@ -6,6 +6,7 @@ configure_oidc() {
   local groupsClaim="$5"
   local adminGroup="$6"
   local readerGroup="$7"
+  local groupRoleMapping="$8"
   local provider="dbms.security.oidc.sso"
   local mappings=()
 
@@ -28,8 +29,15 @@ configure_oidc() {
   if [[ -n "${readerGroup}" ]]; then
     mappings+=("\"${readerGroup}\"=reader")
   fi
+  if [[ -n "${groupRoleMapping}" ]]; then
+    local entry entries
+    IFS=';' read -ra entries <<< "${groupRoleMapping}"
+    for entry in "${entries[@]}"; do
+      mappings+=("\"${entry%%=*}\"=${entry#*=}")
+    done
+  fi
   if (( ${#mappings[@]} > 0 )) && [[ -z "${groupsClaim}" ]]; then
-    fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
+    fail "OidcAdminGroup, OidcReaderGroup or OidcGroupRoleMapping is set but OidcGroupsClaim is empty."
   fi
 
   # native stays in both lists so password login (operator tooling and
@@ -43,8 +51,9 @@ configure_oidc() {
   set_neo4j_conf "${provider}.audience" "${clientIds}"
   set_neo4j_conf "${provider}.params" \
     "client_id=${browserClientId};response_type=code;scope=openid profile email"
-  # Validate the ID token: some providers (Cognito) put no aud claim in the
-  # access token, so the audience check can only pass on the ID token.
+  # Browser and Bloom use the ID token. An access token passes the audience
+  # check only when its aud claim is in OidcClientId. Cognito adds that claim
+  # only through a pre token generation trigger.
   set_neo4j_conf "${provider}.config" \
     "token_type_principal=id_token;token_type_authentication=id_token"
   if [[ -n "${principalClaim}" ]]; then

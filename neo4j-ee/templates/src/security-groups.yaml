@@ -189,8 +189,8 @@
   # registered in any NLB target group — that topology makes NAT-loopback
   # (hairpin) failures impossible for flows originating from the bastion, so
   # operator tunnels to :7473/:7687 via the NLB always route to a different
-  # instance than the flow source. See README "Private mode networking" and
-  # neo4j-ee/worklog/FIX_SSM_V7.md §9 for the full analysis.
+  # instance than the flow source. See "Operator Bastion: NLB Hairpin" in
+  # neo4j-ee/docs/topologies/private/architecture.md for the full analysis.
   # ---------------------------------------------------------------------------
 
   Neo4jBastionSecurityGroup:

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["boto3", "python-dotenv"]
+# dependencies = ["boto3>=1.43.117", "python-dotenv"]
 # ///
 
 import argparse
@@ -196,21 +196,25 @@ def parse_args() -> argparse.Namespace:
                    help="OIDC issuer URL (sets OidcIssuerUri). Enables single "
                         "sign-on next to password login. Default: off.")
     p.add_argument("--oidc-client-id", metavar="IDS", default="",
-                   help="Comma-separated client IDs accepted as the ID token "
+                   help="Comma-separated client IDs accepted as the token "
                         "audience (sets OidcClientId).")
     p.add_argument("--oidc-browser-client-id", metavar="ID", default="",
                    help="Client ID that Browser and Bloom sign in with "
                         "(sets OidcBrowserClientId). Must be in --oidc-client-id. "
                         "Default: the first ID in --oidc-client-id.")
     p.add_argument("--oidc-principal-claim", metavar="CLAIM", default="",
-                   help="ID token claim used as the Neo4j username "
+                   help="Token claim used as the Neo4j username "
                         "(sets OidcPrincipalClaim). Default: sub.")
     p.add_argument("--oidc-groups-claim", metavar="CLAIM", default="",
-                   help="ID token claim that lists groups (sets OidcGroupsClaim).")
+                   help="Token claim that lists groups (sets OidcGroupsClaim).")
     p.add_argument("--oidc-admin-group", metavar="GROUP", default="",
                    help="Group mapped to the Neo4j admin role (sets OidcAdminGroup).")
     p.add_argument("--oidc-reader-group", metavar="GROUP", default="",
                    help="Group mapped to the Neo4j reader role (sets OidcReaderGroup).")
+    p.add_argument("--oidc-group-role-mapping", metavar="MAPPING", default="",
+                   help="Additional group mappings, as "
+                        "group=role1,role2;group2=role3 "
+                        "(sets OidcGroupRoleMapping).")
     p.add_argument("--mode", default="Private", choices=["Public", "Private", "ExistingVpc"])
     p.add_argument("--allowed-cidr", metavar="CIDR")
     p.add_argument("--vpc-id", metavar="VPC_ID")
@@ -363,7 +367,7 @@ class TlsPlan:
     must auto-import a self-signed ACM cert (no ``--cert-arn`` supplied). When
     that import happens the resulting ARN is recorded as
     ``AutoImportedCertificateArn`` so teardown deletes only deploy-created certs
-    and never a user-supplied one (see worklog/tls.md D5/D6).
+    and never a user-supplied one.
     """
 
     mode: str
@@ -396,6 +400,7 @@ class OidcInputs:
     groups_claim: str = ""
     admin_group: str = ""
     reader_group: str = ""
+    group_role_mapping: str = ""
 
     def cfn_values(self) -> dict[str, str]:
         """Non-blank values keyed by template parameter name."""
@@ -407,6 +412,7 @@ class OidcInputs:
             "OidcGroupsClaim": self.groups_claim,
             "OidcAdminGroup": self.admin_group,
             "OidcReaderGroup": self.reader_group,
+            "OidcGroupRoleMapping": self.group_role_mapping,
         }
         return {key: value for key, value in values.items() if value}
 
@@ -852,7 +858,7 @@ def main() -> None:
     # Single-phase: TLS parameters go into the initial create_stack call (no
     # two-phase update). Private/ExistingVpc require TLS; Public is opt-in via
     # --enable-public-tls. resolve_tls_plan validates the flag combination with
-    # no AWS calls (see worklog/tls.md, D5/D6).
+    # no AWS calls.
     try:
         tls = resolve_tls_plan(
             mode=args.mode,
@@ -980,6 +986,7 @@ def main() -> None:
         groups_claim=args.oidc_groups_claim,
         admin_group=args.oidc_admin_group,
         reader_group=args.oidc_reader_group,
+        group_role_mapping=args.oidc_group_role_mapping,
     )
     cfn_params = build_cfn_parameters(
         password=password,
@@ -1101,14 +1108,14 @@ def main() -> None:
     if cleanup_state["copied_ami_id"]:
         extra.extend([("CopiedAmiId", cleanup_state["copied_ami_id"]), ("SourceRegion", SOURCE_REGION)])
     # Recorded so the validate-private tooling resolves the +ssc Bolt scheme
-    # and the tunnels print the right AdvertisedDNS (see worklog/tls.md D5/D6).
+    # and the tunnels print the right AdvertisedDNS.
     if cert_arn:
         extra.append(("CertificateArn", cert_arn))
     if advertised_dns:
         extra.append(("AdvertisedDNS", advertised_dns))
     # Only set when deploy.py imported the self-signed cert itself. teardown.sh
     # deletes exactly this ACM cert after stack deletion and never a
-    # user-supplied --cert-arn (see worklog/tls.md D5/D6).
+    # user-supplied --cert-arn.
     if auto_imported_cert_arn:
         extra.append(("AutoImportedCertificateArn", auto_imported_cert_arn))
     # Recorded so test_neo4j can detect a licensed deploy and run the Bloom/GDS

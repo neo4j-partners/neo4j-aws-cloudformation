@@ -8,9 +8,9 @@ CloudFormation templates and operator tooling for the Neo4j Enterprise Edition A
 
 | Template | Topology | Use case | Guide |
 |---|---|---|---|
-| **Public** | New VPC, public subnets, internet-facing NLB | Proof of concept, demos, and evaluation. Instances have public IPs; no bastion required. Direct Bolt and Browser access from `AllowedCIDR`. | [docs/PUBLIC.md](docs/PUBLIC.md) |
-| **Private** | New VPC, private subnets, internal NLB, SSM bastion | Production and staging where AWS manages the VPC. Instances have no public IPs; operator access via SSM Session Manager port forwarding through a dedicated bastion. Nodes have no internet route unless `EnableInternetEgress` is `true`. | [docs/PRIVATE.md](docs/PRIVATE.md) |
-| **Private, Existing VPC** | Your VPC, private subnets, internal NLB, SSM bastion | Production into a pre-existing network: peered VPC, Transit Gateway, or Direct Connect. No VPC or NAT provisioning; requires caller-supplied VPC and subnet IDs. | [docs/PRIVATE-EXISTING-VPC.md](docs/PRIVATE-EXISTING-VPC.md) |
+| **Public** | New VPC, public subnets, internet-facing NLB | Proof of concept, demos, and evaluation. Instances have public IPs; no bastion required. Direct Bolt and Browser access from `AllowedCIDR`. | [Public guide](docs/topologies/public/README.md) |
+| **Private** | New VPC, private subnets, internal NLB, SSM bastion | Production and staging where AWS manages the VPC. Instances have no public IPs; operator access via SSM Session Manager port forwarding through a dedicated bastion. Nodes have no internet route unless `EnableInternetEgress` is `true`. | [Private guide](docs/topologies/private/README.md) |
+| **Private, Existing VPC** | Your VPC, private subnets, internal NLB, SSM bastion | Production into a pre-existing network: peered VPC, Transit Gateway, or Direct Connect. No VPC or NAT provisioning; requires caller-supplied VPC and subnet IDs. | [Private, Existing VPC guide](docs/topologies/private-existing-vpc/README.md) |
 
 ---
 
@@ -31,13 +31,13 @@ Deploy from the AWS Marketplace listing. By default, no Neo4j plugins are instal
 
 Once the stack is complete, the guide for your topology covers prerequisites, accessing the cluster, retrieving the password, observability checks, and tear down:
 
-- **Public:** [docs/PUBLIC.md — Operator Guide](docs/PUBLIC.md#operator-guide)
-- **Private:** [docs/PRIVATE.md — Operator Guide](docs/PRIVATE.md#operator-guide)
-- **Private, Existing VPC:** [docs/PRIVATE-EXISTING-VPC.md — Operator Guide](docs/PRIVATE-EXISTING-VPC.md#operator-guide)
+- **Public:** [Public Operator Guide](docs/topologies/public/operator-guide.md)
+- **Private:** [Private Operator Guide](docs/topologies/private/operator-guide.md)
+- **Private, Existing VPC:** [Private, Existing VPC Operator Guide](docs/topologies/private-existing-vpc/operator-guide.md)
 
 ### Single Sign-On
 
-A Private stack can add sign-in through OpenID Connect next to the native password. Sign-in requires `EnableInternetEgress` set to `true`, which creates the NAT gateways. [docs/oidc-run-book.md](docs/oidc-run-book.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On in PRIVATE.md](docs/PRIVATE.md#single-sign-on-oidc) describes each setting and how to fix sign-in problems.
+A Private stack can add sign-in through OpenID Connect next to the native password. Sign-in requires `EnableInternetEgress` set to `true`, which creates the NAT gateways. [OIDC run book](docs/run-books/oidc.md) gives the deploy steps, including the steps for a Hume deployment. [Single Sign-On (OIDC) Reference](docs/reference/oidc-sign-in.md) describes each setting and how to fix sign-in problems.
 
 ---
 
@@ -76,7 +76,7 @@ export AWS_PROFILE=<your-profile>   # omit to use your default profile
 ./deploy.py --mode Public --enable-public-tls --cert-arn <acm-arn> --advertised-dns <dns>
 ```
 
-For AMI selection, the self-signed certificate, private DNS, and validation steps, see [docs/LOCAL-TESTING.md](docs/LOCAL-TESTING.md). Always pass `--region`, because `deploy.py` picks a random region otherwise.
+For AMI selection, the self-signed certificate, private DNS, and validation steps, see [Local Testing guide](docs/guides/local-testing.md). Always pass `--region`, because `deploy.py` picks a random region otherwise.
 
 `--marketplace` uses the region-local AWS Marketplace AMI for the live Neo4j EE
 listing, resolved by Marketplace product code, with this repo's selected
@@ -88,10 +88,10 @@ those templates are published on the listing.
 `marketplace/create-ami.sh`. A listing AMI built before that change lacks the
 `neo4j` user, the Neo4j yum repo, `python3.11`, and the CloudWatch agent, so
 bootstrap fails. The account must also be subscribed to the listing. See
-[Choose an AMI](docs/LOCAL-TESTING.md#choose-an-ami) for the lookup and the
+[Choose an AMI](docs/guides/local-testing.md#choose-an-ami) for the lookup and the
 observed failure.
 
-> **`deploy.py` defaults differ from Marketplace template defaults.** `deploy.py` installs both Bloom and Graph Data Science by default so local validation exercises the same plugin surface customers tend to enable. The Marketplace templates default `InstallBloom=false` and `InstallGDS=false`. The buyer-facing flow is covered in the topology guides ([Public](docs/PUBLIC.md#prerequisites), [Private](docs/PRIVATE.md#prerequisites), [Private Existing VPC](docs/PRIVATE-EXISTING-VPC.md#prerequisites)).
+> **`deploy.py` defaults differ from Marketplace template defaults.** `deploy.py` installs both Bloom and Graph Data Science by default so local validation exercises the same plugin surface customers tend to enable. The Marketplace templates default `InstallBloom=false` and `InstallGDS=false`. The buyer-facing flow is covered in the topology guides ([Public](docs/topologies/public/operator-guide.md#prerequisites), [Private](docs/topologies/private/operator-guide.md#prerequisites), [Private Existing VPC](docs/topologies/private-existing-vpc/operator-guide.md#prerequisites)).
 
 For licensed local validation, place the license files at
 `neo4j-ee/.licenses/bloom.license` and `neo4j-ee/.licenses/gds.license`;
@@ -146,7 +146,7 @@ python build.py --verify
 
 ## Marketplace Reference
 
-[docs/marketplace-reference.md](docs/marketplace-reference.md) covers the CloudFormation best practices required for the AWS Marketplace listing: security group patterns, IAM scoping, IMDSv2, AMI parameter type, and the full requirements checklist.
+[Marketplace reference](docs/reference/marketplace.md) covers the CloudFormation best practices required for the AWS Marketplace listing: security group patterns, IAM scoping, IMDSv2, AMI parameter type, and the full requirements checklist.
 
 ---
 
@@ -159,7 +159,7 @@ python build.py --verify
 | `templates/neo4j-private-existing-vpc.template.yaml` | CloudFormation template for private, existing VPC deployments |
 | `templates/src/` | Source partials assembled by `build.py` |
 | `templates/build.py` | Assembles the three templates from `templates/src/` partials |
-| `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/`. See [docs/LOCAL-TESTING.md](docs/LOCAL-TESTING.md) |
+| `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/`. See [Local Testing guide](docs/guides/local-testing.md) |
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, secrets, and deployment file |
 | `browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
 | `bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |

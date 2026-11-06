@@ -40,6 +40,7 @@ oidcPrincipalClaim=$(printf '%s' "${oidcPrincipalClaimB64:-}" | base64 -d)
 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+oidcGroupRoleMapping=$(printf '%s' "${oidcGroupRoleMappingB64:-}" | base64 -d)
 certificateArn=$(printf '%s' "${certificateArnB64:-}" | base64 -d)
 
 # include partials/set-neo4j-conf.sh
@@ -90,7 +91,8 @@ configure_cluster "${nodeCount}" "${region}" "${_stack_id}"
 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
 remove_jdwp_default
 configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
-  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
+  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}" \
+  "${oidcGroupRoleMapping}"
 assert_security_invariant
 start_neo4j "${initialPassword}" "${isFirstBoot}"
 # The application user lives in the replicated system database, so it is

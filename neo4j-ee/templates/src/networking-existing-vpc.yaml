@@ -459,7 +459,8 @@
       HealthCheckIntervalSeconds: 10
       # preserve_client_ip.enabled=false prevents NLB NAT-loopback (hairpin)
       # failures when operator tunnels reach the NLB from a cluster member.
-      # See README "Private mode networking" and worklog/FIX_SSM_V7.md §9.
+      # See "Operator Bastion: NLB Hairpin" in
+      # neo4j-ee/docs/topologies/private/architecture.md.
       TargetGroupAttributes:
         - Key: preserve_client_ip.enabled
           Value: "false"

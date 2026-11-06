@@ -310,7 +310,7 @@ SAN. The template hands the decision to the bootstrap as the
   builds a new VPC, so a caller-supplied zone cannot already be associated
   with it and its record would not resolve in-VPC.
 - **ExistingVpc:** `CreatePrivateDns`. A caller-supplied zone can already be
-  associated with the caller's VPC. PRIVATE-EXISTING-VPC.md makes that
+  associated with the caller's VPC. the Private, Existing VPC architecture doc makes that
   association a caller requirement.
 - **Public:** unset, so `false`. Public has no private DNS.
 
@@ -625,7 +625,7 @@ ingress from `AllowedCIDR`, those workloads would lose access to the services.
 **Public nodes keep HTTPS egress.** Public stacks have no interface endpoints,
 so nodes reach AWS APIs over the internet. Node egress is port 443 to any
 address plus the cluster ports. HTTPS exfiltration remains possible on Public,
-and `PUBLIC.md` states this.
+and the Public architecture doc states this.
 
 **Accepted residual: DNS exfiltration.** The VPC resolver answers queries for
 any public name, so a compromised node can encode data in DNS queries. Security

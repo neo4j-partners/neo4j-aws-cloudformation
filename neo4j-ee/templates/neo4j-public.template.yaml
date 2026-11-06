@@ -51,6 +51,7 @@ Metadata:
           - OidcGroupsClaim
           - OidcAdminGroup
           - OidcReaderGroup
+          - OidcGroupRoleMapping
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -96,6 +97,8 @@ Metadata:
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
+      OidcGroupRoleMapping:
+        default: OIDC Group Role Mapping
       Node1SnapshotId:
         default: Node 1 Snapshot ID
       AvailabilityZones:
@@ -106,7 +109,7 @@ Metadata:
 Parameters:
   ImageId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1
+    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1
   Password:
     Description: >
       Password for the neo4j admin user. Must be at least 12 characters
@@ -287,7 +290,7 @@ Parameters:
       Optional. Issuer URL of an OpenID Connect identity provider, for example
       https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE. Neo4j reads
       the provider's discovery document at <issuer>/.well-known/openid-configuration.
-      When set, users can sign in with an ID token from this provider. Password
+      When set, users can sign in with a token from this provider. Password
       login always stays enabled. Leave blank for password login only.
     Type: String
     Default: ''
@@ -295,7 +298,7 @@ Parameters:
     ConstraintDescription: Must be blank or an https URL with no query string.
   OidcClientId:
     Description: >-
-      Client ID that Neo4j accepts as the ID token audience. Use a
+      Client ID that Neo4j accepts as the token audience. Use a
       comma-separated list to accept tokens issued to several clients. Required
       when OidcIssuerUri is set.
     Type: String
@@ -315,17 +318,18 @@ Parameters:
     ConstraintDescription: Must be blank or a single client ID.
   OidcPrincipalClaim:
     Description: >-
-      ID token claim that becomes the Neo4j username, for example email or
-      cognito:username. Leave blank to use the Neo4j default, sub.
+      Token claim that becomes the Neo4j username. Every token that clients
+      present must carry it, and Neo4j rejects a token without it. Leave blank
+      to use the Neo4j default, sub.
     Type: String
     Default: ''
     AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
     ConstraintDescription: Must be blank or a single claim name.
   OidcGroupsClaim:
     Description: >-
-      ID token claim that lists the user's groups, for example cognito:groups
+      Token claim that lists the user's groups, for example cognito:groups
       or groups. This is a claim name, not a JSONPath. Required when
-      OidcAdminGroup or OidcReaderGroup is set.
+      OidcAdminGroup, OidcReaderGroup or OidcGroupRoleMapping is set.
     Type: String
     Default: ''
     AllowedPattern: '^$|^[A-Za-z0-9_.:/-]+$'
@@ -351,6 +355,20 @@ Parameters:
     ConstraintDescription: >-
       Must be blank or a group name without double quotes, equals signs,
       semicolons, commas, backslashes or control characters.
+  OidcGroupRoleMapping:
+    Description: >-
+      Additional identity provider groups to map to Neo4j roles, as
+      group=role1,role2;group2=role3. Use this for any role other than the
+      admin and reader roles above, including custom roles. Neo4j does not
+      create the roles. Leave blank to add no mappings.
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^"=;,\\\x00-\x20\x7f]([^"=;,\\\x00-\x1f\x7f]*[^"=;,\\\x00-\x20\x7f])?=[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*(;[^"=;,\\\x00-\x20\x7f]([^"=;,\\\x00-\x1f\x7f]*[^"=;,\\\x00-\x20\x7f])?=[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*)*$'
+    ConstraintDescription: >-
+      Must be blank or group=role1,role2 pairs separated by semicolons, with
+      no spaces around the separators. Group names cannot contain double
+      quotes, equals signs, semicolons, commas, backslashes or control
+      characters. Role names can contain letters, digits and underscores.
 
 Rules:
   BloomLicenseRequiredWhenInstalled:
@@ -402,17 +420,19 @@ Rules:
           - !Not [!Equals [!Ref OidcClientId, '']]
         AssertDescription: >-
           OidcClientId must be provided when OidcIssuerUri is set. Neo4j
-          rejects every ID token whose audience it cannot check.
+          rejects every token whose audience it cannot check.
   OidcGroupsClaimRequiredWithGroupMapping:
     Assertions:
       - Assert: !Or
           - !And
             - !Equals [!Ref OidcAdminGroup, '']
             - !Equals [!Ref OidcReaderGroup, '']
+            - !Equals [!Ref OidcGroupRoleMapping, '']
           - !Not [!Equals [!Ref OidcGroupsClaim, '']]
         AssertDescription: >-
-          OidcGroupsClaim must be provided when OidcAdminGroup or
-          OidcReaderGroup is set. Neo4j reads group membership from that claim.
+          OidcGroupsClaim must be provided when OidcAdminGroup, OidcReaderGroup
+          or OidcGroupRoleMapping is set. Neo4j reads group membership from
+          that claim.
 
 Conditions:
   CreateCluster: !Not
@@ -977,6 +997,7 @@ Resources:
                 oidcGroupsClaim=$(printf '%s' "${oidcGroupsClaimB64:-}" | base64 -d)
                 oidcAdminGroup=$(printf '%s' "${oidcAdminGroupB64:-}" | base64 -d)
                 oidcReaderGroup=$(printf '%s' "${oidcReaderGroupB64:-}" | base64 -d)
+                oidcGroupRoleMapping=$(printf '%s' "${oidcGroupRoleMappingB64:-}" | base64 -d)
                 certificateArn=$(printf '%s' "${certificateArnB64:-}" | base64 -d)
 
                 set_neo4j_conf() {
@@ -1389,6 +1410,7 @@ Resources:
                   local groupsClaim="$5"
                   local adminGroup="$6"
                   local readerGroup="$7"
+                  local groupRoleMapping="$8"
                   local provider="dbms.security.oidc.sso"
                   local mappings=()
 
@@ -1411,8 +1433,15 @@ Resources:
                   if [[ -n "${readerGroup}" ]]; then
                     mappings+=("\"${readerGroup}\"=reader")
                   fi
+                  if [[ -n "${groupRoleMapping}" ]]; then
+                    local entry entries
+                    IFS=';' read -ra entries <<< "${groupRoleMapping}"
+                    for entry in "${entries[@]}"; do
+                      mappings+=("\"${entry%%=*}\"=${entry#*=}")
+                    done
+                  fi
                   if (( ${#mappings[@]} > 0 )) && [[ -z "${groupsClaim}" ]]; then
-                    fail "OidcAdminGroup or OidcReaderGroup is set but OidcGroupsClaim is empty."
+                    fail "OidcAdminGroup, OidcReaderGroup or OidcGroupRoleMapping is set but OidcGroupsClaim is empty."
                   fi
 
                   # native stays in both lists so password login (operator tooling and
@@ -1426,8 +1455,9 @@ Resources:
                   set_neo4j_conf "${provider}.audience" "${clientIds}"
                   set_neo4j_conf "${provider}.params" \
                     "client_id=${browserClientId};response_type=code;scope=openid profile email"
-                  # Validate the ID token: some providers (Cognito) put no aud claim in the
-                  # access token, so the audience check can only pass on the ID token.
+                  # Browser and Bloom use the ID token. An access token passes the audience
+                  # check only when its aud claim is in OidcClientId. Cognito adds that claim
+                  # only through a pre token generation trigger.
                   set_neo4j_conf "${provider}.config" \
                     "token_type_principal=id_token;token_type_authentication=id_token"
                   if [[ -n "${principalClaim}" ]]; then
@@ -1563,7 +1593,8 @@ Resources:
                 configure_plugin_settings "${installBloom}" "${bloomLicenseSecretArn}" "${installGDS}" "${gdsLicenseSecretArn}"
                 remove_jdwp_default
                 configure_oidc "${oidcIssuerUri}" "${oidcClientId}" "${oidcBrowserClientId}" \
-                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}"
+                  "${oidcPrincipalClaim}" "${oidcGroupsClaim}" "${oidcAdminGroup}" "${oidcReaderGroup}" \
+                  "${oidcGroupRoleMapping}"
                 assert_security_invariant
                 start_neo4j "${initialPassword}" "${isFirstBoot}"
                 # The application user lives in the replicated system database, so it is
@@ -1671,6 +1702,9 @@ Resources:
               - "oidcReaderGroupB64="
               - Fn::Base64: {Ref: OidcReaderGroup}
               - "\n"
+              - "oidcGroupRoleMappingB64="
+              - Fn::Base64: {Ref: OidcGroupRoleMapping}
+              - "\n"
               - |
                 _token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
                 _instance_id=$(curl -s -H "X-aws-ec2-metadata-token: $_token" http://169.254.169.254/latest/meta-data/instance-id)
@@ -1718,6 +1752,7 @@ Resources:
                 export password appPassword _stack_id _instance_id _az
                 export oidcIssuerUriB64 oidcClientIdB64 oidcBrowserClientIdB64 oidcPrincipalClaimB64
                 export oidcGroupsClaimB64 oidcAdminGroupB64 oidcReaderGroupB64
+                export oidcGroupRoleMappingB64
 
                 /opt/neo4j/bin/neo4j-bootstrap.sh
                 # The secrets stay in this shell for no longer than the bootstrap needs them.

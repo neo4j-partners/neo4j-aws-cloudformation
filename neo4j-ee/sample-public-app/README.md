@@ -114,7 +114,7 @@ cluster with a single public address. On the Public topology the bootstrap
 sets `server.bolt.advertised_address` to the NLB DNS, so all three cores
 publish the same Bolt host in the routing table. Private stacks can advertise
 `AdvertisedDNS` instead. See
-[NLB Routing in PRIVATE.md](../docs/PRIVATE.md#nlb-routing).
+[NLB Routing in the Private Architecture](../docs/topologies/private/architecture.md#nlb-routing).
 
 When the driver requests routing information against a three-node stack,
 the table contains three identical NLB entries. The driver deduplicates

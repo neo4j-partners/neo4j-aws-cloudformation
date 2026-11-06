@@ -724,7 +724,7 @@ class ShellPartialTests(unittest.TestCase):
         return result, calls
 
     def test_configure_oidc_off_sets_no_keys(self) -> None:
-        result, calls = self._run_configure_oidc("", "", "", "", "", "", "")
+        result, calls = self._run_configure_oidc("", "", "", "", "", "", "", "")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, {})
         self.assertIn("OIDC disabled", result.stdout)
@@ -738,6 +738,7 @@ class ShellPartialTests(unittest.TestCase):
             "cognito:groups",
             "neo4j-admins",
             "neo4j $readers",
+            "",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         p = "dbms.security.oidc.sso"
@@ -777,7 +778,7 @@ class ShellPartialTests(unittest.TestCase):
         for label, ((admin, reader), mapping) in cases.items():
             with self.subTest(case=label):
                 result, calls = self._run_configure_oidc(
-                    "https://idp.example.com", "client-a", "", "", "groups", admin, reader
+                    "https://idp.example.com", "client-a", "", "", "groups", admin, reader, ""
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
@@ -796,18 +797,35 @@ class ShellPartialTests(unittest.TestCase):
                     calls["dbms.security.oidc.sso.params"].startswith("client_id=client-a;")
                 )
 
+    def test_configure_oidc_adds_general_mappings_after_the_named_groups(self) -> None:
+        result, calls = self._run_configure_oidc(
+            "https://idp.example.com", "client-a", "", "", "groups",
+            "neo4j-admins", "neo4j-readers",
+            "neo4j_rw=editor,publisher;data team=custom_role",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            calls["dbms.security.oidc.sso.authorization.group_to_role_mapping"],
+            '"neo4j-admins"=admin;"neo4j-readers"=reader;'
+            '"neo4j_rw"=editor,publisher;"data team"=custom_role',
+        )
+
     def test_configure_oidc_fails_closed_on_incomplete_input(self) -> None:
         cases = {
             "issuer without client id": (
-                ("https://idp.example.com", "", "", "", "groups", "a", ""),
+                ("https://idp.example.com", "", "", "", "groups", "a", "", ""),
                 "OidcClientId is empty",
             ),
             "browser client outside the audience list": (
-                ("https://idp.example.com", "client-a,client-b", "client", "", "", "", ""),
+                ("https://idp.example.com", "client-a,client-b", "client", "", "", "", "", ""),
                 "OidcBrowserClientId is not one of the IDs",
             ),
             "group mapping without groups claim": (
-                ("https://idp.example.com", "client-a", "", "", "", "a", ""),
+                ("https://idp.example.com", "client-a", "", "", "", "a", "", ""),
+                "OidcGroupsClaim is empty",
+            ),
+            "general mapping without groups claim": (
+                ("https://idp.example.com", "client-a", "", "", "", "", "", "a=b"),
                 "OidcGroupsClaim is empty",
             ),
         }
@@ -1978,7 +1996,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             r'configure_tls\s+"\$\{advertisedDNS:-\}"\s+"\$\{loadBalancerDNSName\}"\s+"\$\{boltAdvertiseDns:-false\}"',
             r'configure_cluster\s+"\$\{nodeCount\}"\s+"\$\{region\}"\s+"\$\{_stack_id\}"',
             r'configure_plugin_settings\s+"\$\{installBloom\}"\s+"\$\{bloomLicenseSecretArn\}"\s+"\$\{installGDS\}"\s+"\$\{gdsLicenseSecretArn\}"',
-            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"',
+            r'configure_oidc\s+"\$\{oidcIssuerUri\}"\s+"\$\{oidcClientId\}"\s+"\$\{oidcBrowserClientId\}"\s+\\\s+"\$\{oidcPrincipalClaim\}"\s+"\$\{oidcGroupsClaim\}"\s+"\$\{oidcAdminGroup\}"\s+"\$\{oidcReaderGroup\}"\s+\\\s+"\$\{oidcGroupRoleMapping\}"',
             r'create_app_user\s+neo4j_app\s+"\$\{applicationPassword\}"\s+"\$\{initialPassword\}"\s+"\$\{advertisedDNS:-\}"',
             r'start_neo4j\s+"\$\{initialPassword\}"\s+"\$\{isFirstBoot\}"',
         )
@@ -1986,6 +2004,33 @@ class RenderedTemplateContractTests(unittest.TestCase):
             with self.subTest(template=name):
                 for pat in patterns:
                     self.assertRegex(template, pat)
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_oidc_group_role_mapping_pattern(self) -> None:
+        for name, doc in self.docs.items():
+            pattern = doc["Parameters"]["OidcGroupRoleMapping"]["AllowedPattern"]
+            for value in (
+                "",
+                "a=b",
+                "neo4j_rw=editor,publisher;data team=custom_role",
+            ):
+                with self.subTest(template=name, value=value):
+                    self.assertRegex(value, pattern)
+            for value in (
+                "a",
+                "a=",
+                "=b",
+                "a=b;",
+                "a=b; c=d",
+                "a=b, c",
+                '"a"=b',
+                "a=b=c",
+                "a\\b=c",
+                "a=b\nc=d",
+                "a=`b`",
+            ):
+                with self.subTest(template=name, value=value):
+                    self.assertNotRegex(value, pattern)
 
     @unittest.skipUnless(yaml is not None, "pyyaml is required")
     def test_oidc_parameters_are_optional_and_reach_userdata_encoded(self) -> None:
@@ -1999,6 +2044,7 @@ class RenderedTemplateContractTests(unittest.TestCase):
             "OidcGroupsClaim": "oidcGroupsClaimB64",
             "OidcAdminGroup": "oidcAdminGroupB64",
             "OidcReaderGroup": "oidcReaderGroupB64",
+            "OidcGroupRoleMapping": "oidcGroupRoleMappingB64",
         }
         for name, doc in self.docs.items():
             with self.subTest(template=name):
@@ -2990,7 +3036,7 @@ class BuildVerifyTests(unittest.TestCase):
 
 @unittest.skipUnless(yaml is not None, "pyyaml is required for structural tests")
 class SecurityReviewHardeningTests(unittest.TestCase):
-    """Locks the template-level fixes from security-review.md batch A."""
+    """Locks the template-level fixes from security review batch A."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -3107,7 +3153,7 @@ class SecurityReviewHardeningTests(unittest.TestCase):
 
 
 class SecurityReviewBatchBTests(unittest.TestCase):
-    """Locks the bootstrap fixes from security-review.md batch B."""
+    """Locks the bootstrap fixes from security review batch B."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -3211,7 +3257,7 @@ NODE_ENDPOINT_SERVICES = {
 
 @unittest.skipUnless(yaml is not None, "pyyaml is required")
 class SecurityReviewBatchCTests(unittest.TestCase):
-    """Locks the egress, endpoint and policy fixes from security-review.md batch C."""
+    """Locks the egress, endpoint and policy fixes from security review batch C."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -3400,7 +3446,7 @@ class SecurityReviewBatchCTests(unittest.TestCase):
 
 
 class SecurityReviewBatchDTests(unittest.TestCase):
-    """Locks the operator bastion fixes from security-review.md batch D."""
+    """Locks the operator bastion fixes from security review batch D."""
 
     PRIVATE = ("private", "existing_vpc")
 
@@ -3563,7 +3609,7 @@ class SecurityReviewBatchDTests(unittest.TestCase):
 
 
 class SecurityReviewBatchETests(unittest.TestCase):
-    """Locks the ca-pem trust anchor from security-review.md batch E."""
+    """Locks the ca-pem trust anchor from security review batch E."""
 
     PRIVATE = ("private", "existing_vpc")
     CA_PEM_ARN = {

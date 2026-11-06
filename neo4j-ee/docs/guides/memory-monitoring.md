@@ -1,4 +1,4 @@
-# CloudWatch Memory Monitoring for Neo4j EE
+# Neo4j EE: CloudWatch Memory Monitoring
 
 ## Checking current memory usage
 

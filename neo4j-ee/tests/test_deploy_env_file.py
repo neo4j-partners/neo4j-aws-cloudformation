@@ -71,6 +71,7 @@ class ParseArgsEnvDefaultTests(unittest.TestCase):
                 "OIDC_GROUPS_CLAIM": "cognito:groups",
                 "OIDC_ADMIN_GROUP": "neo4j-admins",
                 "OIDC_READER_GROUP": "neo4j-readers",
+                "OIDC_GROUP_ROLE_MAPPING": "neo4j_rw=editor,publisher;ops=reader",
                 "ADVERTISED_DNS": "neo4j-oidc.neo4j.local",
                 "CREATE_PRIVATE_DNS": "true",
                 "PRIVATE_DNS_ZONE": "neo4j.local",
@@ -85,6 +86,9 @@ class ParseArgsEnvDefaultTests(unittest.TestCase):
         self.assertEqual(args.oidc_groups_claim, "cognito:groups")
         self.assertEqual(args.oidc_admin_group, "neo4j-admins")
         self.assertEqual(args.oidc_reader_group, "neo4j-readers")
+        self.assertEqual(
+            args.oidc_group_role_mapping, "neo4j_rw=editor,publisher;ops=reader"
+        )
         self.assertEqual(args.advertised_dns, "neo4j-oidc.neo4j.local")
         self.assertIs(args.create_private_dns, True)
         self.assertEqual(args.private_dns_zone, "neo4j.local")

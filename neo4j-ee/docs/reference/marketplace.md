@@ -1,6 +1,6 @@
-# Neo4j EE Marketplace: Architecture and CloudFormation Requirements
+# Neo4j EE: Marketplace Architecture and CloudFormation Requirements
 
-Reference document for the three-template split. Covers the key design decisions behind each template and the CloudFormation requirements AWS Marketplace enforces. For a description of each template's topology and target use case, see the [README](../README.md#templates).
+Reference document for the three-template split. Covers the key design decisions behind each template and the CloudFormation requirements AWS Marketplace enforces. For a description of each template's topology and target use case, see the [README](../../README.md#templates).
 
 ---
 

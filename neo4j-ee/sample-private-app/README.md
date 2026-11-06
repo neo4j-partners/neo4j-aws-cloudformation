@@ -7,7 +7,7 @@
 - **What it demonstrates:** SSM parameter discovery, least-privilege application credentials, Secrets Manager password retrieval, security group wiring to the NLB and VPC interface endpoints, and topology-aware Bolt URI selection
 - **Optional:** `--enable-resilience` adds a second Lambda that stops and starts a follower to validate cluster failover
 
-[`docs/PRIVATE.md`](../docs/PRIVATE.md) covers operator access from a laptop via SSM port forwarding. This README covers application access from inside the VPC.
+[`docs/topologies/private/`](../docs/topologies/private/README.md) covers operator access from a laptop via SSM port forwarding. This README covers application access from inside the VPC.
 
 ## Quick Start
 

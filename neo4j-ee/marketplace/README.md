@@ -7,7 +7,7 @@ Internal instructions for Neo4j employees managing the EE Marketplace listing.
 | Script | Purpose |
 |---|---|
 | `create-ami.sh` | Builds the base AMI: resolves the latest AL2023 AMI, patches OS, installs static deployment tooling, hardens SSH, creates AMI, writes ID to `ami-id.txt` |
-| `test-ami.sh` | Verifies the AMI via SSM Run Command (no SSH required): checks SSH hardening and OS identity |
+| `test-ami.sh` | Verifies the AMI via SSM Run Command (no SSH required): checks SSH hardening, OS identity, and that the eMudhra roots are absent from the system, Java and AWS CLI trust stores |
 
 ## Updating the AMI
 
@@ -71,6 +71,8 @@ s3://marketplace-neo4j/neo4j-private-existing-vpc.template.yaml
 The `ImageId` parameter in the templates uses `AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>`.
 AWS Marketplace injects the correct SSM parameter path at subscription time.
 There is no AMI ID to update in the templates themselves.
+
+The `ImageId` default in `templates/src/parameters-common.yaml` names a version, for example `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1`. Publish each new version with that same SSM alias. Otherwise, a deploy that relies on the default fails at parameter resolution.
 
 ## Listing Description Updates
 

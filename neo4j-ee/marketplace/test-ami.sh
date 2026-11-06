@@ -7,8 +7,9 @@
 #
 # The EE AMI carries OS patches, SSH hardening, static deployment tooling, and
 # Neo4j Enterprise plus cypher-shell at one pinned version (AD-1). This script
-# verifies the base image properties, the pinned Neo4j packages, and that
-# Neo4j was never configured, enabled or started in the AMI.
+# verifies the base image properties, the pinned Neo4j packages, that Neo4j
+# was never configured, enabled or started in the AMI, and that no trust store
+# on the image carries the roots behind the eMudhra CA key compromise.
 #
 # The expected Neo4j version is the AMI's Neo4jVersion tag, written by
 # create-ami.sh. Set NEO4J_VERSION to override it.
@@ -213,6 +214,58 @@ echo "SSM agent online."
 echo ""
 echo "Running verification commands..."
 
+# The trust store audit runs on the instance. It is sent base64-encoded because
+# the commands list below is single-quoted, and the audit needs quotes of its
+# own. A store prints PASS only when it held certificates and none matched, so
+# an unreadable or empty store fails the check.
+TRUST_STORE_AUDIT=$(cat <<'AUDIT'
+# SPKI SHA-256 of the roots that issued the compromised eMudhra intermediates,
+# from AWS security bulletin 2026-150-AWS: AAA Certificate Services, emSign Root
+# TLS CA - G3 and emSign ECC Root CA - G3. Any other emSign root fails on its
+# subject, because Amazon Linux removed them all in CVE-2026-114406. Certifi
+# still ships emSign Root CA - G1, so do not reuse this rule on other bundles.
+AFFECTED_SPKI="bd153ed7b0434f6886b17bce8bbe84ed340c7132d702a8f4fa318f756ecbd6f3
+c619e4780ed8e0abeda24ad732567de4383a7ea941338f6d1a7d1b49ac792fe9
+8d417db2dd8bf5e3084d1e3f196d583849d81bdd4c00c70b9d39369e96b8c782"
+
+audit_pem() {
+  local label="$1" pem="$2" dir cert spki subject count=0 hits=0
+  dir=$(mktemp -d)
+  awk -v d="${dir}" '
+    /-----BEGIN CERTIFICATE-----/ { n++; f = d "/" n ".pem" }
+    f { print > f }
+    /-----END CERTIFICATE-----/ { close(f); f = "" }
+  ' "${pem}"
+  for cert in "${dir}"/*.pem; do
+    [ -f "${cert}" ] || continue
+    count=$((count + 1))
+    spki=$(openssl x509 -in "${cert}" -noout -pubkey \
+      | openssl pkey -pubin -outform der | openssl dgst -sha256 | awk '{print $NF}')
+    subject=$(openssl x509 -in "${cert}" -noout -subject)
+    if echo "${AFFECTED_SPKI}" | grep -qx "${spki}" || echo "${subject}" | grep -qi emsign; then
+      echo "FAIL: ${label} trusts ${subject}"
+      hits=$((hits + 1))
+    fi
+  done
+  rm -rf "${dir}"
+  if [ "${count}" -gt 0 ] && [ "${hits}" -eq 0 ]; then
+    echo "PASS: ${label} excludes the eMudhra roots (${count} certificates)"
+  else
+    echo "FAIL: ${label} audit found ${hits} affected of ${count} certificates"
+  fi
+}
+
+STORE=$(mktemp)
+audit_pem "system trust store" /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+"$(dirname "$(readlink -f /usr/bin/java)")/keytool" -list -rfc -cacerts -storepass changeit > "${STORE}" 2>/dev/null
+audit_pem "Java trust store" "${STORE}"
+find /usr/local/aws-cli -name cacert.pem -exec cat {} + > "${STORE}"
+audit_pem "AWS CLI CA bundle" "${STORE}"
+rm -f "${STORE}"
+AUDIT
+)
+TRUST_STORE_AUDIT_B64=$(printf '%s\n' "${TRUST_STORE_AUDIT}" | base64 | tr -d '\n')
+
 COMMAND_ID=$(aws ssm send-command \
   --region "${REGION}" \
   --instance-ids "${INSTANCE_ID}" \
@@ -279,7 +332,10 @@ COMMAND_ID=$(aws ssm send-command \
     "test -z \"$(ls -A /var/lib/neo4j/data/databases 2>/dev/null)\" && echo PASS: Neo4j never started || echo FAIL: Neo4j databases directory present",
     "ls /var/lib/neo4j/labs/apoc-*-core.jar > /dev/null 2>&1 && echo PASS: APOC core jar in labs || echo FAIL: APOC core jar missing",
     "ls /var/lib/neo4j/products/bloom-plugin-*.jar > /dev/null 2>&1 && echo PASS: Bloom jar in products || echo FAIL: Bloom jar missing",
-    "ls /var/lib/neo4j/products/neo4j-graph-data-science-*.jar > /dev/null 2>&1 && echo PASS: GDS jar in products || echo FAIL: GDS jar missing"
+    "ls /var/lib/neo4j/products/neo4j-graph-data-science-*.jar > /dev/null 2>&1 && echo PASS: GDS jar in products || echo FAIL: GDS jar missing",
+    "echo \"\"",
+    "echo \"=== CHECK 13: eMudhra roots absent from every trust store ===\"",
+    "echo '"${TRUST_STORE_AUDIT_B64}"' | base64 -d | bash"
   ]' \
   --query "Command.CommandId" \
   --output text)
@@ -408,7 +464,10 @@ for expected in \
   "PASS: Neo4j never started" \
   "PASS: APOC core jar in labs" \
   "PASS: Bloom jar in products" \
-  "PASS: GDS jar in products"; do
+  "PASS: GDS jar in products" \
+  "PASS: system trust store excludes the eMudhra roots" \
+  "PASS: Java trust store excludes the eMudhra roots" \
+  "PASS: AWS CLI CA bundle excludes the eMudhra roots"; do
   if echo "${COMMAND_OUTPUT}" | grep -q "${expected}"; then
     echo "  PASS: ${expected#PASS: }"
   else

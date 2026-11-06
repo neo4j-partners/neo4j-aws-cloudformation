@@ -5,7 +5,7 @@ SSM port-forward tunnel diagnostic script.
 Tests whether an SSM port-forward tunnel started as a Python subprocess actually
 forwards Browser HTTPS traffic, and surfaces exactly which subprocess flags cause
 failures. The operator Browser path is HTTPS on 7473 (TLS terminated at the NLB);
-see phase 6 of neo4j-ee/worklog/tls.md.
+see Bolt TLS in neo4j-ee/docs/topologies/private/architecture.md.
 
 Usage:
     # Prerequisites: deploy a Private-mode stack and note instance ID and NLB DNS.

@@ -1,4 +1,4 @@
-# Run book: Neo4j EE with OIDC sign-in
+# Neo4j EE: OIDC Sign-In Run Book
 
 This run book deploys a Private Neo4j Enterprise Edition cluster with single sign-on through OpenID Connect. It covers the Neo4j steps only. When the cluster is for Hume, the Hume run book in the `hume-aws-cloudformation` repository sends you here and tells you when to go back.
 
@@ -15,7 +15,7 @@ Do the steps in this order:
 5. [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser)
 6. [Tear down](#tear-down)
 
-For what each setting does, how to change sign-in settings on a running stack, and fixes for sign-in problems, see [Single Sign-On in PRIVATE.md](PRIVATE.md#single-sign-on-oidc).
+For what each setting does, how to change sign-in settings on a running stack, and fixes for sign-in problems, see [Single Sign-On (OIDC) Reference](../reference/oidc-sign-in.md).
 
 ## Before you start
 
@@ -43,12 +43,12 @@ On another account, use your own profile and account ID. Replace `marketplace` a
 aws ec2 describe-images --image-ids "$(cat marketplace/ami-id.txt)" --region us-east-1
 ```
 
-An `InvalidAMIID.NotFound` error, an empty `Images` list, or a state other than `available` means the file is stale. To rebuild the AMI or to use the Marketplace AMI instead, see [Choose an AMI](LOCAL-TESTING.md#choose-an-ami).
+An `InvalidAMIID.NotFound` error, an empty `Images` list, or a state other than `available` means the file is stale. To rebuild the AMI or to use the Marketplace AMI instead, see [Choose an AMI](../guides/local-testing.md#choose-an-ami).
 
 You also need the sign-in settings for your identity provider:
 
 - **Cognito from the Hume repository:** Follow the **Write the OIDC settings** step in the Hume run book, `docs/run-book.md#write-the-oidc-settings` in the `hume-aws-cloudformation` repository. It writes `stack/.deploy/.env.neo4jee`.
-- **Another identity provider:** Write the same keys by hand. The keys are listed in [Sign-in settings](PRIVATE.md#sign-in-settings). The provider must also allow the three redirect addresses in [Redirect addresses](PRIVATE.md#redirect-addresses).
+- **Another identity provider:** Write the same keys by hand. The keys are listed in [Sign-in settings](../reference/oidc-sign-in.md#sign-in-settings). The provider must also allow the three redirect addresses in [Redirect addresses](../reference/oidc-sign-in.md#redirect-addresses).
 
 Run every command below from `neo4j-ee/` unless the step says otherwise.
 
@@ -66,9 +66,10 @@ The file holds the sign-in and DNS settings. It holds no secrets, and `.env` is 
 OIDC_ISSUER_URI=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX
 OIDC_CLIENT_ID=<hume-web client id>,<neo4j client id>
 OIDC_BROWSER_CLIENT_ID=<neo4j client id>
-OIDC_PRINCIPAL_CLAIM=cognito:username
+OIDC_PRINCIPAL_CLAIM=sub
 OIDC_GROUPS_CLAIM=cognito:groups
 OIDC_ADMIN_GROUP=neo4j-admins
+OIDC_GROUP_ROLE_MAPPING=spine-analysts=spine_analyst;spine-officers=spine_officer
 ADVERTISED_DNS=neo4j-oidc.neo4j.local
 CREATE_PRIVATE_DNS=true
 PRIVATE_DNS_ZONE=neo4j.local
@@ -88,11 +89,21 @@ EXPECTED_AWS_ACCOUNT=385155106615
 EOF
 ```
 
+The sign-in values follow the [Token Design](../reference/oidc-sign-in.md#token-design):
+
+- `OIDC_PRINCIPAL_CLAIM=sub` and `OIDC_GROUPS_CLAIM=cognito:groups` name claims that are in both tokens. Browser presents the ID token, and Hume forwards the access token.
+- `OIDC_ADMIN_GROUP` and `OIDC_GROUP_ROLE_MAPPING` merge into one Neo4j setting. See [Group Mapping](../reference/oidc-sign-in.md#group-mapping).
+- `OIDC_GROUP_ROLE_MAPPING` names roles that the mapping does not create. The Spine demo creates `spine_analyst` and `spine_officer` after the Hume stack is up. Users in those groups can sign in before then, and the roles grant no privileges until they exist.
+
+The Hume access token also needs an `aud` claim. Cognito adds it only through a pre token generation trigger. The Hume repository's `cognito.py sync` attaches that trigger to the pool.
+
+Hume signs in with the basic scheme, using the username `__keycloak_token` and the token as the password. Leave `hume.driver.neo4j.security.realm` unset, because Neo4j rejects a sign-in that names a realm.
+
 Hume needs three of these values:
 
 - `MODE=Private`. Hume reads values that only the Private template publishes.
 - `NUMBER_OF_SERVERS=3`. A one-node stack has no second private subnet and only one public subnet, and Hume needs both.
-- `CREATE_PRIVATE_DNS=true` with `PRIVATE_DNS_ZONE`. The stack then creates the private hosted zone and the record for the advertised name. Without the record, the Hume instance cannot resolve the advertised name. Each node advertises that name for Bolt only when the stack creates the zone, so do not replace `PRIVATE_DNS_ZONE` with `PRIVATE_DNS_HOSTED_ZONE_ID`. See [NLB Routing](PRIVATE.md#nlb-routing).
+- `CREATE_PRIVATE_DNS=true` with `PRIVATE_DNS_ZONE`. The stack then creates the private hosted zone and the record for the advertised name. Without the record, the Hume instance cannot resolve the advertised name. Each node advertises that name for Bolt only when the stack creates the zone, so do not replace `PRIVATE_DNS_ZONE` with `PRIVATE_DNS_HOSTED_ZONE_ID`. See [NLB Routing](../topologies/private/architecture.md#nlb-routing).
 
 ### Enable internet egress
 
@@ -102,7 +113,7 @@ Hume needs three of these values:
 
 `REGION` is required too. Without it, `deploy.py` picks a random region. `NO_BLOOM` and `NO_GDS` skip the two plugins, which otherwise install by default and need licences.
 
-Every other `deploy.py` flag can go in `.env` as well. See [Settings in .env](LOCAL-TESTING.md#settings-in-env).
+Every other `deploy.py` flag can go in `.env` as well. See [Settings in .env](../guides/local-testing.md#settings-in-env).
 
 ## Deploy the stack
 
@@ -133,44 +144,54 @@ If a step fails:
 
 - **The deploy stops before creating the stack:** A value in `.env` is not valid for its flag. The message names the key.
 - **The deploy ignores a value in `.env`:** A flag or an environment variable of the same name is set, and it wins over `.env`. Unset it.
-- **Stack creation fails:** See [Troubleshooting in PRIVATE.md](PRIVATE.md#troubleshooting), then [Tear down](#tear-down) before you retry.
-- **A preflight check fails:** See [Preflight Check](PRIVATE.md#preflight-check).
+- **Stack creation fails:** See [Troubleshooting in the Private Local Testing guide](../topologies/private/local-testing.md#troubleshooting), then [Tear down](#tear-down) before you retry.
+- **A preflight check fails:** See [Preflight Check](../topologies/private/operator-guide.md#preflight-check).
 
 ## Check the values Hume reads
 
-Hume's `neo4j_env.py` reads these values from the stack:
+Hume's `neo4j_env.py` stops unless all 13 of these SSM parameters exist under `/neo4j-ee/<stack-name>/`:
 
-| Value | Where it lives |
+| Parameter | What it holds |
 |---|---|
-| `advertised-dns`, `vpc-id`, `external-sg-id`, `vpc-endpoint-sg-id`, `password-secret-arn`, `kms-key-arn`, `private-subnet-1-id`, `private-subnet-2-id`, `nlb-dns` | SSM parameters under `/neo4j-ee/<stack-name>/` |
-| The bastion instance ID | The stack output `Neo4jOperatorBastionId` |
-| Three public subnets, `10.0.1.0/24`, `10.0.2.0/24` and `10.0.3.0/24`, one in each zone | The stack VPC |
-| The certificate on port 7687, whose name must match `advertised-dns` | The load balancer |
+| `advertised-dns` | The name Hume connects to. The certificate on port 7687 must match it. |
+| `vpc-id` | The stack VPC |
+| `external-sg-id` | The load balancer security group |
+| `vpc-endpoint-sg-id` | The security group on the VPC interface endpoints |
+| `app-username` | The Neo4j application user |
+| `app-password-secret-arn` | The secret that holds the application user's password |
+| `kms-key-arn` | The stack KMS key |
+| `ca-pem` | The trust anchor for the load balancer certificate |
+| `private-subnet-1-id`, `private-subnet-2-id` | The private subnets |
+| `public-subnet-1-id`, `public-subnet-2-id`, `public-subnet-3-id` | The public subnets, one in each zone |
 
 `external-sg-id` is the load balancer security group, not the instance security group.
 
-`kms-key-arn` is the full ARN of the stack KMS key. Hume needs `kms:Decrypt` on it to read the password secret.
+`kms-key-arn` is the full ARN of the stack KMS key. Hume needs `kms:Decrypt` on it to read the password secrets.
 
-Check that all nine parameters exist:
+`ca-pem` must hold a certificate. Hume stops on the value `pending`, which means no node has published the anchor yet.
 
-```bash
-aws ssm get-parameters-by-path --path "/neo4j-ee/$NEO4J_STACK/" \
-  --query 'Parameters[].Name' --output text | tr '\t' '\n' | sort
-```
-
-The list must include all nine names in the table. The stack also publishes other parameters. Hume does not read them.
-
-Check the bastion output:
+Check all 13 parameters and the `ca-pem` value:
 
 ```bash
-aws cloudformation describe-stacks --stack-name "$NEO4J_STACK" \
-  --query "Stacks[0].Outputs[?OutputKey=='Neo4jOperatorBastionId'].OutputValue" \
-  --output text
+have=$(aws ssm get-parameters-by-path --path "/neo4j-ee/$NEO4J_STACK/" \
+  --query 'Parameters[].Name' --output text | tr '\t' '\n' | sed 's|.*/||')
+for name in advertised-dns vpc-id external-sg-id vpc-endpoint-sg-id \
+  app-username app-password-secret-arn kms-key-arn ca-pem \
+  private-subnet-1-id private-subnet-2-id \
+  public-subnet-1-id public-subnet-2-id public-subnet-3-id; do
+  echo "$have" | grep -qx "$name" || echo "MISSING $name"
+done
+aws ssm get-parameter --name "/neo4j-ee/$NEO4J_STACK/ca-pem" \
+  --query Parameter.Value --output text | head -1
 ```
 
-The command prints an instance ID that starts with `i-`.
+The output must be one line, `-----BEGIN CERTIFICATE-----`. Any `MISSING` line fails the check.
 
-If `private-subnet-2-id` is missing, the stack has one node. Tear it down and deploy again with `NUMBER_OF_SERVERS=3`.
+If `private-subnet-2-id`, `public-subnet-2-id`, or `public-subnet-3-id` is missing, the stack has one node. Tear it down and deploy again with `NUMBER_OF_SERVERS=3`.
+
+The Spine demo load also reads `password-secret-arn`, the admin password secret. `neo4j_env.py` does not read it.
+
+The stack publishes other parameters, such as `nlb-dns`. Hume does not read them.
 
 **Back to Hume.** Go to the **Read the Neo4j values** step in the Hume run book, `docs/run-book.md#read-the-neo4j-values`. It sets the stack name in `$NEO4J_STACK`. Come back to [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser) if you want to test sign-in from your laptop.
 
@@ -215,7 +236,7 @@ aws secretsmanager get-secret-value \
 
 If the pool was created with `cognito.py --name`, replace `hume-test-idp` with that name.
 
-Run `SHOW CURRENT USER` in Browser and check the roles:
+Run `SHOW CURRENT USER` in Browser and check the roles. The `user` value is the Cognito `sub`, an opaque ID, and it does not match the sign-in name:
 
 | User | Group | Neo4j roles |
 |---|---|---|
@@ -223,9 +244,9 @@ Run `SHOW CURRENT USER` in Browser and check the roles:
 | `hume-admin` | `hume-admins` | `PUBLIC` |
 | `hume-user` | none | `PUBLIC` |
 
-A user with only `PUBLIC` can sign in, but the graph looks empty and writes are refused. `hume-admins` is not mapped to a Neo4j role on purpose.
+A user with only `PUBLIC` can sign in, but the graph looks empty and writes are refused. On `spine`, Neo4j refuses that user with `ACCESS on database 'spine' is not allowed`. `hume-admins` is not mapped to a Neo4j role on purpose.
 
-If sign-in fails, see [Troubleshooting sign-in](PRIVATE.md#troubleshooting-sign-in).
+If sign-in fails, see [Troubleshooting sign-in](../reference/oidc-sign-in.md#troubleshooting-sign-in).
 
 ## Tear down
 
@@ -253,4 +274,4 @@ rm .env
 
 To delete the Hume Cognito pool, go back to the **Tear down** step in the Hume run book.
 
-If the teardown stops with a warning, fix the problem it names and run the same command again. See [Tear down in LOCAL-TESTING.md](LOCAL-TESTING.md#tear-down) for what the script deletes and what it leaves.
+If the teardown stops with a warning, fix the problem it names and run the same command again. See [Tear down in the Local Testing guide](../guides/local-testing.md#tear-down) for what the script deletes and what it leaves.

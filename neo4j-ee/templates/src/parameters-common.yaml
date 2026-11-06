@@ -1,6 +1,6 @@
   ImageId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.03.1
+    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1
   Password:
     Description: >
       Password for the neo4j admin user. Must be at least 12 characters

@@ -46,6 +46,7 @@
           - OidcGroupsClaim
           - OidcAdminGroup
           - OidcReaderGroup
+          - OidcGroupRoleMapping
     ParameterLabels:
       ImageId:
         default: Image ID
@@ -91,6 +92,8 @@
         default: OIDC Admin Group
       OidcReaderGroup:
         default: OIDC Reader Group
+      OidcGroupRoleMapping:
+        default: OIDC Group Role Mapping
       Node1SnapshotId:
         default: Node 1 Snapshot ID
       AvailabilityZones:

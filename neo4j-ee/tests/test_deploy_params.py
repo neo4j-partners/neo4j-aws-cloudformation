@@ -1,8 +1,7 @@
 """Unit tests for deploy.py pure helpers (no AWS calls).
 
 resolve_tls_plan and build_cfn_parameters are pure so the TLS/DNS decision and
-the CloudFormation parameter set can be verified without creating a stack
-(worklog/tls.md phase 7).
+the CloudFormation parameter set can be verified without creating a stack.
 """
 
 from __future__ import annotations
@@ -356,6 +355,7 @@ class BuildCfnParametersTests(unittest.TestCase):
             browser_client_id="client-b",
             groups_claim="cognito:groups",
             admin_group="neo4j-admins",
+            group_role_mapping="neo4j_rw=editor",
         )
         params = _params(deploy.build_cfn_parameters(**kwargs))
         self.assertEqual(
@@ -366,6 +366,7 @@ class BuildCfnParametersTests(unittest.TestCase):
                 "OidcBrowserClientId": "client-b",
                 "OidcGroupsClaim": "cognito:groups",
                 "OidcAdminGroup": "neo4j-admins",
+                "OidcGroupRoleMapping": "neo4j_rw=editor",
             },
         )
 

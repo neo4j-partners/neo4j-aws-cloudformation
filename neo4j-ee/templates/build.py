@@ -127,6 +127,9 @@ _PREAMBLE_OIDC = [
     '"oidcReaderGroupB64="',
     "Fn::Base64: {Ref: OidcReaderGroup}",
     '"\\n"',
+    '"oidcGroupRoleMappingB64="',
+    "Fn::Base64: {Ref: OidcGroupRoleMapping}",
+    '"\\n"',
 ]
 
 

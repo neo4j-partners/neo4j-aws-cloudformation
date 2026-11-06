@@ -62,7 +62,7 @@ def check_marketplace_ami_contents(image: dict, region: str) -> None:
         "CloudWatch agent that the bootstrap needs, so every node would fail.\n"
         "       Publish an AMI built by the current marketplace/create-ami.sh to "
         "the listing, or pass --allow-old-marketplace-ami to deploy anyway.\n"
-        "       See docs/LOCAL-TESTING.md#choose-an-ami."
+        "       See docs/guides/local-testing.md#choose-an-ami."
     )
 
 

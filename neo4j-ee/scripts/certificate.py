@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["boto3"]
+# dependencies = ["boto3>=1.43.117"]
 # ///
 
 """Request and issue an ACM certificate for Neo4j stack deployment.
