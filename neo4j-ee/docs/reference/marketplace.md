@@ -10,7 +10,7 @@ AWS Marketplace AMI policy pages distinguish mandatory product requirements from
 
 The same best-practices page also tells sellers to document the minimum required ports and recommended source IP ranges for administrative access. Those controls are necessary, but they are not substitutes for encryption in transit. A security group `AllowedCIDR` restriction controls which source IPs can initiate a connection at the AWS network layer; it does not encrypt traffic. An attacker controlling a permitted client, a routed network segment, a traffic mirror, or a compromised workload in the same reachable private network can read Neo4j credentials, Cypher queries, and query results in plaintext.
 
-The practical consequence for this listing: the templates restrict Neo4j Browser and Bolt access with `AllowedCIDR`, route private operator access through SSM, and retain optional Bolt TLS parameters for customers or local test flows that need encrypted Bolt on port 7687. The current templates do not implement stack-managed Browser HTTPS or a stack-managed public/private DNS alias.
+The practical consequence for this listing: the templates restrict Neo4j Browser and Bolt access with `AllowedCIDR` and route private operator access through SSM. Private and Private Existing VPC always terminate TLS at the NLB, for Browser HTTPS on port 7473 and for Bolt on port 7687. Public serves plain HTTP on 7474 and plaintext Bolt on 7687 unless the buyer sets `EnableTLS` to `true`. The two private templates can create a Route 53 private DNS alias for `AdvertisedDNS` when `CreatePrivateDns` is `true`. No template creates a public DNS record.
 
 Related Marketplace policy points:
 
@@ -29,7 +29,7 @@ References:
 
 ### Bolt TLS availability
 
-Private and Private Existing VPC require `CertificateArn` and `AdvertisedDNS`. The NLB terminates TLS on Browser port 7473 and Bolt port 7687 using that ACM certificate. Public is plain TCP on 7474 and 7687 unless TLS is enabled with a certificate, in which case Browser moves to 7473.
+Private and Private Existing VPC require `CertificateArn` and `AdvertisedDNS`. Both parameters default to empty, and the `CertificateArnRequired` and `AdvertisedDnsRequired` rules reject a launch that leaves either one blank. The NLB terminates TLS on Browser port 7473 and Bolt port 7687 using that ACM certificate. Public is plain TCP on 7474 and 7687 unless `EnableTLS` is `true`. The `PublicTlsRequiresCertificateAndDns` rule then requires `CertificateArn` and `AdvertisedDNS`, and Browser moves to 7473.
 
 ### Plugin licenses and default-off contract
 
@@ -38,11 +38,11 @@ Bloom and Graph Data Science are gated behind two CFN parameters each: `InstallB
 Two enforcement layers guard the contract:
 
 - **Parameter-shape failures** are rejected by `AWS::CloudFormation::Rules`. Setting `InstallBloom=true` with an empty `BloomLicenseSecretArn` fails parameter validation before any resource is created, regardless of whether the stack is launched from the console, the API, the CLI, or Service Catalog. The same applies to GDS.
-- **Runtime failures** are rejected by UserData via a `fail()` helper that calls `cfn-signal --success false` directly. Bash's `ERR` trap does not fire on `exit 1`, so any explicit failure path must signal CloudFormation before exiting; without `fail()` the stack would wait out the ASG signal timeout instead of failing fast. Cases covered: ARN pointing at a non-existent secret, ARN in a different region from the stack, secret payload empty or malformed, IAM `secretsmanager:GetSecretValue` denied, plugin JAR missing from the AMI.
+- **Runtime failures** are rejected by the bootstrap script, which fetches the license and copies the plugin JAR. Its `fail()` helper prints the error and exits non-zero. UserData runs with `set -euo pipefail`, so that non-zero exit trips the UserData `ERR` trap, which calls `cfn-signal --success false`. UserData is the only layer that calls `cfn-signal`. Its own `fail()` helper signals directly, because Bash's `ERR` trap does not fire on an explicit `exit 1`. Without these paths the stack would wait out the ASG signal timeout instead of failing fast. Cases covered: ARN pointing at a non-existent secret, ARN in a different region from the stack, empty secret payload, IAM `secretsmanager:GetSecretValue` denied, plugin JAR missing from the AMI.
 
 The instance role grants `secretsmanager:GetSecretValue` for each license ARN through an `Fn::If` block that resolves to `AWS::NoValue` when the matching `Install*=true AND non-empty *LicenseSecretArn` condition is false. The `AllowedPattern` on each license ARN parameter is `secret:[A-Za-z0-9/_+=.@-]+`, the Secrets Manager secret-name character set; an earlier permissive pattern `secret:.+` admitted `arn:...:secret:*`, which CloudFormation would pass into the IAM `Resource` field and IAM would evaluate as a wildcard, broadening the grant beyond a single secret.
 
-License material is never embedded in template content, parameter values, outputs, metadata, UserData, stack events, or stack drift output. Buyers pass only the ARN; UserData fetches the secret on every boot so license files survive ASG instance replacement on the root volume.
+License material is never embedded in template content, parameter values, outputs, metadata, UserData, stack events, or stack drift output. Buyers pass only the ARN. The bootstrap fetches the secret each time an instance launches, so an ASG replacement instance writes the license files to its new root volume.
 
 ### AllowedCIDR default
 
@@ -54,9 +54,9 @@ Both Template 2 and Template 3 create a `t4g.small` bastion instance reachable o
 
 ### VPC endpoint creation in Template 3
 
-Template 2 creates VPC interface endpoints for Systems Manager, Secrets Manager, CloudWatch Logs, EC2, CloudFormation, Auto Scaling, and Certificate Manager inside the VPC it creates. Template 3 deploys into a buyer-controlled VPC that may already have those endpoints. Creating a duplicate endpoint fails the deployment.
+Template 2 creates VPC interface endpoints for nine AWS services inside the VPC it creates: `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling` and `acm`. It also creates an S3 gateway endpoint. Node egress reaches AWS only through these endpoints. Template 3 deploys into a buyer-controlled VPC that may already have those interface endpoints. Creating a duplicate endpoint fails the deployment.
 
-A single boolean parameter, `CreateVpcEndpoints`, defaults to `true`. When set to `false`, the caller supplies an existing endpoint security group via `ExistingEndpointSgId`. The parameter description states plainly: set this to `false` if your VPC already has these endpoints, otherwise the deployment will fail with a duplicate resource error.
+A single boolean parameter, `CreateVpcEndpoints`, defaults to `true`. When set to `false`, the caller supplies the security group attached to the existing endpoints via `ExistingEndpointSgId`. The `ExistingEndpointSgIdRequired` rule rejects a launch that sets `false` without it. The stack adds port 443 ingress from the Neo4j nodes and the operator bastion to that security group. The parameter description tells buyers to set `false` if their VPC already has these endpoints, because duplicates fail the deployment. It also warns that the existing endpoints must cover all nine services, or the nodes fail at boot.
 
 ### NumberOfServers
 
@@ -68,23 +68,24 @@ All three templates offer 1 or 3 nodes, default 3. Limiting Template 1 to a sing
 
 ### Security group CIDR restriction
 
-Application ports must be restricted to a parameterized CIDR range, never open to `0.0.0.0/0`. The `AllowedCIDR` parameter must carry an `AllowedPattern` that rejects `0.0.0.0/0` explicitly:
+Application ports must be restricted to a parameterized CIDR range, never open to `0.0.0.0/0`. The `AllowedCIDR` parameter must carry an `AllowedPattern` that rejects `0.0.0.0/0` explicitly. All three templates use the same pattern, which also requires each octet to be 0 to 255 and the prefix length to be 8 or more:
 
 ```yaml
 AllowedCIDR:
   Type: String
-  AllowedPattern: '^(?!0\.0\.0\.0/0$)(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
-  ConstraintDescription: The value 0.0.0.0/0 is not permitted.
+  AllowedPattern: ^(?!0\.0\.0\.0\/0)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([89]|[1-2][0-9]|3[0-2]))$
+  ConstraintDescription: Must be a valid CIDR range with a prefix length of 8 or more. 0.0.0.0/0 is not accepted.
 ```
 
-The NLB security group applies this CIDR to Neo4j Browser and Bolt ports. The current templates use 7474 for Browser and 7687 for Bolt. The instance-facing external security group accepts those ports only from the NLB security group. Intra-cluster ports (5000, 6000, 7000, 7688) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
+The NLB security group applies this CIDR to Neo4j Browser and Bolt ports. Private and Private Existing VPC use 7473 for Browser over HTTPS and 7687 for Bolt. Public uses 7474 for Browser and 7687 for Bolt, and moves Browser to 7473 when `EnableTLS` is `true`. The instance-facing external security group accepts those ports only from the NLB security group. Intra-cluster ports (5000, 6000, 7000, 7688) are restricted to the internal security group using a self-referential ingress rule. No port 22 ingress is created; operator access goes through SSM Session Manager.
 
 ### IAM least privilege
 
 EC2 instances must use an IAM role, not long-term access keys. Each permission must name specific actions and scope resources to the minimum necessary:
 
 - CloudFormation signaling: restrict to the current stack ARN using `!Sub`.
-- EBS operations (`ec2:AttachVolume`, `ec2:DescribeVolumes`, `ec2:DescribeInstances`): resource `*` is acceptable because EBS volumes lack ARN-level scoping on all relevant APIs.
+- EBS attachment (`ec2:AttachVolume`): scoped to volume and instance ARNs in the stack's region and account. Tag conditions limit it to volumes tagged with this stack's `StackID` and `Role=neo4j-cluster-data`, and to instances tagged with this stack's `StackID`.
+- Describe calls (`ec2:DescribeVolumes`, `ec2:DescribeInstances`, `ec2:DescribeTags`): resource `*` is unavoidable because these Describe APIs do not support resource-level permissions.
 - Auto Scaling discovery (`autoscaling:DescribeAutoScalingGroups`): required for cluster node discovery; resource `*` is unavoidable.
 - Secrets Manager (`secretsmanager:GetSecretValue`): scoped to the password secret ARNs (`!Ref Neo4jPasswordSecret`, `!Ref Neo4jAppPasswordSecret`). The stack KMS key encrypts both secrets, so the role also holds `kms:Decrypt` scoped to `!GetAtt Neo4jStackKey.Arn`. When `InstallBloom=true` and `BloomLicenseSecretArn` is non-empty, an `Fn::If` statement adds a grant scoped to that ARN; the same pattern applies to GDS via `GdsLicenseSecretArn`. Each license grant collapses to `AWS::NoValue` when the matching plugin is off or the ARN is empty, so a default Marketplace launch grants no Secrets Manager access for licenses.
 
@@ -94,7 +95,7 @@ Single-node deployments must still use an Auto Scaling group (MinSize: 1, MaxSiz
 
 ### Multi-AZ using dynamic selection
 
-Subnets must reference AZs dynamically using `Fn::GetAZs` and `Fn::Select`. Never hardcode AZ names (`us-east-1a`, `us-west-2b`). Three-node deployments place one node in each of the first three AZs for the region:
+Subnets must reference AZs dynamically using `Fn::GetAZs` and `Fn::Select`. Never hardcode AZ names (`us-east-1a`, `us-west-2b`). By default, Public and Private three-node deployments place one node in each of the first three AZs for the region. The optional `AvailabilityZones` parameter overrides that choice for the subnets. Private Existing VPC places each node in the subnet the caller supplies:
 
 ```yaml
 AvailabilityZone:
@@ -131,9 +132,9 @@ The `Password` parameter must carry `NoEcho: true` so it does not appear in the 
 Password:
   Type: String
   NoEcho: true
-  MinLength: 8
-  AllowedPattern: '^[a-zA-Z0-9]{8,}$'
-  ConstraintDescription: Must be at least 8 characters and contain only letters and numbers (no special characters).
+  MinLength: 12
+  AllowedPattern: ^[a-zA-Z0-9]{12,}$
+  ConstraintDescription: Must be at least 12 characters and contain only letters and numbers (no special characters).
 ```
 
 The password must not appear in the EC2 LaunchTemplate UserData. `NoEcho: true` only hides the value in CloudFormation API responses; it has no effect on UserData, which is stored in plaintext (base64-encoded) in the LaunchTemplate and is readable by any IAM principal with `ec2:DescribeLaunchTemplateVersions`. Instead, store the parameter value in a Secrets Manager secret and have the instance retrieve it at boot after the error trap is set:
@@ -145,30 +146,29 @@ password=$(aws secretsmanager get-secret-value \
   --region "${region}")
 ```
 
-The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARN. It also needs `kms:Decrypt` on the stack KMS key that encrypts the secret.
+The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARNs. The templates create two: `neo4j/<stack>/password` for the admin user and `neo4j/<stack>/app-password` for the application user. The role also needs `kms:Decrypt` on the stack KMS key that encrypts the secrets.
 
 ### Parameter grouping metadata
 
-The `AWS::CloudFormation::Interface` metadata block controls how parameters appear in the CloudFormation console. Group parameters by concern so buyers do not encounter TLS certificate fields before they have configured basic cluster settings:
+The `AWS::CloudFormation::Interface` metadata block controls how parameters appear in the CloudFormation console. Group parameters by concern so buyers do not encounter TLS certificate fields before they have configured basic cluster settings. The Private template groups its parameters this way:
 
 ```yaml
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: "AWS Marketplace"
+          default: "AWS Marketplace Parameters"
         Parameters:
           - ImageId
       - Label:
-          default: "Cluster Configuration"
+          default: "Neo4j Configuration"
         Parameters:
+          - Password
           - NumberOfServers
           - InstanceType
           - DataDiskSize
-      - Label:
-          default: "Network Access"
-        Parameters:
-          - AllowedCIDR
+          - DataVolumeKmsKeyId
+          - Node1SnapshotId
       - Label:
           default: "Plugin licensing (Bloom, GDS)"
         Parameters:
@@ -177,11 +177,42 @@ Metadata:
           - InstallGDS
           - GdsLicenseSecretArn
       - Label:
+          default: "Network"
+        Parameters:
+          - AvailabilityZones
+          - NlbDeletionProtection
+          - EnableInternetEgress
+      - Label:
           default: "TLS"
         Parameters:
           - CertificateArn
           - AdvertisedDNS
+          - BoltTlsScheme
+      - Label:
+          default: "Private DNS"
+        Parameters:
+          - CreatePrivateDns
+          - PrivateDnsZoneName
+          - PrivateDnsHostedZoneId
+      - Label:
+          default: "Security & Monitoring"
+        Parameters:
+          - AllowedCIDR
+          - AlertEmail
+      - Label:
+          default: "Single sign-on (OIDC)"
+        Parameters:
+          - OidcIssuerUri
+          - OidcClientId
+          - OidcBrowserClientId
+          - OidcPrincipalClaim
+          - OidcGroupsClaim
+          - OidcAdminGroup
+          - OidcReaderGroup
+          - OidcGroupRoleMapping
 ```
+
+Public replaces the TLS group with an "Optional Public TLS" group of `EnableTLS`, `CertificateArn` and `AdvertisedDNS`. It has no Private DNS group and no `EnableInternetEgress` parameter. Private Existing VPC replaces the Network group with an "Existing VPC" group for the VPC, subnet, endpoint, `AllowedCIDR` and NLB deletion protection parameters, and keeps `AlertEmail` in a "Monitoring" group.
 
 ### Architectural diagrams
 
@@ -195,7 +226,7 @@ Each template requires a separate diagram submitted to the Marketplace seller po
 
 2. [CloudFormation Templates 101 for Sellers in AWS Marketplace](https://aws.amazon.com/blogs/awsmarketplace/cloudformation-templates-101-for-sellers-in-aws-marketplace/) — Covers IAM roles, Auto Scaling, password handling, and cluster deployment patterns for Marketplace sellers.
 
-2. [Taking NAT to the Next Level in AWS CloudFormation Templates](https://aws.amazon.com/blogs/apn/taking-nat-to-the-next-level-in-aws-cloudformation-templates/) — NAT gateway vs. NAT instance comparison with CloudFormation examples; the case for per-AZ NAT gateways.
+3. [Taking NAT to the Next Level in AWS CloudFormation Templates](https://aws.amazon.com/blogs/apn/taking-nat-to-the-next-level-in-aws-cloudformation-templates/) — NAT gateway vs. NAT instance comparison with CloudFormation examples; the case for per-AZ NAT gateways.
 
 4. [Add CloudFormation templates to your product](https://docs.aws.amazon.com/marketplace/latest/userguide/cloudformation.html) — Official Marketplace requirements: AMI parameter handling, network security, nested stack parameters, maximum template count per listing.
 

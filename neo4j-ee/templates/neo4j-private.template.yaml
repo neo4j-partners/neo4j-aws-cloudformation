@@ -1,7 +1,7 @@
 # GENERATED FILE — do not edit directly.
 # Edit source partials in templates/src/ and run templates/build.py to regenerate.
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Neo4j Enterprise Edition — Private
+Description: Neo4j Enterprise Edition, Private. Deploys a cluster of 1 or 3 Neo4j nodes into private subnets of a new VPC, each node in its own Auto Scaling group behind an internal Network Load Balancer. A t4g.small operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. The stack creates VPC endpoints for the AWS services the nodes call. Set EnableInternetEgress to true to add NAT gateways for outbound internet access.
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:

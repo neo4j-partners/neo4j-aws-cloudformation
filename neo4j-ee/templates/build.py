@@ -346,7 +346,16 @@ def _assemble(spec: TemplateSpec) -> str:
 
 _PRIVATE_SPEC = TemplateSpec(
     filename="neo4j-private.template.yaml",
-    description="Neo4j Enterprise Edition — Private",
+    description=(
+        "Neo4j Enterprise Edition, Private. Deploys a cluster of 1 or 3 Neo4j"
+        " nodes into private subnets of a new VPC, each node in its own Auto"
+        " Scaling group behind an internal Network Load Balancer. A t4g.small"
+        " operator bastion is reachable only through AWS Systems Manager"
+        " Session Manager, with no SSH key and no inbound rules. The stack"
+        " creates VPC endpoints for the AWS services the nodes call. Set"
+        " EnableInternetEgress to true to add NAT gateways for outbound"
+        " internet access."
+    ),
     metadata_partial="metadata-private.yaml",
     parameter_partials=(
         "parameters-common.yaml",
@@ -380,7 +389,14 @@ _PRIVATE_SPEC = TemplateSpec(
 
 _PUBLIC_SPEC = TemplateSpec(
     filename="neo4j-public.template.yaml",
-    description="Neo4j Enterprise Edition — Public",
+    description=(
+        "Neo4j Enterprise Edition, Public. Deploys a cluster of 1 or 3 Neo4j"
+        " nodes in a new VPC with public subnets, each node in its own Auto"
+        " Scaling group. An internet-facing Network Load Balancer serves Neo4j"
+        " Browser and Bolt traffic. The load balancer accepts traffic only from"
+        " the AllowedCIDR range you supply. Set EnableTLS to true to serve"
+        " Browser and Bolt over TLS."
+    ),
     metadata_partial="metadata-public.yaml",
     parameter_partials=(
         "parameters-common.yaml",
@@ -405,7 +421,16 @@ _PUBLIC_SPEC = TemplateSpec(
 
 _EXISTING_VPC_SPEC = TemplateSpec(
     filename="neo4j-private-existing-vpc.template.yaml",
-    description="Neo4j Enterprise Edition — Private, Existing VPC",
+    description=(
+        "Neo4j Enterprise Edition, Private, Existing VPC. Deploys a cluster of"
+        " 1 or 3 Neo4j nodes into private subnets of an existing VPC, each node"
+        " in its own Auto Scaling group behind an internal Network Load"
+        " Balancer. A t4g.small operator bastion is reachable only through AWS"
+        " Systems Manager Session Manager, with no SSH key and no inbound rules."
+        " By default the stack creates VPC interface endpoints for the AWS"
+        " services the nodes call. Set CreateVpcEndpoints to false if your VPC"
+        " already has them."
+    ),
     metadata_partial="metadata-existing-vpc.yaml",
     parameter_partials=(
         "parameters-common.yaml",
