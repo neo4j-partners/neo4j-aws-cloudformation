@@ -1,4 +1,4 @@
-# Neo4j Community Edition — AWS Architecture
+# Neo4j CE: AWS Architecture
 
 ## Core Principle: Separate Data from Compute
 
@@ -13,6 +13,10 @@ By default, if the database data lives on the root EBS volume and the ASG replac
 With a separate data volume, the EBS volume is a standalone CloudFormation resource that the ASG has no knowledge of and cannot delete. When the new instance boots, it attaches and mounts the existing data volume, picking up exactly where the old instance left off. Without that separation, an ASG "self-healing" a failed instance would also destroy the database it was trying to protect.
 
 ## Architecture Overview
+
+![Neo4j CE AWS deployment architecture](images/deployment-architecture.png)
+
+The layout, with the data volume detail the diagram omits:
 
 ```
 ┌─────────────────────────────────────────────────┐

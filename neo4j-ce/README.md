@@ -161,6 +161,7 @@ Deletes the CloudFormation stack, the SSM parameter created by `deploy.py`, any 
 | `test-stack.sh` | Bash test suite (HTTP, Bolt, auth, stack status, security groups, Neo4j config, APOC) |
 | `test_ce/` | Python test suite — connectivity, Neo4j config, infrastructure, EBS resilience |
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, and deployment file |
+| `docs/` | Architecture documentation. See [docs/README.md](docs/README.md) |
 | `marketplace/` | AMI build scripts and Marketplace publishing instructions |
 | `marketplace/ami-id.txt` | AMI ID from last build (gitignored) |
 | `.deploy/` | Deployment output files — one per stack (gitignored) |

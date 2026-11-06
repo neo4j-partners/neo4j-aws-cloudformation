@@ -88,7 +88,7 @@ uv run scripts/browser-tunnel.py [stack]        # port-forward NLB :7473
 uv run scripts/bolt-tunnel.py [stack]           # port-forward NLB :7687
 ```
 
-The `--suite release` run plus `preflight` is the post-release gate; the full procedure is in `validate-private/README.md` and `docs/PRIVATE.md`.
+The `--suite release` run plus `preflight` is the post-release gate; the full procedure is in `validate-private/README.md` and `docs/topologies/private/`.
 
 ## Security Invariant: `internal.dbms.cypher_ip_blocklist`
 

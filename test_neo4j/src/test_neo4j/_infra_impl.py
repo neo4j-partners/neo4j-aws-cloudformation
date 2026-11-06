@@ -58,8 +58,8 @@ def _expected_neo4j_ports(config: StackConfig) -> set[int]:
     Bolt is always 7687. The Browser/HTTP port depends on TLS termination: an
     EE stack with TLS at the NLB (signalled by AdvertisedDNS, recorded as
     config.bolt_tls_enabled) serves HTTPS on 7473; CE and plain EE serve HTTP
-    on 7474. Mirrors the listener split documented in phase 6 of
-    neo4j-ee/worklog/tls.md.
+    on 7474. Mirrors the listener split documented in
+    neo4j-ee/docs/topologies/private/architecture.md (Bolt TLS).
     """
     browser_port = 7473 if (config.edition == "ee" and config.bolt_tls_enabled) else 7474
     return {browser_port, 7687}

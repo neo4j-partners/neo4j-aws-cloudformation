@@ -45,7 +45,6 @@ ENV/
 ami-id.txt
 .deploy/
 deploy-values.md
-worklog/
 
 # Neo4j licence files (Bloom, GDS, etc.) — never commit
 *.license
