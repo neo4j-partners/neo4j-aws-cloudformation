@@ -3,10 +3,10 @@
 `snapshot.sh` creates EBS snapshots of all Neo4j data volumes for a deployed stack. Snapshots are incremental and stored in AWS-managed S3; snapshot size reflects used blocks only, not the allocated volume size.
 
 ```bash
-./snapshot.sh                  # most recent deployment
-./snapshot.sh <stack-name>     # specific deployment
-./snapshot.sh --list           # list all snapshots for the most recent deployment
-./snapshot.sh --list <stack-name>  # list all snapshots for a specific deployment
+./scripts/snapshot.sh                  # most recent deployment
+./scripts/snapshot.sh <stack-name>     # specific deployment
+./scripts/snapshot.sh --list           # list all snapshots for the most recent deployment
+./scripts/snapshot.sh --list <stack-name>  # list all snapshots for a specific deployment
 ```
 
 The script reads `.deploy/<stack-name>.txt` for volume IDs and region. Each snapshot is tagged with the stack name and date. For a three-node cluster all three volumes are snapshotted in the same run.

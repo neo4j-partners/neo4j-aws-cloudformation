@@ -6,7 +6,7 @@
 # each automated check and a [MANUAL REQUIRED] reminder for SNS email delivery.
 #
 # Usage:
-#   ./test-observability.sh [stack-name] [--step <name>]
+#   ./scripts/test-observability.sh [stack-name] [--step <name>]
 #
 # Steps: cloudwatch, logs, flowlogs, alarm, cloudtrail
 # If --step is omitted all steps run. If stack-name is omitted, uses the
@@ -17,7 +17,7 @@ set -euo pipefail
 export AWS_PROFILE="${AWS_PROFILE:-default}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEPLOY_DIR="${SCRIPT_DIR}/.deploy"
+DEPLOY_DIR="${SCRIPT_DIR}/../.deploy"
 
 PASS=0
 FAIL=0

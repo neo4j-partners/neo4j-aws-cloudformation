@@ -210,10 +210,10 @@ Open two tunnels through the bastion. Run each in its own terminal from `neo4j-e
 
 ```bash
 # Terminal 1: Browser page and sign-in discovery on 7473
-./browser-tunnel.sh "$NEO4J_STACK"
+./scripts/browser-tunnel.sh "$NEO4J_STACK"
 
 # Terminal 2: Bolt on 7687
-./bolt-tunnel.sh "$NEO4J_STACK"
+./scripts/bolt-tunnel.sh "$NEO4J_STACK"
 ```
 
 Each tunnel is ready when it prints `Waiting for connections...`. Both scripts use the `marketplace` profile unless `AWS_PROFILE` is set.

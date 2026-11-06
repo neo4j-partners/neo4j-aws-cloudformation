@@ -38,8 +38,8 @@ Bastion access and all operator tools (`uv run preflight`, `validate-private`, `
 ## Observability Checks
 
 ```bash
-./test-observability.sh                  # most recent deployment
-./test-observability.sh <stack-name>     # specific deployment
+./scripts/test-observability.sh                  # most recent deployment
+./scripts/test-observability.sh <stack-name>     # specific deployment
 ```
 
 Same five steps as the Private template: CloudWatch agent, log streams, VPC flow logs, failed-auth alarm, and an account-level CloudTrail check.

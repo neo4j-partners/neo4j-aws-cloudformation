@@ -11,7 +11,7 @@ echo
 echo "== Python compile checks =="
 python3 -m py_compile \
   neo4j-ee/deploy.py \
-  neo4j-ee/browse.py \
+  neo4j-ee/scripts/browse.py \
   neo4j-ee/sample-private-app/deploy-sample-private-app.py \
   neo4j-ee/validate-private/scripts/*.py \
   neo4j-ee/src/neo4j_ee/*.py \

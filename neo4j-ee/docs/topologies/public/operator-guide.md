@@ -94,9 +94,9 @@ The full workflow, the six SSM contract keys it requires, the URI selection rule
 Verify CloudWatch agent, application logs, VPC flow logs, failed-auth alarm, and an account-level CloudTrail check:
 
 ```bash
-./test-observability.sh                  # most recent deployment
-./test-observability.sh <stack-name>     # specific deployment
-./test-observability.sh --step <name>    # single step
+./scripts/test-observability.sh                  # most recent deployment
+./scripts/test-observability.sh <stack-name>     # specific deployment
+./scripts/test-observability.sh --step <name>    # single step
 ```
 
 | Step | What it checks | Typical duration |

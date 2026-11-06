@@ -5,7 +5,7 @@
 # Snapshots are stored in AWS-managed S3 (not in your S3 bucket).
 #
 # Usage:
-#   ./snapshot.sh [--list] [stack-name]
+#   ./scripts/snapshot.sh [--list] [stack-name]
 #
 # If stack-name is omitted, uses the most recently modified file in .deploy/.
 # --list: show all existing snapshots for the stack instead of creating new ones.
@@ -15,7 +15,7 @@ set -euo pipefail
 export AWS_PROFILE="${AWS_PROFILE:-default}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEPLOY_DIR="${SCRIPT_DIR}/.deploy"
+DEPLOY_DIR="${SCRIPT_DIR}/../.deploy"
 
 # ---------------------------------------------------------------------------
 # Parse arguments: [--list] [stack-name]
@@ -115,4 +115,4 @@ done
 
 echo ""
 echo "Snapshots initiated. Monitor progress:"
-echo "  ./snapshot.sh --list ${STACK_NAME}"
+echo "  ./scripts/snapshot.sh --list ${STACK_NAME}"

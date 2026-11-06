@@ -19,9 +19,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEPLOY_DIR = SCRIPT_DIR / ".deploy"
+DEPLOY_DIR = SCRIPT_DIR.parent / ".deploy"
 
-sys.path.insert(0, str(SCRIPT_DIR / "src"))
+sys.path.insert(0, str(SCRIPT_DIR.parent / "src"))
 from neo4j_ee.outputs import (  # noqa: E402
     read_outputs,
     require_field,

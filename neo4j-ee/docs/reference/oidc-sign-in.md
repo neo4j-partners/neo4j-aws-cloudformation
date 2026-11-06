@@ -101,8 +101,8 @@ Open a session on a node through SSM and look for the `dbms.security.oidc.sso.*`
 | Symptom | Cause | Fix |
 |---|---|---|
 | `DNS_PROBE_POSSIBLE` or "This site can't be reached" | The advertised name is missing from `/etc/hosts`. | Add `127.0.0.1 <AdvertisedDNS>` to `/etc/hosts`. |
-| The page does not load | The Browser tunnel on 7473 is closed. | Restart `./browser-tunnel.sh`. |
-| SSO is disabled in the login form, or the connection fails | The Bolt tunnel on 7687 is closed. | Restart `./bolt-tunnel.sh` and reload the page. |
+| The page does not load | The Browser tunnel on 7473 is closed. | Restart `./scripts/browser-tunnel.sh`. |
+| SSO is disabled in the login form, or the connection fails | The Bolt tunnel on 7687 is closed. | Restart `./scripts/bolt-tunnel.sh` and reload the page. |
 | The provider shows `redirect_mismatch` | The redirect address is not registered on the Browser client. | Register the [redirect addresses](#redirect-addresses). Check that `OidcBrowserClientId` names the client that has them. If it still fails, URL-decode `redirect_uri` from the address bar and register it exactly as shown. |
 | A user who should be admin gets only `PUBLIC` | The user is not in the admin group, or the groups claim or group name is wrong. | Check the user's groups in the identity provider and the `OIDC_*` values. |
 | A token is rejected, and `security.log` shows `JWT user claim must be a string` | The token does not carry `OidcPrincipalClaim`. | Use a claim that is in every token clients present. See [Token Design](#token-design). |

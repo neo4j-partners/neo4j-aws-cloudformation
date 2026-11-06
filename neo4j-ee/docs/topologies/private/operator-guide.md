@@ -143,8 +143,8 @@ Use this to open the Neo4j Browser web UI. The browser makes two connections: HT
 **Single-command option.** Run from `neo4j-ee/`:
 
 ```bash
-uv run browse.py                   # most recent deployment
-uv run browse.py <stack-name>      # specific deployment
+uv run scripts/browse.py                   # most recent deployment
+uv run scripts/browse.py <stack-name>      # specific deployment
 ```
 
 `browse.py` reads `.deploy/<stack-name>.txt`, opens both SSM port-forward tunnels in the same shell, and prints the URL and the username. It prints the password secret ARN. With `--show-password` it fetches the password from Secrets Manager with your AWS credentials and prints it. Add the `/etc/hosts` line it prints, then open the `https://<AdvertisedDNS>:7473` URL. Press Ctrl+C to close both tunnels.
@@ -156,9 +156,9 @@ uv run scripts/browser-tunnel.py   # localhost:7473 -> NLB:7473  (blocks; Ctrl-C
 uv run scripts/bolt-tunnel.py      # localhost:7687 -> NLB:7687  (blocks; Ctrl-C to close)
 ```
 
-From `neo4j-ee/`, `./browser-tunnel.sh [stack-name]` and `./bolt-tunnel.sh [stack-name]` run the same two scripts. They set `AWS_PROFILE` to `marketplace` when it is unset.
+From `neo4j-ee/`, `./scripts/browser-tunnel.sh [stack-name]` and `./scripts/bolt-tunnel.sh [stack-name]` run the same two scripts. They set `AWS_PROFILE` to `marketplace` when it is unset.
 
-The certificate SAN is the stack's `AdvertisedDNS`, so add `127.0.0.1 <AdvertisedDNS>` to your laptop's `/etc/hosts`. `browser-tunnel.py` prints the exact line. Then open `https://<AdvertisedDNS>:7473`. The self-signed certificate triggers a browser warning that you must accept. When prompted for a connection URL, enter the Bolt URI printed by `uv run browse.py` or `uv run scripts/bolt-tunnel.py`. For the password, see [Retrieve the Password](#retrieve-the-password).
+The certificate SAN is the stack's `AdvertisedDNS`, so add `127.0.0.1 <AdvertisedDNS>` to your laptop's `/etc/hosts`. `browser-tunnel.py` prints the exact line. Then open `https://<AdvertisedDNS>:7473`. The self-signed certificate triggers a browser warning that you must accept. When prompted for a connection URL, enter the Bolt URI printed by `uv run scripts/browse.py` or `uv run scripts/bolt-tunnel.py`. For the password, see [Retrieve the Password](#retrieve-the-password).
 
 > **Note:** Connection strings inside Neo4j Browser show the internal NLB DNS hostname, or `AdvertisedDNS` when the stack creates its private hosted zone. Substitute `localhost` when connecting through the tunnel.
 
@@ -221,8 +221,8 @@ uv run run-cypher <stack-name> "MATCH (n) RETURN count(n) AS total"
 
 ```bash
 cd neo4j-ee
-./test-observability.sh                  # most recent deployment
-./test-observability.sh <stack-name>     # specific deployment
+./scripts/test-observability.sh                  # most recent deployment
+./scripts/test-observability.sh <stack-name>     # specific deployment
 ```
 
 | Step | What it checks | Typical duration |

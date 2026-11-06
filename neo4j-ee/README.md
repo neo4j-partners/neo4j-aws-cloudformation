@@ -161,10 +161,10 @@ python build.py --verify
 | `templates/build.py` | Assembles the three templates from `templates/src/` partials |
 | `deploy.py` | Deploy helper: creates stack, waits, writes outputs to `.deploy/`. See [Local Testing guide](docs/guides/local-testing.md) |
 | `teardown.sh` | Deletes the stack, SSM parameter, copied AMI, secrets, and deployment file |
-| `browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
-| `bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
-| `browse.py` | Opens the Browser and Bolt tunnels and prints the URL, the username and the password secret ARN |
-| `test-observability.sh` | Observability checks: CloudWatch, logs, flow logs, alarm, CloudTrail |
+| `scripts/browser-tunnel.sh` | SSM tunnel to Neo4j Browser on 7473 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `scripts/bolt-tunnel.sh` | SSM tunnel to Bolt on 7687 through the bastion. `AWS_PROFILE` defaults to `marketplace` |
+| `scripts/browse.py` | Opens the Browser and Bolt tunnels and prints the URL, the username and the password secret ARN |
+| `scripts/test-observability.sh` | Observability checks: CloudWatch, logs, flow logs, alarm, CloudTrail |
 | `validate-private/` | Operator tooling for Private and ExistingVpc stacks |
 | `marketplace/` | AMI build and test scripts |
 | `marketplace/create-ami.sh` | Builds AMI, writes ID to `marketplace/ami-id.txt` |
