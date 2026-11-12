@@ -25,7 +25,7 @@ password=$(aws secretsmanager get-secret-value \
   --query SecretString --output text \
   --region "${region}")
 appPassword=$(aws secretsmanager get-secret-value \
-  --secret-id "neo4j/${stackName}/app-password" \
+  --secret-id "neo4j-${stackName}-app-password" \
   --query SecretString --output text \
   --region "${region}")
 

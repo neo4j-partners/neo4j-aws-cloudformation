@@ -48,13 +48,18 @@ checks over SSM, reports pass/fail, and terminates the instance on exit.
 
 After the AMI passes testing:
 
-1. Upload the three EE templates to the Marketplace S3 bucket in `us-east-1`:
+1. Upload the three EE templates and one architecture diagram per template to
+   an S3 bucket in `us-east-1` that the Marketplace seller account owns.
+   AWS Marketplace copies them to its own buckets at submission.
 
 ```
-s3://marketplace-neo4j/neo4j-private.template.yaml
-s3://marketplace-neo4j/neo4j-public.template.yaml
-s3://marketplace-neo4j/neo4j-private-existing-vpc.template.yaml
+s3://<bucket>/neo4j-private.template.yaml
+s3://<bucket>/neo4j-public.template.yaml
+s3://<bucket>/neo4j-private-existing-vpc.template.yaml
 ```
+
+   Each diagram must be 1100x700 pixels and show only what its template
+   deploys. The Private diagram is `marketplace/neo4j-private-architecture.png`.
 
 2. Open the [AWS Marketplace Seller Portal](https://aws.amazon.com/marketplace/management/) and navigate to:
    **Products > Server > Request changes > Update versions > Add version**
@@ -63,7 +68,7 @@ s3://marketplace-neo4j/neo4j-private-existing-vpc.template.yaml
    - **AMI ID:** the ID from `marketplace/ami-id.txt`
    - **IAM access role ARN:** `arn:aws:iam::385155106615:role/aws_marketplace_ami_ingestion`
    - **CloudFormation template links:** the three S3 URLs from step 1
-   - **Architecture diagram:** `https://marketplace-neo4j.s3.us-east-1.amazonaws.com/arch-ee.png`
+   - **Architecture diagrams:** the S3 URL of each template's diagram from step 1
 
 4. Submit for scanning. AWS will validate the AMI against Marketplace security
    requirements. Once approved, publish the new version.

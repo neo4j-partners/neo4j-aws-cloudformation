@@ -2,7 +2,7 @@
 
 This run book changes the password of the `neo4j_app` user on a running Private or Existing VPC stack. It needs no template change and no node replacement.
 
-The password lives in two places. One is the secret `neo4j/<stack-name>/app-password`. The other is the Neo4j `system` database. The steps below keep the two in step:
+The password lives in two places. One is the secret `neo4j-<stack-name>-app-password`. The other is the Neo4j `system` database. The steps below keep the two in step:
 
 1. [Store the new password](#store-the-new-password) as a pending version of the secret.
 2. [Change the password in Neo4j](#change-the-password-in-neo4j).
@@ -66,7 +66,7 @@ Write the two node scripts. They hold no secrets:
 cat > rotate.tmpl.json <<'EOF'
 {"commands": [
   "admin=$(aws secretsmanager get-secret-value --secret-id neo4j/@STACK@/password --query SecretString --output text --region @REGION@)",
-  "pw=$(aws secretsmanager get-secret-value --secret-id neo4j/@STACK@/app-password --version-stage @STAGE@ --query SecretString --output text --region @REGION@)",
+  "pw=$(aws secretsmanager get-secret-value --secret-id neo4j-@STACK@-app-password --version-stage @STAGE@ --query SecretString --output text --region @REGION@)",
   "[[ \"$pw\" =~ ^[A-Za-z0-9]+$ ]] || { echo 'Password is not alphanumeric'; exit 1; }",
   "{ echo \":param {pw: '$pw'}\"; echo 'ALTER USER neo4j_app SET PASSWORD $pw CHANGE NOT REQUIRED;'; } | NEO4J_USERNAME=neo4j NEO4J_PASSWORD=\"$admin\" cypher-shell -a bolt+ssc://localhost:7687 -d system --format plain"
 ]}
@@ -74,7 +74,7 @@ EOF
 
 cat > login.tmpl.json <<'EOF'
 {"commands": [
-  "pw=$(aws secretsmanager get-secret-value --secret-id neo4j/@STACK@/app-password --version-stage @STAGE@ --query SecretString --output text --region @REGION@)",
+  "pw=$(aws secretsmanager get-secret-value --secret-id neo4j-@STACK@-app-password --version-stage @STAGE@ --query SecretString --output text --region @REGION@)",
   "echo 'SHOW CURRENT USER YIELD user RETURN user;' | NEO4J_USERNAME=neo4j_app NEO4J_PASSWORD=\"$pw\" cypher-shell -a bolt+ssc://localhost:7687 -d system --format plain"
 ]}
 EOF
@@ -86,7 +86,7 @@ Record the current version, then generate the new password and store it as `AWSP
 
 ```bash
 CURRENT_ID=$(aws secretsmanager list-secret-version-ids --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --query "Versions[?contains(VersionStages, 'AWSCURRENT')].VersionId" \
   --output text)
 
@@ -95,7 +95,7 @@ PENDING_ID=$(aws secretsmanager get-random-password --region "$REGION" \
     --query RandomPassword --output text \
   | tr -d '\n' \
   | aws secretsmanager put-secret-value --region "$REGION" \
-    --secret-id "neo4j/$STACK/app-password" \
+    --secret-id "neo4j-$STACK-app-password" \
     --version-stages AWSPENDING \
     --secret-string file:///dev/stdin \
     --query VersionId --output text)
@@ -131,13 +131,13 @@ Move `AWSCURRENT` to the new version, then clear `AWSPENDING`. Secrets Manager g
 
 ```bash
 aws secretsmanager update-secret-version-stage --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --version-stage AWSCURRENT \
   --move-to-version-id "$PENDING_ID" \
   --remove-from-version-id "$CURRENT_ID"
 
 aws secretsmanager update-secret-version-stage --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --version-stage AWSPENDING \
   --remove-from-version-id "$PENDING_ID"
 ```
@@ -171,7 +171,7 @@ ID=$(run_on_nodes rotate.tmpl.json AWSCURRENT)
 node_results "$ID"
 
 aws secretsmanager update-secret-version-stage --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --version-stage AWSPENDING \
   --remove-from-version-id "$PENDING_ID"
 ```
@@ -183,7 +183,7 @@ ID=$(run_on_nodes rotate.tmpl.json AWSPREVIOUS)
 node_results "$ID"
 
 aws secretsmanager update-secret-version-stage --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --version-stage AWSCURRENT \
   --move-to-version-id "$CURRENT_ID" \
   --remove-from-version-id "$PENDING_ID"
@@ -195,7 +195,7 @@ If you lost the two IDs, list them with their stages:
 
 ```bash
 aws secretsmanager list-secret-version-ids --region "$REGION" \
-  --secret-id "neo4j/$STACK/app-password" \
+  --secret-id "neo4j-$STACK-app-password" \
   --query 'Versions[].[VersionId,VersionStages]'
 ```
 

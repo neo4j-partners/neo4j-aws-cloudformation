@@ -18,7 +18,8 @@
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub 'neo4j/${AWS::StackName}/app-password'
+      # No slashes: Hume vault references split the secret name on "/".
+      Name: !Sub 'neo4j-${AWS::StackName}-app-password'
       Description: !Sub 'Neo4j application user (neo4j_app) password for stack ${AWS::StackName}'
       # Alphanumeric only: the bootstrap passes it to Cypher as a quoted literal.
       GenerateSecretString:

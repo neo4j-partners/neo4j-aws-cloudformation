@@ -3181,7 +3181,7 @@ class SecurityReviewBatchBTests(unittest.TestCase):
                 self.assertEqual(secret.get("UpdateReplacePolicy"), "Retain")
                 props = secret["Properties"]
                 self.assertEqual(
-                    props["Name"], {"Fn::Sub": "neo4j/${AWS::StackName}/app-password"}
+                    props["Name"], {"Fn::Sub": "neo4j-${AWS::StackName}-app-password"}
                 )
                 self.assertEqual(props.get("KmsKeyId"), {"Ref": "Neo4jStackKey"})
                 self.assertNotIn("SecretString", props)
@@ -3220,7 +3220,7 @@ class SecurityReviewBatchBTests(unittest.TestCase):
         for name, doc in self.docs.items():
             with self.subTest(template=name):
                 ud = self._userdata_text(doc)
-                self.assertIn('--secret-id "neo4j/${stackName}/app-password"', ud)
+                self.assertIn('--secret-id "neo4j-${stackName}-app-password"', ud)
                 self.assertRegex(ud, r"export\b[^\n]*\bappPassword\b")
                 # rindex: comments earlier in the wrapper name both strings.
                 boot = ud.rindex("\n/opt/neo4j/bin/neo4j-bootstrap.sh")
