@@ -241,7 +241,7 @@ def check_ee_asg_configs(
     reporter: TestReporter,
     resource_map: dict[str, str],
 ) -> None:
-    """EE: verify each node ASG has min=max=desired=1 and HealthCheckType=ELB."""
+    """EE: verify each node ASG has min=max=desired=1 and HealthCheckType=EC2."""
     asg_client = session.client("autoscaling")
     for n in range(1, config.number_of_servers + 1):
         asg_logical_id = f"Neo4jNode{n}ASG"
@@ -265,10 +265,14 @@ def check_ee_asg_configs(
                     issues.append(f"MaxSize={asg['MaxSize']}")
                 if asg["DesiredCapacity"] != 1:
                     issues.append(f"DesiredCapacity={asg['DesiredCapacity']}")
-                if asg["HealthCheckType"] != "ELB":
+                # The node ASGs use HealthCheckType EC2 on purpose. The NLB
+                # health check governs routing only and never replaces an
+                # instance. See neo4j-ee/templates/src/networking-public.yaml
+                # and networking-private.yaml (target group comments).
+                if asg["HealthCheckType"] != "EC2":
                     issues.append(f"HealthCheckType={asg['HealthCheckType']}")
                 if not issues:
-                    ctx.pass_(f"{asg_name}: min=1, max=1, desired=1, health_check=ELB")
+                    ctx.pass_(f"{asg_name}: min=1, max=1, desired=1, health_check=EC2")
                 else:
                     ctx.fail(f"{asg_name} unexpected config: {', '.join(issues)}")
             except Exception as exc:
