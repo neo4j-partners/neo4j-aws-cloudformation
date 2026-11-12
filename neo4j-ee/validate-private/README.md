@@ -47,7 +47,7 @@ Operator helper scripts. Run Python helpers with `uv run <script>.py`; they use 
 - **AWS CLI v2** and **Session Manager Plugin** (`brew install --cask session-manager-plugin`). The Python commands and the tunnel scripts open SSM port-forward sessions with them.
 - **cypher-shell** for `admin-shell` (`brew install cypher-shell`)
 - **uv** for the Python commands (`brew install uv`)
-- **IAM:** Your AWS identity needs `ssm:StartSession` on the bastion with the `AWS-StartPortForwardingSessionToRemoteHost` document. It needs `secretsmanager:GetSecretValue` on `neo4j/<stack>/password` and `kms:Decrypt` on the stack key. The release suite also reads `neo4j/<stack>/app-password` and the `/neo4j-ee/<stack>/app-username` parameter. Every command that connects to Neo4j needs `ssm:GetParameter` on `/neo4j-ee/<stack>/bolt-url`. On a `neo4j+s` stack it also needs `ssm:GetParameter` on `/neo4j-ee/<stack>/ca-pem`, and the release suite reads `ca-pem` on every stack.
+- **IAM:** Your AWS identity needs `ssm:StartSession` on the bastion with the `AWS-StartPortForwardingSessionToRemoteHost` document. It needs `secretsmanager:GetSecretValue` on `neo4j/<stack>/password` and `kms:Decrypt` on the stack key. The release suite also reads `neo4j-<stack>-app-password` and the `/neo4j-ee/<stack>/app-username` parameter. Every command that connects to Neo4j needs `ssm:GetParameter` on `/neo4j-ee/<stack>/bolt-url`. On a `neo4j+s` stack it also needs `ssm:GetParameter` on `/neo4j-ee/<stack>/ca-pem`, and the release suite reads `ca-pem` on every stack.
 - A deployed Private-mode stack with its output file in `../.deploy/`
 
 Run `uv run preflight` first to confirm the stack, the bastion and your local tools are ready before using the other tools.

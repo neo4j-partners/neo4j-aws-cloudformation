@@ -146,7 +146,7 @@ password=$(aws secretsmanager get-secret-value \
   --region "${region}")
 ```
 
-The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARNs. The templates create two: `neo4j/<stack>/password` for the admin user and `neo4j/<stack>/app-password` for the application user. The role also needs `kms:Decrypt` on the stack KMS key that encrypts the secrets.
+The instance IAM role must have `secretsmanager:GetSecretValue` scoped to the password secret ARNs. The templates create two: `neo4j/<stack>/password` for the admin user and `neo4j-<stack>-app-password` for the application user. The role also needs `kms:Decrypt` on the stack KMS key that encrypts the secrets.
 
 ### Parameter grouping metadata
 

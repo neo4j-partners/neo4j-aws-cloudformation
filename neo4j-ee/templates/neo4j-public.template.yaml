@@ -1620,6 +1620,9 @@ Resources:
                 dbms.security.http_auth_allowlist=/,/browser.*,/bloom.*
                 dbms.security.procedures.allowlist=apoc.*,gds.*,bloom.*
                 dbms.databases.seed_from_uri_providers=CloudSeedProvider,ServerSeedProvider
+                # dbms.usage_report.enabled=false turns off the usage report that Neo4j sends
+                # to udc.neo4j.com. This file does not set it. A deployment without internet
+                # access can set it so the nodes do not try to reach udc.neo4j.com.
     Properties:
       LaunchTemplateData:
         ImageId: !Ref ImageId
@@ -1733,7 +1736,7 @@ Resources:
                   --query SecretString --output text \
                   --region "${region}")
                 appPassword=$(aws secretsmanager get-secret-value \
-                  --secret-id "neo4j/${stackName}/app-password" \
+                  --secret-id "neo4j-${stackName}-app-password" \
                   --query SecretString --output text \
                   --region "${region}")
 
@@ -2058,7 +2061,8 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub 'neo4j/${AWS::StackName}/app-password'
+      # No slashes: Hume vault references split the secret name on "/".
+      Name: !Sub 'neo4j-${AWS::StackName}-app-password'
       Description: !Sub 'Neo4j application user (neo4j_app) password for stack ${AWS::StackName}'
       # Alphanumeric only: the bootstrap passes it to Cypher as a quoted literal.
       GenerateSecretString:

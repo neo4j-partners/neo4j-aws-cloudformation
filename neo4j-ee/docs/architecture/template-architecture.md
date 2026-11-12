@@ -488,7 +488,7 @@ therefore ends with replacing one node.
 ### AD-6: Applications connect as a non-superuser, and no password reaches argv
 
 **Each stack has an application user.** The stack generates a second secret,
-`neo4j/<stack>/app-password`. It is 32 alphanumeric characters, encrypted with
+`neo4j-<stack>-app-password`. It is 32 alphanumeric characters, encrypted with
 `Neo4jStackKey` and retained like the admin secret. The stack publishes its ARN
 as `app-password-secret-arn` and the username as `app-username`. The user is
 `neo4j_app` and holds the built-in `architect` role. Applications use it. The

@@ -51,7 +51,7 @@ Lambda Function URL  (HTTPS, AWS_IAM auth)
     |
     +-- Lambda  (private subnet, Neo4j VPC)
            |  NEO4J_SSM_NLB_PATH       -> /neo4j-ee/<stack>/nlb-dns
-           |  NEO4J_SECRET_ARN         -> neo4j/<stack>/app-password
+           |  NEO4J_SECRET_ARN         -> neo4j-<stack>-app-password
            |  NEO4J_USERNAME           -> neo4j_app
            |  NEO4J_NUMBER_OF_SERVERS  -> 1 or 3
            |  NEO4J_BOLT_TLS           -> true when the stack sets AdvertisedDNS (TLS at the NLB)
