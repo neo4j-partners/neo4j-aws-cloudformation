@@ -359,6 +359,26 @@ def detect_public_ip() -> str | None:
         return None
 
 
+def lookup_vpc_cidr(vpc_id: str, region: str, client: Any = None) -> str:
+    """Return the primary CIDR of an existing VPC, for the ExistingVpc AllowedCIDR.
+
+    The NLB security group admits Bolt and Browser only from AllowedCIDR, and the
+    bastion reaches the NLB from inside the VPC. A CIDR that does not cover the
+    bastion's subnet creates a healthy stack that no operator tool can reach.
+    """
+    if client is None:
+        client = boto3.client("ec2", region_name=region)
+    try:
+        vpcs = client.describe_vpcs(VpcIds=[vpc_id])["Vpcs"]
+    except (BotoCoreError, ClientError) as exc:
+        sys.exit(
+            f"ERROR: could not look up the CIDR of {vpc_id} in {region} "
+            f"({type(exc).__name__}). Pass --region for the VPC's region, "
+            "or pass --allowed-cidr explicitly."
+        )
+    return vpcs[0]["CidrBlock"]
+
+
 @dataclass(frozen=True)
 class TlsPlan:
     """Resolved TLS/DNS decision for one deploy, derived without AWS calls.
@@ -744,17 +764,19 @@ def main() -> None:
 
     instance_type = args.instance_type
 
+    region = args.region_override or random.choice(SUPPORTED_REGIONS)
+
     if args.allowed_cidr:
         allowed_cidr = args.allowed_cidr
-    elif args.mode in ("Private", "ExistingVpc"):
+    elif args.mode == "ExistingVpc":
+        allowed_cidr = lookup_vpc_cidr(args.vpc_id, region)
+    elif args.mode == "Private":
         allowed_cidr = "10.0.0.0/16"
     else:
         ip = detect_public_ip()
         if not ip:
             sys.exit("ERROR: Could not detect public IP. Pass --allowed-cidr explicitly.")
         allowed_cidr = f"{ip}/32"
-
-    region = args.region_override or random.choice(SUPPORTED_REGIONS)
     ts = int(time.time())
     stack_name = f"test-ee-{ts}"
     password = generate_password()

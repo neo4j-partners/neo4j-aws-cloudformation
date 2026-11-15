@@ -11,7 +11,7 @@ Applies to any running ExistingVpc stack, whether deployed from the Marketplace 
 - One subnet for a single-instance deployment; three subnets in different AZs for a three-node cluster
 - No pre-existing VPC interface endpoints for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, or `acm` when `CreateVpcEndpoints=true`. Creating a duplicate endpoint fails the deployment.
 
-**`AllowedCIDR`** defaults to `10.0.0.0/16`. Pass `--allowed-cidr` explicitly if your VPC uses a different CIDR.
+**`AllowedCIDR`** is required and has no template default. It must include the bastion's subnet and every client subnet, so enter your VPC CIDR. The NLB security group admits Bolt and Browser only from `AllowedCIDR`. A value that misses the bastion's subnet still creates a healthy stack, but preflight fails with `Unable to retrieve routing information`. When you omit `--allowed-cidr`, `deploy.py` uses the VPC's primary CIDR. Pass `--allowed-cidr` if your subnets sit in a secondary CIDR.
 
 **Plugin licenses (optional)**
 

@@ -51,6 +51,8 @@ cd neo4j-ee
   --existing-endpoint-sg-id sg-0123456789abcdef0
 ```
 
+Without `--allowed-cidr`, `deploy.py` sets `AllowedCIDR` to the VPC's primary CIDR. Pass `--allowed-cidr` when your subnets sit in a secondary CIDR. `AllowedCIDR` must cover the bastion's subnet, because the NLB security group admits Bolt and Browser only from that range. If it misses the bastion, the stack still creates, but preflight fails with `Unable to retrieve routing information`.
+
 The deploy script writes outputs to `.deploy/<stack-name>.txt`. Stack creation takes 10-20 minutes (includes AMI copy if the region differs from the source AMI region; pin `--region` to the source region to skip the copy).
 
 For a deeper local check after template edits, run:
