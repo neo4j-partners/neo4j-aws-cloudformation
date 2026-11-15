@@ -5,17 +5,26 @@
     Type: String
     Description: >-
       First private subnet ID (must be in a different AZ from Subnet 2 and 3).
+      The stack creates its data volumes in the first three Availability
+      Zones that Fn::GetAZs returns for the Region, normally the first three
+      in alphabetical order. A single node needs this subnet in the first of
+      those zones. A cluster needs one subnet in each of the three. A node
+      attaches only a volume in its own zone.
   PrivateRouteTable1Id:
     Type: String
     Description: Route table ID associated with PrivateSubnet1Id.
   PrivateSubnet2Id:
     Type: String
     Default: ''
-    Description: Second private subnet ID; required when NumberOfServers is 3.
+    Description: >-
+      Second private subnet ID; required when NumberOfServers is 3. See
+      PrivateSubnet1Id for the Availability Zone requirement.
   PrivateSubnet3Id:
     Type: String
     Default: ''
-    Description: Third private subnet ID; required when NumberOfServers is 3.
+    Description: >-
+      Third private subnet ID; required when NumberOfServers is 3. See
+      PrivateSubnet1Id for the Availability Zone requirement.
   CreateVpcEndpoints:
     Type: String
     AllowedValues:

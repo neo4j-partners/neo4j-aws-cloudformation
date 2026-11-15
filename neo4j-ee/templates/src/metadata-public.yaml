@@ -23,7 +23,6 @@
       - Label:
           default: "Network"
         Parameters:
-          - AvailabilityZones
           - NlbDeletionProtection
       - Label:
           default: "Optional Public TLS"
@@ -96,7 +95,5 @@
         default: OIDC Group Role Mapping
       Node1SnapshotId:
         default: Node 1 Snapshot ID
-      AvailabilityZones:
-        default: Availability Zones
       NlbDeletionProtection:
         default: NLB Deletion Protection

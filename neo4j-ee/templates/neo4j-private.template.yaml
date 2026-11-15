@@ -28,7 +28,6 @@ Metadata:
       - Label:
           default: "Network"
         Parameters:
-          - AvailabilityZones
           - NlbDeletionProtection
           - EnableInternetEgress
       - Label:
@@ -114,8 +113,6 @@ Metadata:
         default: Node 1 Snapshot ID
       BoltTlsScheme:
         default: Bolt TLS Scheme
-      AvailabilityZones:
-        default: Availability Zones
       NlbDeletionProtection:
         default: NLB Deletion Protection
       EnableInternetEgress:
@@ -319,14 +316,6 @@ Parameters:
       Existing Route 53 private hosted zone ID to receive the AdvertisedDNS
       alias record. Leave blank to let this stack create a private hosted zone
       named PrivateDnsZoneName.
-  AvailabilityZones:
-    Description: >-
-      Optional. Comma-separated Availability Zones for the subnets, in node
-      order. Every deployment, including a single node, needs exactly three
-      zones. A shorter list fails stack creation with an Fn::Select template
-      error. Leave blank to use the first three zones that Fn::GetAZs returns.
-    Type: CommaDelimitedList
-    Default: ''
   EnableInternetEgress:
     Type: String
     AllowedValues:
@@ -512,7 +501,6 @@ Conditions:
   GdsEnabledAndLicensed: !And
     - !Equals [!Ref InstallGDS, 'true']
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
-  HasAvailabilityZones: !Not [!Equals [!Join ['', !Ref AvailabilityZones], '']]
   OidcEnabled: !Not [!Equals [!Ref OidcIssuerUri, '']]
   InternetEgressEnabled: !Equals [!Ref EnableInternetEgress, 'true']
   InternetEgressEnabledAndCluster: !And
@@ -2157,10 +2145,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [0, !Ref AvailabilityZones]
-        - !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2176,10 +2161,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.2.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [1, !Ref AvailabilityZones]
-        - !Select [1, !GetAZs '']
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2195,10 +2177,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [2, !Ref AvailabilityZones]
-        - !Select [2, !GetAZs '']
+      AvailabilityZone: !Select [2, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2217,10 +2196,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.10.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [0, !Ref AvailabilityZones]
-        - !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2236,10 +2212,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.11.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [1, !Ref AvailabilityZones]
-        - !Select [1, !GetAZs '']
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -2255,10 +2228,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.12.0/24
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [2, !Ref AvailabilityZones]
-        - !Select [2, !GetAZs '']
+      AvailabilityZone: !Select [2, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'

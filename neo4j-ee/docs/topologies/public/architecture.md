@@ -15,7 +15,7 @@ Single-instance:
 - Internet-facing NLB in that subnet
 - One EC2 instance with a public IP
 
-The `AvailabilityZones` parameter is optional. Every deployment, including a single node, needs exactly three zones in it. A shorter list fails stack creation with an `Fn::Select` template error. Leave it blank to use the first three zones that `Fn::GetAZs` returns.
+The subnets use the first three Availability Zones that `Fn::GetAZs` returns for the Region. The template takes no Availability Zone parameter.
 
 ## AWS Resources Created
 

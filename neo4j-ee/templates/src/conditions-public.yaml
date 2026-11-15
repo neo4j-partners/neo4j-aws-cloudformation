@@ -17,4 +17,3 @@
   GdsEnabledAndLicensed: !And
     - !Equals [!Ref InstallGDS, 'true']
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
-  HasAvailabilityZones: !Not [!Equals [!Join ['', !Ref AvailabilityZones], '']]

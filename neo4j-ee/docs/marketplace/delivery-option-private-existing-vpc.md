@@ -28,17 +28,18 @@ Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets 
 
 ## Usage Instructions
 
-Paste this text into the delivery option's Usage instructions field. It is 3,538 characters, under the 4,000 limit.
+Paste this text into the delivery option's Usage instructions field. It is 3,748 characters, under the 4,000 limit.
 
 ```text
 How to deploy
 
 1. Choose a Password of 12 or more letters and numbers.
-2. Supply VpcId, PrivateSubnet1Id and PrivateRouteTable1Id. Three nodes also need PrivateSubnet2Id and PrivateSubnet3Id in other Availability Zones. Set AllowedCIDR to your VPC CIDR.
-3. TLS is required. Supply CertificateArn, an ACM certificate in this Region, and AdvertisedDNS, the name on it.
-4. If your VPC already has the nine AWS endpoints, set CreateVpcEndpoints to false and pass their security group in ExistingEndpointSgId.
-5. InstallBloom and InstallGDS default to false. To install one, pass its license secret ARN from Secrets Manager.
-6. Run the Neo4jSSMHTTPSCommand output with the Session Manager plugin, map AdvertisedDNS to 127.0.0.1, and open https://<AdvertisedDNS>:7473. Neo4jPasswordRetrieveCommand prints the password.
+2. Supply VpcId, PrivateSubnet1Id and PrivateRouteTable1Id. Three nodes also need PrivateSubnet2Id and PrivateSubnet3Id. Set AllowedCIDR to your VPC CIDR.
+3. Place the subnets in the Region's first three Availability Zones, normally the ones ending in a, b and c. The data volumes are created there. One node needs PrivateSubnet1Id in the first zone. Three nodes need one subnet in each zone.
+4. TLS is required. Supply CertificateArn, an ACM certificate in this Region, and AdvertisedDNS, the name on it.
+5. If your VPC already has the nine AWS endpoints, set CreateVpcEndpoints to false and pass their security group in ExistingEndpointSgId.
+6. InstallBloom and InstallGDS default to false. To install one, pass its license secret ARN from Secrets Manager.
+7. Run the Neo4jSSMHTTPSCommand output with the Session Manager plugin, map AdvertisedDNS to 127.0.0.1, and open https://<AdvertisedDNS>:7473. Neo4jPasswordRetrieveCommand prints the password.
 
 Deleting the stack keeps the data volumes, secrets, KMS key and log bucket.
 
