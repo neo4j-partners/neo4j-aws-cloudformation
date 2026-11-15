@@ -40,6 +40,13 @@ Ordered procedures with a rollback or teardown.
 - [Single Sign-On (OIDC) Reference](reference/oidc-sign-in.md): settings, token design, group mapping and sign-in troubleshooting.
 - [Marketplace Requirements](reference/marketplace.md): the CloudFormation and network requirements AWS Marketplace enforces.
 
+## Marketplace
+
+Seller Portal values for the next listing version.
+
+- [Marketplace Listing](marketplace/marketplace-listing.md): the version, AMI, Region and submission plan for 2026.10.1.
+- Delivery options: [Public](marketplace/delivery-option-public.md), [Private](marketplace/delivery-option-private.md) and [Private Existing VPC](marketplace/delivery-option-private-existing-vpc.md). Each file holds the portal fields and the usage instructions.
+
 ## Architecture
 
 - [Template Architecture](architecture/template-architecture.md): the AMI, Template, UserData and Bootstrap contract. Read it before changing a template.
@@ -47,6 +54,6 @@ Ordered procedures with a rollback or teardown.
 
 ## Conventions
 
-- Files use lowercase kebab-case. A directory holds one kind of document: `guides/`, `run-books/`, `reference/`, `architecture/`, `topologies/`.
+- Files use lowercase kebab-case. A directory holds one kind of document: `guides/`, `run-books/`, `reference/`, `architecture/`, `topologies/`, `marketplace/`.
 - Each document starts with an `# Neo4j EE: ...` title.
 - Link between documents with relative paths. After a move or rename, check that every link and anchor still resolves.

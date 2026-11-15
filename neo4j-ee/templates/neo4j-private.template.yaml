@@ -3530,10 +3530,13 @@ Outputs:
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
   Neo4jBoltUrl:
     Description: Bolt connection URL with the TLS scheme matching the deployed cert mode. Host matches the ACM cert SAN.
-    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+    # Same expression as Neo4jConfigBoltUrlParameter. Do not GetAtt the SSM
+    # parameter here: one missed SSM read at output time fails the whole stack.
+    Value: !Sub '${BoltTlsScheme}://${AdvertisedDNS}:7687'
   Neo4jHttpsUrl:
     Description: Browser (HTTPS) URL. Host matches the ACM cert SAN.
-    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
+    # Same expression as Neo4jConfigHttpsUrlParameter. See Neo4jBoltUrl.
+    Value: !Sub 'https://${AdvertisedDNS}:7473'
   Neo4jPrivateDnsHostedZoneId:
     Condition: CreatePrivateDns
     Description: Route 53 private hosted zone ID containing AdvertisedDNS.
