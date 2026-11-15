@@ -6,21 +6,27 @@ Internal instructions for Neo4j employees managing the EE Marketplace listing.
 
 | Script | Purpose |
 |---|---|
-| `create-ami.sh` | Builds the base AMI: resolves the latest AL2023 AMI, patches OS, installs static deployment tooling, hardens SSH, creates AMI, writes ID to `ami-id.txt` |
-| `test-ami.sh` | Verifies the AMI via SSM Run Command (no SSH required): checks SSH hardening, OS identity, and that the eMudhra roots are absent from the system, Java and AWS CLI trust stores |
+| `create-ami.sh` | Builds the base AMI: resolves the latest AL2023 AMI, patches OS, installs static deployment tooling, installs Neo4j Enterprise and `cypher-shell` at the pinned `NEO4J_VERSION`, hardens SSH, creates and tags the AMI, writes ID to `ami-id.txt` |
+| `test-ami.sh` | Verifies the AMI via SSM Run Command (no SSH required): checks SSH hardening, OS identity, the pre-baked tools and cfn helpers, the pinned Neo4j packages, that Neo4j was never configured, enabled or started, and that the eMudhra roots are absent from the system, Java and AWS CLI trust stores |
 
 ## Updating the AMI
 
 Run from the `neo4j-ee/` directory against the `marketplace` AWS profile:
 
 ```bash
-AWS_PROFILE=marketplace ./marketplace/create-ami.sh
+AWS_PROFILE=marketplace NEO4J_VERSION=2026.10.1 ./marketplace/create-ami.sh
 ```
 
+`NEO4J_VERSION` is required in marketplace mode. It must be a full version
+such as `2026.10.1`, and the script exits without it.
+
 The script resolves the latest Amazon Linux 2023 AMI from SSM, patches it with
-`dnf update -y`, installs static deployment tooling, hardens SSH, creates the
-AMI in `us-east-1`, enforces IMDSv2, and writes the new AMI ID to
-`marketplace/ami-id.txt`.
+`dnf update -y`, installs static deployment tooling, installs
+`neo4j-enterprise` and `cypher-shell` at `NEO4J_VERSION`, hardens SSH, creates
+the AMI in `us-east-1`, enforces IMDSv2, and writes the new AMI ID to
+`marketplace/ami-id.txt`. It leaves the Neo4j yum repo and the `neo4j` service
+disabled, and it never starts Neo4j. It records the version in the AMI's
+`Neo4jVersion` tag.
 
 For default-account iteration before Marketplace submission, just run the
 script against any non-Marketplace account:
@@ -28,6 +34,9 @@ script against any non-Marketplace account:
 ```bash
 ./marketplace/create-ami.sh
 ```
+
+Without `NEO4J_VERSION`, an iteration build installs the newest version in
+`yum.neo4j.com/stable/latest`.
 
 The build mode defaults from the caller's account: `marketplace` only in
 account `385155106615`, `iteration` everywhere else. The single guard is that
@@ -42,7 +51,8 @@ AWS_PROFILE=marketplace ./marketplace/test-ami.sh
 ```
 
 The test script launches a temporary instance from the AMI, runs verification
-checks over SSM, reports pass/fail, and terminates the instance on exit.
+checks over SSM, reports pass/fail, and terminates the instance on exit. It
+reads the expected Neo4j version from the AMI's `Neo4jVersion` tag.
 
 ## Submitting a New Version to Marketplace
 
@@ -59,7 +69,9 @@ s3://<bucket>/neo4j-private-existing-vpc.template.yaml
 ```
 
    Each diagram must be 1100x700 pixels and show only what its template
-   deploys. The Private diagram is `marketplace/neo4j-private-architecture.png`.
+   deploys. The diagrams are `marketplace/neo4j-private-architecture.png`,
+   `marketplace/neo4j-public-architecture.png` and
+   `marketplace/neo4j-private-existing-vpc-architecture.png`.
 
 2. Open the [AWS Marketplace Seller Portal](https://aws.amazon.com/marketplace/management/) and navigate to:
    **Products > Server > Request changes > Update versions > Add version**
