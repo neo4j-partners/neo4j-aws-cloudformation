@@ -8,9 +8,9 @@ This file holds the Seller Portal values for the Public delivery option in versi
 |---|---|
 | Delivery option title | Neo4j Enterprise Edition, Public |
 | Recommended instance type | `r8i.xlarge` |
-| CloudFormation template link | Printed by `publish-assets.py`. The key is `2026.10.1/neo4j-public.template.yaml` |
+| CloudFormation template link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-public.template.yaml` |
 | AMI parameter name | `ImageId` |
-| Architecture diagram link | Printed by `publish-assets.py`. The key is `2026.10.1/neo4j-public-architecture.png` |
+| Architecture diagram link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-public-architecture.png` |
 | Source template | `templates/neo4j-public.template.yaml` |
 | Source diagram | `marketplace/neo4j-public-architecture.png`, 1100x700 |
 

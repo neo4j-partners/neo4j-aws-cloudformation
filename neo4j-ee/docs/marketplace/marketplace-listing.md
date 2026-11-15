@@ -182,13 +182,19 @@ It then confirms the caller is in account `385155106615` and asks before it chan
 3. **Uploads:** It uploads the three templates and three diagrams under the `2026.10.1/` prefix. It fetches each URL without credentials and stops unless it returns 200.
 4. **Output:** It prints the version title, the role ARN and, for each delivery option, the template link and diagram link.
 
-The release owner runs the script by hand. It has not been run. No public EE assets bucket exists yet. The `neo4j-marketplace` bucket is empty and has no policy. The `neo4j-ee-cfn-385155106615-us-east-1-*` bucket is a private deploy staging bucket.
+The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-marketplace-assets-385155106615` and uploaded the six assets under `2026.10.1/`. Each URL returned 200 without credentials. Each delivery option file holds its template link and diagram link. The script printed these version values:
+
+| Field | Value |
+|---|---|
+| Version title | `2026.10.1` |
+| IAM access role ARN | `arn:aws:iam::385155106615:role/aws_marketplace_ami_ingestion` |
+| AMI parameter name | `ImageId` |
 
 ## Submission Steps
 
 1. Run `./marketplace/test-ami.sh` against `ami-07c29b53e376c4184` and confirm every check passes. This step passed on 2026-11-14.
 2. Run the release gate for each template. See [validate-private/README.md](../../validate-private/README.md) for the Private gate. All three passed on the fixed templates on 2026-11-14.
-3. The release owner runs `publish-assets.py` and keeps its output.
+3. The release owner runs `publish-assets.py` and keeps its output. This step ran on 2026-11-14.
 4. In the Seller Portal, open the product and choose **Request changes**, then **Test "Add version"**. Enter the version and AMI fields from this document. Wait for the scan result.
 5. Fix any scan finding, then choose **Request changes**, then **Add new version** with the same values.
 6. Add the three delivery options in that same request. Copy each field from its delivery option file and the script output.

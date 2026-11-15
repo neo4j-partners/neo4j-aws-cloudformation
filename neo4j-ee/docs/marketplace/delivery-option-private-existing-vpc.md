@@ -8,9 +8,9 @@ This file holds the Seller Portal values for the Private Existing VPC delivery o
 |---|---|
 | Delivery option title | Neo4j Enterprise Edition, Private Existing VPC |
 | Recommended instance type | `r8i.xlarge` |
-| CloudFormation template link | Printed by `publish-assets.py`. The key is `2026.10.1/neo4j-private-existing-vpc.template.yaml` |
+| CloudFormation template link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-private-existing-vpc.template.yaml` |
 | AMI parameter name | `ImageId` |
-| Architecture diagram link | Printed by `publish-assets.py`. The key is `2026.10.1/neo4j-private-existing-vpc-architecture.png` |
+| Architecture diagram link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-private-existing-vpc-architecture.png` |
 | Source template | `templates/neo4j-private-existing-vpc.template.yaml` |
 | Source diagram | `marketplace/neo4j-private-existing-vpc-architecture.png`, 1100x700 |
 
