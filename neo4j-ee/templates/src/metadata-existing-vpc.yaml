@@ -1,3 +1,135 @@
+  ExternalConnectivityDisclosure:
+    Description: >-
+      Every connection this product makes. The product downloads nothing on
+      deployment. All AWS API calls use the stack's own IAM roles and stay in
+      the buyer's account and Region. The nodes reach AWS through VPC
+      endpoints. The node security groups allow internet traffic only on
+      TCP 443 and only when OidcIssuerUri is set. Neo4j sends no graph data
+      outside the buyer's account. RuntimeConnections lists the Neo4j usage
+      report and the optional identity provider.
+    DeployTimeExternalDependencies: []
+    AWSServiceEndpoints:
+      - Endpoint: http://169.254.169.254
+        Note: Link-local address on the instance. It is not an external endpoint.
+        Caller: Node UserData in Neo4jLaunchTemplate, through curl
+        Purpose: >-
+          Reads an IMDSv2 session token, the instance id and the Availability
+          Zone. The AWS CLI and the agents get the instance role credentials
+          from the same address.
+        DataSent: None
+      - Endpoint: Regional AWS CloudFormation API
+        Caller: cfn-init and cfn-signal in the node UserData
+        Actions:
+          - cloudformation:DescribeStackResource
+          - cloudformation:SignalResource
+        Purpose: >-
+          Reads the bootstrap and the Neo4j configuration from the
+          Neo4jLaunchTemplate metadata, then signals the node's Auto Scaling
+          group.
+        Route: A cloudformation interface endpoint, created by the stack or already in the VPC
+        DataSent: The boot status and the instance id
+      - Endpoint: Regional Amazon EC2 API
+        Caller: Node UserData and bootstrap, through the AWS CLI
+        Actions:
+          - ec2:DescribeTags
+          - ec2:DescribeInstances
+          - ec2:DescribeVolumes
+          - ec2:AttachVolume
+        Purpose: >-
+          Reads the instance's stack tags, finds the private addresses of the
+          cluster members and attaches the node's retained data volume.
+        Route: An ec2 interface endpoint, created by the stack or already in the VPC
+        DataSent: The instance id and the data volume id
+      - Endpoint: Regional Amazon EC2 Auto Scaling API
+        Caller: Node bootstrap, through the AWS CLI
+        Actions:
+          - autoscaling:DescribeAutoScalingGroups
+        Purpose: Lists the stack's node groups to find the cluster members.
+        Route: An autoscaling interface endpoint, created by the stack or already in the VPC
+        DataSent: None
+      - Endpoint: Regional AWS Secrets Manager API
+        Caller: Node UserData and bootstrap, through the AWS CLI
+        Actions:
+          - secretsmanager:GetSecretValue
+        Purpose: >-
+          Reads the Neo4j admin and application passwords, and any Bloom or
+          GDS license secret. Secrets Manager decrypts them with the stack's
+          AWS KMS key.
+        Route: A secretsmanager interface endpoint, created by the stack or already in the VPC
+        DataSent: None
+      - Endpoint: Regional AWS Certificate Manager API
+        Caller: Node bootstrap, through the AWS CLI
+        Actions:
+          - acm:GetCertificate
+        Purpose: Reads the certificate chain of CertificateArn.
+        Route: An acm interface endpoint, created by the stack or already in the VPC
+        DataSent: None
+      - Endpoint: Regional AWS Systems Manager API
+        Caller: Node bootstrap, through the AWS CLI
+        Actions:
+          - ssm:PutParameter
+        Purpose: >-
+          Stores the CA certificate of the load balancer's certificate
+          under /neo4j-ee/<StackName>/ca-pem.
+        Route: An ssm interface endpoint, created by the stack or already in the VPC
+        DataSent: The public CA certificate
+      - Endpoint: Regional Amazon CloudWatch Logs API
+        Caller: The Amazon CloudWatch agent on each node
+        Purpose: Sends the logs to /neo4j/<StackName>/application.
+        Route: A logs interface endpoint, created by the stack or already in the VPC
+        DataSent: >-
+          The Neo4j debug and security logs and the cloud-init output log,
+          to CloudWatch Logs in the buyer's account
+      - Endpoint: Regional AWS Systems Manager APIs, including ssmmessages and ec2messages
+        Caller: The AWS Systems Manager agent on each node and on the bastion
+        Purpose: Provides Session Manager access.
+        Route: >-
+          The ssm, ssmmessages and ec2messages interface endpoints, created by
+          the stack or already in the VPC
+        DataSent: >-
+          Session Manager session data. Shell sessions are logged to
+          CloudWatch Logs in the buyer's account.
+      - Endpoint: Regional AWS CloudFormation API
+        Caller: cfn-signal in the Neo4jOperatorBastion UserData
+        Actions:
+          - cloudformation:SignalResource
+        Purpose: Signals that the bastion's Systems Manager agent runs.
+        Route: A cloudformation interface endpoint, created by the stack or already in the VPC
+        DataSent: The boot status
+      - Endpoint: Regional Amazon EC2 API
+        Caller: S3PrefixListFunction, during create and update
+        Actions:
+          - ec2:DescribePrefixLists
+        Purpose: Looks up the Region's S3 managed prefix list for the node egress rule.
+        Route: AWS Lambda, outside the VPC
+        DataSent: The prefix list name
+      - Endpoint: Pre-signed Amazon S3 address from AWS CloudFormation
+        Caller: S3PrefixListFunction, on stack create, update and delete
+        Purpose: Returns the custom resource result to CloudFormation.
+        DataSent: The custom resource status and the prefix list id
+      - Endpoint: Amazon Linux 2023 package repository in the stack's Region, on Amazon S3
+        Caller: The dnf metadata timer of Amazon Linux 2023
+        Purpose: Checks every 12 to 24 hours whether updates exist. It installs nothing.
+        Route: The VPC's own routes to same-Region Amazon S3
+        DataSent: None
+    RuntimeConnections:
+      - Endpoint: The other Neo4j nodes of the stack, on TCP 5000, 6000, 7000 and 7688
+        Caller: Neo4j
+        Purpose: Cluster discovery, Raft replication and server-side routing.
+        Route: The stack's VPC
+      - Endpoint: Amazon Time Sync Service at the link-local address 169.254.169.123
+        Caller: chrony on each node
+        Purpose: Keeps the clock in sync.
+      - Endpoint: udc.neo4j.com, over HTTPS
+        Caller: Neo4j
+        Purpose: >-
+          Sends the Neo4j usage report. It carries no graph data.
+          The node security groups allow this only when OidcIssuerUri is set.
+        Route: The VPC's own route to the internet
+      - Endpoint: The OpenID Connect provider set in OidcIssuerUri, over HTTPS
+        Caller: Neo4j
+        Purpose: Fetches the provider's discovery document and signing keys.
+        Route: The VPC's own route to the internet
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:

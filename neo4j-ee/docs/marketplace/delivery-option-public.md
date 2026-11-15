@@ -28,7 +28,7 @@ Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes in a new VPC with pub
 
 ## Usage Instructions
 
-Paste this text into the delivery option's Usage instructions field. It is 2,600 characters, under the 4,000 limit.
+Paste this text into the delivery option's Usage instructions field. It is 2,538 characters, under the 4,000 limit.
 
 ```text
 How to deploy
@@ -47,7 +47,7 @@ Connections this product makes
 
 On deployment: The product downloads nothing. The AMI carries Neo4j, APOC, Graph Data Science and Bloom.
 
-Inside the instance: The boot script reads a session token, the instance id and the Availability Zone from the EC2 instance metadata service at 169.254.169.254. The instance gets its role credentials from the same address. The clock syncs with the Amazon Time Sync Service at 169.254.169.123. Amazon Linux also uses the public time.aws.com pool.
+Inside the instance: The boot script reads a session token, the instance id and the Availability Zone from the EC2 instance metadata service at 169.254.169.254. The instance gets its role credentials from the same address. The clock syncs with the Amazon Time Sync Service at 169.254.169.123.
 
 Operating system: Every 12 to 24 hours, Amazon Linux 2023 asks the Amazon Linux repository in your Region whether updates exist. It installs nothing.
 
@@ -59,7 +59,7 @@ Run by AWS for the stack: CloudFormation creates the VPC, the load balancer, the
 
 Scope: These calls use the stack's own IAM roles and stay in your account and Region. The nodes reach the Regional AWS endpoints over the internet on port 443.
 
-Usage report: Neo4j sends a usage report to Neo4j at udc.neo4j.com.
+Usage report: Neo4j sends a usage report to udc.neo4j.com.
 
 Identity provider: When you set OidcIssuerUri, Neo4j fetches the provider's discovery document and signing keys over HTTPS.
 

@@ -353,8 +353,16 @@ _PRIVATE_SPEC = TemplateSpec(
         " operator bastion is reachable only through AWS Systems Manager"
         " Session Manager, with no SSH key and no inbound rules. The stack"
         " creates VPC endpoints for the AWS services the nodes call. Set"
-        " EnableInternetEgress to true to add NAT gateways for outbound"
-        " internet access."
+        " EnableInternetEgress to true to add NAT gateways."
+        " Nothing is downloaded on deployment. The AMI carries Neo4j and its"
+        " plugins. The boot script calls the EC2 instance metadata service at"
+        " the link-local address 169.254.169.254. It also calls AWS APIs"
+        " in the stack's own Region. The nodes reach the internet only when"
+        " OidcIssuerUri is set. Neo4j then fetches the identity provider's"
+        " signing keys over HTTPS. It also sends a usage report to"
+        " udc.neo4j.com."
+        " No graph data leaves the buyer's account. The"
+        " ExternalConnectivityDisclosure metadata lists every connection."
     ),
     metadata_partial="metadata-private.yaml",
     parameter_partials=(
@@ -396,6 +404,14 @@ _PUBLIC_SPEC = TemplateSpec(
         " Browser and Bolt traffic. The load balancer accepts traffic only from"
         " the AllowedCIDR range you supply. Set EnableTLS to true to serve"
         " Browser and Bolt over TLS."
+        " Nothing is downloaded on deployment. The AMI carries Neo4j and its"
+        " plugins. The boot script calls the EC2 instance metadata service at"
+        " the link-local address 169.254.169.254. It also calls AWS APIs"
+        " in the stack's own Region. Neo4j sends a usage report to"
+        " udc.neo4j.com. With OidcIssuerUri set, Neo4j fetches the identity"
+        " provider's signing keys over HTTPS. No graph data leaves the buyer's"
+        " account. The ExternalConnectivityDisclosure metadata lists every"
+        " connection."
     ),
     metadata_partial="metadata-public.yaml",
     parameter_partials=(
@@ -430,6 +446,15 @@ _EXISTING_VPC_SPEC = TemplateSpec(
         " By default the stack creates VPC interface endpoints for the AWS"
         " services the nodes call. Set CreateVpcEndpoints to false if your VPC"
         " already has them."
+        " Nothing is downloaded on deployment. The AMI carries Neo4j and its"
+        " plugins. The boot script calls the EC2 instance metadata service at"
+        " the link-local address 169.254.169.254. It also calls AWS APIs"
+        " in the stack's own Region. The nodes reach the internet only when"
+        " OidcIssuerUri is set. Neo4j then fetches the identity provider's"
+        " signing keys over HTTPS. It also sends a usage report to"
+        " udc.neo4j.com."
+        " No graph data leaves the buyer's account. The"
+        " ExternalConnectivityDisclosure metadata lists every connection."
     ),
     metadata_partial="metadata-existing-vpc.yaml",
     parameter_partials=(

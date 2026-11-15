@@ -28,7 +28,7 @@ Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets 
 
 ## Usage Instructions
 
-Paste this text into the delivery option's Usage instructions field. It is 3,748 characters, under the 4,000 limit.
+Paste this text into the delivery option's Usage instructions field. It is 3,687 characters, under the 4,000 limit.
 
 ```text
 How to deploy
@@ -49,7 +49,7 @@ Connections this product makes
 
 On deployment: The product downloads nothing. The AMI carries Neo4j, APOC, Graph Data Science and Bloom.
 
-Inside the instance: The boot script reads a session token, the instance id and the Availability Zone from the EC2 instance metadata service at 169.254.169.254. The instance gets its role credentials from the same address. The clock syncs with the Amazon Time Sync Service at 169.254.169.123. Amazon Linux also tries the public time.aws.com pool, which the nodes reach only with internet access.
+Inside the instance: The boot script reads a session token, the instance id and the Availability Zone from the EC2 instance metadata service at 169.254.169.254. The instance gets its role credentials from the same address. The clock syncs with the Amazon Time Sync Service at 169.254.169.123.
 
 Operating system: Every 12 to 24 hours, Amazon Linux 2023 asks the Amazon Linux repository in your Region whether updates exist. It installs nothing.
 
@@ -57,7 +57,7 @@ Boot script: The boot script calls AWS CloudFormation to read its configuration 
 
 Agents: The Amazon CloudWatch agent sends the Neo4j logs to Amazon CloudWatch Logs. The AWS Systems Manager agent calls Systems Manager for Session Manager.
 
-Lambda function: One AWS Lambda function runs during stack create. It looks up the Region's S3 prefix list in Amazon EC2 and sends its result to CloudFormation through a pre-signed Amazon S3 URL. It runs outside the VPC.
+Lambda function: One AWS Lambda function runs on stack create, update and delete. On create and update, it looks up the Region's S3 prefix list in Amazon EC2. It sends each result to CloudFormation through a pre-signed Amazon S3 URL. It runs outside the VPC.
 
 Bastion: The operator bastion launches from the public Amazon Linux 2023 parameter in Systems Manager. It holds no Neo4j credentials.
 
@@ -65,7 +65,7 @@ Run by AWS for the stack: CloudFormation creates the load balancer, the KMS key,
 
 Scope: These calls use the stack's own IAM roles and stay in your account and Region. The nodes reach AWS through VPC interface endpoints, created by the stack or already in your VPC. Amazon S3 traffic follows your VPC routes.
 
-Internet egress: The nodes have no other outbound access unless OidcIssuerUri is set. Neo4j then fetches the provider's discovery document and signing keys over HTTPS, and sends a usage report to udc.neo4j.com.
+Internet egress: The nodes have no other outbound access unless OidcIssuerUri is set. Neo4j then fetches the provider's discovery document and signing keys over HTTPS. It also sends a usage report to udc.neo4j.com.
 
 Customer data: Neo4j sends no graph data outside your account.
 ```

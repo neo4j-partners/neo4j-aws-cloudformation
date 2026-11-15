@@ -75,10 +75,14 @@ The version title must be exactly `2026.10.1`. AWS Marketplace builds the SSM al
    2. Private Existing VPC stack `test-ee-1794707770` passed preflight 12 of 12 and the release suite 28 of 28.
    3. Public stack `test-ee-1794708577` passed `test-neo4j` 38 of 38, including a follower replacement.
 9. **Output fix:** One earlier Public stack failed at create while resolving the `Neo4jHttpsUrl` output. The output read its value back from the stack's SSM parameter through `!GetAtt`. The parameter existed, and the cause is unconfirmed. The fix builds `Neo4jHttpsUrl` and `Neo4jBoltUrl` from the same expression as their SSM parameters. A contract test asserts that each output matches its parameter. Output names and values are unchanged.
-10. **Release gates on the fixed templates:** On 2026-11-14 in us-east-1, with Marketplace defaults and 3 `t3.medium` nodes, all three topologies passed. The three stacks were created at the same time, the condition of the earlier failure. These runs validate the templates to be uploaded. The test stacks were deleted afterwards.
+10. **Release gates after the output fix:** On 2026-11-14 in us-east-1, with Marketplace defaults and 3 `t3.medium` nodes, all three topologies passed. The three stacks were created at the same time, the condition of the earlier failure. These runs used the templates before PR #146. The test stacks were deleted afterwards.
     1. Public stack `test-ee-1794711123` passed `test-neo4j` 38 of 38.
     2. Private stack `test-ee-1794711119` passed preflight 12 of 12 and the release suite 28 of 28.
     3. Private Existing VPC stack `test-ee-1794711126` passed preflight 12 of 12 and the release suite 28 of 28.
+11. **Availability Zone fix:** The Marketplace test scan rejected the Public and Private templates with "Availability zones must not be hardcoded." The finding named the subnets, which took their zones from the `AvailabilityZones` parameter. PR #146 removed that parameter. The subnets now pick their zones with `Fn::Select` over `Fn::GetAZs`. In Private Existing VPC, only the three `PrivateSubnetNId` parameter descriptions changed.
+12. **Release gates after PR #146:** On 2026-11-15, fresh stacks from the fixed templates passed. These runs validate the uploaded Public and Private templates. Private Existing VPC was not run again, because only its parameter descriptions changed.
+    1. Public passed `test-neo4j` 38 of 38.
+    2. Private passed preflight 12 of 12 and the release suite 28 of 28.
 
 ### Instance Types
 
@@ -155,8 +159,8 @@ The facts behind the paragraphs:
 3. **Amazon S3:** Node egress allows HTTPS to the same-Region S3 prefix list. The Private template adds an S3 gateway endpoint. The Private Existing VPC template creates none.
 4. **No downloads:** APOC, GDS and Bloom are copied from the AMI. A deployment downloads no software.
 5. **OIDC:** When `OidcIssuerUri` is set, Neo4j fetches the issuer's discovery document and signing keys over the internet.
-6. **Usage report:** `templates/src/neo4j-base.conf` does not set `dbms.usage_report.enabled`. Neo4j therefore keeps its default and tries to send a usage report to `udc.neo4j.com`. It succeeds only when the nodes have internet egress. The decision of 2026-11-14 is to keep the report on and disclose it.
-7. **Lambda:** The two Private templates run a Lambda function during stack create. It calls `ec2:DescribePrefixLists` to find the S3 prefix list ID.
+6. **Usage report:** `templates/src/neo4j-base.conf` does not set `dbms.usage_report.enabled`. Neo4j therefore keeps its default and tries to send a usage report to `udc.neo4j.com`. On Public, the report reaches `udc.neo4j.com` through the internet gateway. On Private and Private Existing VPC, the node security group opens port 443 to the internet only when `OidcIssuerUri` is set. The report goes out only then. The decision of 2026-11-14 is to keep the report on and disclose it.
+7. **Lambda:** The two Private templates run a Lambda function on stack create, update and delete. On create and update, it calls `ec2:DescribePrefixLists` to find the S3 prefix list ID.
 8. **Bastion AMI:** The two Private templates launch the bastion from the public AWS parameter `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64`.
 9. **Time sync:** A Private node checked on 2026-11-14 selects the Amazon Time Sync Service at 169.254.169.123. It also lists eight addresses from `pool time.aws.com`, which stay unreachable without internet egress. The sources come from generated files under `/run/chrony.d`.
 10. **Updates:** The same node has no dnf timer and no `dnf-automatic` package. `update-motd.timer` runs every 12 to 24 hours. Its script `/etc/update-motd.d/70-available-updates` asks dnf whether updates exist and installs nothing. The node's `amazonlinux.repo` points dnf at the Regional S3 bucket `al2023-repos-<region>-de612dc2`. The `neo4j.repo` stays disabled.
@@ -182,7 +186,7 @@ It then confirms the caller is in account `385155106615` and asks before it chan
 3. **Uploads:** It uploads the three templates and three diagrams under the `2026.10.1/` prefix. It fetches each URL without credentials and stops unless it returns 200.
 4. **Output:** It prints the version title, the role ARN and, for each delivery option, the template link and diagram link.
 
-The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-marketplace-assets-385155106615` and uploaded the six assets under `2026.10.1/`. Each URL returned 200 without credentials. Each delivery option file holds its template link and diagram link. The script printed these version values:
+The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-marketplace-assets-385155106615` and uploaded the six assets under `2026.10.1/`. The release owner ran it again on 2026-11-15, after PR #146 removed the `AvailabilityZones` parameter. That run replaced the six assets with the files from `main` at 287411b. Each URL returned 200 without credentials. Each delivery option file holds its template link and diagram link. The script printed these version values:
 
 | Field | Value |
 |---|---|
@@ -193,10 +197,10 @@ The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-
 ## Submission Steps
 
 1. Run `./marketplace/test-ami.sh` against `ami-07c29b53e376c4184` and confirm every check passes. This step passed on 2026-11-14.
-2. Run the release gate for each template. See [validate-private/README.md](../../validate-private/README.md) for the Private gate. All three passed on the fixed templates on 2026-11-14.
-3. The release owner runs `publish-assets.py` and keeps its output. This step ran on 2026-11-14.
-4. In the Seller Portal, open the product and choose **Request changes**, then **Test "Add version"**. Enter the version and AMI fields from this document. Wait for the scan result.
-5. Fix any scan finding, then choose **Request changes**, then **Add new version** with the same values.
+2. Run the release gate for each template. See [validate-private/README.md](../../validate-private/README.md) for the Private gate. All three passed after the output fix on 2026-11-14. Public and Private passed again after PR #146 on 2026-11-15. Private Existing VPC was not run again.
+3. The release owner runs `publish-assets.py` and keeps its output. This step ran on 2026-11-14 and again on 2026-11-15.
+4. This step is optional. In the Seller Portal, open the product and choose **Request changes**, then **Test "Add version"**. Enter the version and AMI fields from this document. Wait for the scan result. The real request in step 5 runs the same scan.
+5. Fix any scan finding, then choose **Request changes**, then **Add new version** with the version and AMI fields from this document.
 6. Add the three delivery options in that same request. Copy each field from its delivery option file and the script output.
 7. After AWS publishes the version, confirm that `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1` resolves to the new AMI.
 8. Launch each delivery option once from the listing page.
