@@ -71,11 +71,11 @@ aws ec2 describe-images --image-ids "$(cat marketplace/ami-id.txt)" --region us-
 An `InvalidAMIID.NotFound` error, an empty `Images` list, or a state other than `available` means the file is stale. Rebuild the AMI:
 
 ```bash
-AWS_PROFILE=marketplace ./marketplace/create-ami.sh
+AWS_PROFILE=marketplace NEO4J_VERSION=2026.10.1 ./marketplace/create-ami.sh
 ./marketplace/test-ami.sh
 ```
 
-- **What the build does:** `create-ami.sh` builds `neo4j-ee-base-<YYYYMMDD>` in `us-east-1` from a `t3.medium` builder and writes the new id to `marketplace/ami-id.txt`.
+- **What the build does:** `create-ami.sh` builds `neo4j-ee-base-<YYYYMMDD>` in `us-east-1` from a `t3.medium` builder and writes the new id to `marketplace/ami-id.txt`. It installs Neo4j Enterprise and `cypher-shell` at `NEO4J_VERSION`, which a Marketplace build requires.
 - **Same-day rebuilds:** A rerun on the same day deregisters the AMI with the same name and its snapshots. It refuses to do so while a launch template still references that AMI.
 - **Other accounts:** An account other than the Marketplace account runs the build in iteration mode.
 - **Listing AMIs:** `scripts/find-amis.py` lists the `neo4j-ee-base*` AMIs in each region of an account.
