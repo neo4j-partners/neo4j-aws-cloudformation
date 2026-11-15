@@ -59,7 +59,7 @@ Structurally identical to `neo4j-private.template.yaml`: same operator bastion, 
 | Private subnets with outbound routing | NAT Gateway, Transit Gateway, or Direct Connect; the template provisions none of these |
 | One subnet per AZ for a 3-node cluster | Each Neo4j node and its bastion are placed in the subnet passed via `PrivateSubnet1/2/3Id` |
 | No duplicate interface endpoints | If `CreateVpcEndpoints=true`, the VPC must not already have endpoints for any of the nine services. Use `CreateVpcEndpoints=false` if it does |
-| Matching CIDR in `AllowedCIDR` | Defaults to `10.0.0.0/16`; pass `--allowed-cidr` if your VPC uses a different range |
+| Matching CIDR in `AllowedCIDR` | Required, with no template default. It must cover the bastion's subnet and every client subnet, because the NLB security group admits Bolt and Browser only from `AllowedCIDR`. `deploy.py` uses the VPC's primary CIDR when `--allowed-cidr` is omitted |
 | A hosted zone you pass is associated with the VPC | Applies with `CreatePrivateDns=true` and `PrivateDnsHostedZoneId`. Bolt advertises `AdvertisedDNS`, so the name must resolve inside the VPC. A zone the stack creates is associated for you |
 
 ## Platform Contract
