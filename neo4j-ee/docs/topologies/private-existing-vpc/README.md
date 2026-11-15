@@ -5,6 +5,7 @@
 - **What it deploys:** bastion, internal NLB, cluster ASGs, EBS volumes, security groups, SSM contract
 - **What it does not deploy:** VPC, subnets, internet gateway and NAT Gateways. Outbound routing is the caller's responsibility.
 - **You provide:** `VpcId` and `PrivateSubnet1Id/2Id/3Id` (one subnet per AZ for a 3-node cluster)
+- **Zone requirement:** The subnets must sit in the first three Availability Zones that `Fn::GetAZs` returns for the Region, because the data volumes are created there. See the [Operator Guide](operator-guide.md#prerequisites).
 - **When to use:** the cluster must live inside an existing network, such as a peered VPC, a Transit Gateway, a shared services account, or a VPC managed by a separate infrastructure team.
 
 
