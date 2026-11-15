@@ -3,10 +3,28 @@
     Value: !GetAtt Neo4jNetworkLoadBalancer.DNSName
   Neo4jHttpsUrl:
     Description: Browser URL. HTTPS on 7473 when public TLS is enabled; HTTP on 7474 otherwise.
-    Value: !GetAtt Neo4jConfigHttpsUrlParameter.Value
+    # Same expression as Neo4jConfigHttpsUrlParameter. Do not GetAtt the SSM
+    # parameter here: one missed SSM read at output time fails the whole stack.
+    Value: !If
+      - UsePublicTLS
+      - !Sub 'https://${AdvertisedDNS}:7473'
+      - !Sub
+        - 'http://${NlbDns}:7474'
+        - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
   Neo4jBoltUrl:
     Description: Bolt connection URL with the scheme matching the deployed TLS and cluster mode.
-    Value: !GetAtt Neo4jConfigBoltUrlParameter.Value
+    # Same expression as Neo4jConfigBoltUrlParameter. See Neo4jHttpsUrl.
+    Value: !If
+      - UsePublicTLS
+      - !Sub 'neo4j+s://${AdvertisedDNS}:7687'
+      - !If
+        - CreateCluster
+        - !Sub
+          - 'neo4j://${NlbDns}:7687'
+          - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
+        - !Sub
+          - 'bolt://${NlbDns}:7687'
+          - NlbDns: !GetAtt Neo4jNetworkLoadBalancer.DNSName
   Neo4jDataVolumeIds:
     Description: >-
       Comma-separated list of persistent data volume IDs. Retained across

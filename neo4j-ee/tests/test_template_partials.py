@@ -2847,20 +2847,43 @@ class NlbAndRoutingTests(unittest.TestCase):
                     self.assertEqual(
                         outputs[key].get("Condition"), "CreatePrivateDns"
                     )
-        # Outputs delegate to the SSM parameter so the URL expression lives in
-        # exactly one place per template; the SSM contract tests pin the
-        # expression itself.
+        # Each URL output repeats its SSM parameter's Value expression. A
+        # GetAtt on the parameter makes CloudFormation read SSM at output
+        # time, and one missed read fails the whole stack. This test keeps
+        # the two copies identical; the SSM contract tests pin the expression.
         for name in ("private", "existing_vpc", "public"):
             with self.subTest(template=name):
                 outputs = self.docs[name]["Outputs"]
-                self.assertEqual(
-                    outputs["Neo4jBoltUrl"]["Value"],
-                    {"Fn::GetAtt": "Neo4jConfigBoltUrlParameter.Value"},
+                resources = self.docs[name]["Resources"]
+                for output_key, parameter_id in (
+                    ("Neo4jBoltUrl", "Neo4jConfigBoltUrlParameter"),
+                    ("Neo4jHttpsUrl", "Neo4jConfigHttpsUrlParameter"),
+                ):
+                    self.assertEqual(
+                        outputs[output_key]["Value"],
+                        resources[parameter_id]["Properties"]["Value"],
+                    )
+        # No output may read an attribute of an SSM parameter.
+        for name in ("private", "existing_vpc", "public"):
+            with self.subTest(template=name):
+                ssm_parameter_ids = set(
+                    self._by_type(name, "AWS::SSM::Parameter")
                 )
-                self.assertEqual(
-                    outputs["Neo4jHttpsUrl"]["Value"],
-                    {"Fn::GetAtt": "Neo4jConfigHttpsUrlParameter.Value"},
-                )
+                for output_key, output in self.docs[name]["Outputs"].items():
+                    target = output["Value"]
+                    if not isinstance(target, dict) or "Fn::GetAtt" not in target:
+                        continue
+                    get_att = target["Fn::GetAtt"]
+                    logical_id = (
+                        get_att.split(".")[0]
+                        if isinstance(get_att, str)
+                        else get_att[0]
+                    )
+                    self.assertNotIn(
+                        logical_id,
+                        ssm_parameter_ids,
+                        f"{output_key} must not GetAtt an SSM parameter",
+                    )
 
     def test_nlb_scheme_matches_template_exposure(self) -> None:
         expected = {
