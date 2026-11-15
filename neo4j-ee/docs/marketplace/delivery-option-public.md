@@ -43,7 +43,7 @@ Deleting the stack keeps the data volumes, secrets, KMS key and log bucket.
 
 Full guide: https://github.com/neo4j-partners/neo4j-aws-cloudformation/blob/main/neo4j-ee/docs/topologies/public/operator-guide.md
 
-Connections this product makes
+External Connections this product makes
 
 On deployment: The product downloads nothing. The AMI carries Neo4j, APOC, Graph Data Science and Bloom.
 

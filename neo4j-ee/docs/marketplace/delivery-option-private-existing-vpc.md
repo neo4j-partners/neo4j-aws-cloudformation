@@ -23,7 +23,7 @@ Deploys a 1 or 3 node Neo4j Enterprise Edition cluster into private subnets of y
 ## Long Description
 
 ```text
-Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets of a VPC you already own. The stack creates no VPC, subnet, internet gateway, NAT gateway or route. Each node runs in its own Auto Scaling group and keeps its data on a retained EBS volume. An internal Network Load Balancer terminates TLS for Neo4j Browser and Bolt with your ACM certificate. A t4g.small operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. By default the stack creates VPC interface endpoints for the AWS services the nodes call. Set CreateVpcEndpoints to false if your VPC already has them. Use this option to place Neo4j in a network your team already manages.
+Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets of a VPC you already own. The stack creates no VPC, subnet, internet gateway, NAT gateway or route. Each node runs in its own Auto Scaling group and keeps its data on a retained EBS volume. An internal Network Load Balancer terminates TLS for Neo4j Browser and Bolt with your ACM certificate. A t3.medium operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. By default the stack creates VPC interface endpoints for the AWS services the nodes call. Set CreateVpcEndpoints to false if your VPC already has them. Use this option to place Neo4j in a network your team already manages.
 ```
 
 ## Usage Instructions

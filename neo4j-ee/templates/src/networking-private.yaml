@@ -528,8 +528,8 @@
         Count: 1
         Timeout: PT10M
     Properties:
-      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
-      InstanceType: t4g.small
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: t3.medium
       SubnetId: !Ref Neo4jPrivateSubnet1
       SecurityGroupIds:
         - !Ref Neo4jBastionSecurityGroup

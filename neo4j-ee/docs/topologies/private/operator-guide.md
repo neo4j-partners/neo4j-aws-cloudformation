@@ -103,7 +103,7 @@ If the bastion SSM check fails immediately after a fresh deploy, the bastion Use
 
 ## Access via Bastion
 
-All operator access goes through the `t4g.small` bastion via SSM. The bastion holds no Neo4j credentials. It relays an SSM port-forward from your laptop to the NLB. The `uv run` tools open that port-forward themselves and run the Neo4j driver locally. Run `uv run` commands from `neo4j-ee/validate-private/`.
+All operator access goes through the `t3.medium` bastion via SSM. The bastion holds no Neo4j credentials. It relays an SSM port-forward from your laptop to the NLB. The `uv run` tools open that port-forward themselves and run the Neo4j driver locally. Run `uv run` commands from `neo4j-ee/validate-private/`.
 
 | Tool | How it connects | Tunnel needed? |
 |---|---|---|

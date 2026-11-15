@@ -4,7 +4,7 @@
 
 - **What it deploys:** Neo4j EE cluster (1 or 3 nodes) in private subnets behind an internal NLB
 - **Public exposure:** No instance has a public IP.
-- **Operator access:** dedicated `t4g.small` bastion via AWS Systems Manager Session Manager
+- **Operator access:** dedicated `t3.medium` bastion via AWS Systems Manager Session Manager
 - **When to use:** production, staging, and regulated workloads
 
 

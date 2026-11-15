@@ -50,7 +50,7 @@ Template 2 defaults `AllowedCIDR` to `10.0.0.0/16` because it creates that VPC. 
 
 ### Operator bastion in private templates
 
-Both Template 2 and Template 3 create a `t4g.small` bastion instance reachable only through AWS Systems Manager Session Manager. It has no ingress rules. The bastion is not optional: the NLB is internal and cluster nodes have no public IPs, so there is no direct path from an operator's machine without it. Template descriptions must explain that the bastion is created, what it does, and that it uses SSM rather than SSH. Buyers in environments with strict instance provisioning policies need this information before they launch.
+Both Template 2 and Template 3 create a `t3.medium` bastion instance reachable only through AWS Systems Manager Session Manager. It has no ingress rules. The bastion is not optional: the NLB is internal and cluster nodes have no public IPs, so there is no direct path from an operator's machine without it. Template descriptions must explain that the bastion is created, what it does, and that it uses SSM rather than SSH. Buyers in environments with strict instance provisioning policies need this information before they launch.
 
 ### VPC endpoint creation in Template 3
 

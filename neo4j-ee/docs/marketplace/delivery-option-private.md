@@ -23,7 +23,7 @@ Deploys a 1 or 3 node Neo4j Enterprise Edition cluster into private subnets of a
 ## Long Description
 
 ```text
-Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets of a new VPC. Each node runs in its own Auto Scaling group and keeps its data on a retained EBS volume. An internal Network Load Balancer terminates TLS for Neo4j Browser and Bolt with your ACM certificate. A t4g.small operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. The stack creates VPC endpoints for the AWS services the nodes call, so the nodes need no internet access. Set EnableInternetEgress to true to add NAT gateways. Use this option for production workloads that stay inside your AWS network.
+Deploys a cluster of 1 or 3 Neo4j Enterprise Edition nodes into private subnets of a new VPC. Each node runs in its own Auto Scaling group and keeps its data on a retained EBS volume. An internal Network Load Balancer terminates TLS for Neo4j Browser and Bolt with your ACM certificate. A t3.medium operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. The stack creates VPC endpoints for the AWS services the nodes call, so the nodes need no internet access. Set EnableInternetEgress to true to add NAT gateways. Use this option for production workloads that stay inside your AWS network.
 ```
 
 ## Usage Instructions
@@ -43,7 +43,7 @@ Deleting the stack keeps the data volumes, secrets, KMS key and log bucket.
 
 Full guide: https://github.com/neo4j-partners/neo4j-aws-cloudformation/blob/main/neo4j-ee/docs/topologies/private/operator-guide.md
 
-Connections this product makes
+External Connections this product makes
 
 On deployment: The product downloads nothing. The AMI carries Neo4j, APOC, Graph Data Science and Bloom.
 

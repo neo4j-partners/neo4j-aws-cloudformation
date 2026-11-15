@@ -9,14 +9,14 @@
 - Internal NLB with TLS listeners on 7473 (HTTPS Browser) and 7687 (Bolt), targets spread across all three private subnets
 - Three Neo4j EC2 instances in private subnets, forming a Raft cluster
 - Three NAT Gateways for outbound traffic from the cluster members, only when `EnableInternetEgress` is `true`
-- One `t4g.small` operator bastion in a private subnet, not registered as an NLB target
+- One `t3.medium` operator bastion in a private subnet, not registered as an NLB target
 - VPC interface endpoints for `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`
 
 **Single instance:**
 - VPC with one public subnet for the optional NAT Gateway and one private subnet for the EC2 instance
 - Internal NLB in the private subnet
 - One NAT Gateway, only when `EnableInternetEgress` is `true`
-- One `t4g.small` operator bastion
+- One `t3.medium` operator bastion
 
 `EnableInternetEgress` defaults to `false`. Without it, the stack creates no NAT gateway and the nodes have no route out of the VPC. Set it to `true` for OIDC sign-in or for a Hume stack that shares the VPC.
 
@@ -32,7 +32,7 @@ The subnets use the first three Availability Zones that `Fn::GetAZs` returns for
 | EC2 instances | 1 or 3 Neo4j nodes in private subnets; no public IPs |
 | ASG per node | One Auto Scaling Group per Neo4j node, fixed at `MinSize=MaxSize=DesiredCapacity=1`, for self-healing |
 | EBS data volumes | One GP3 volume per node with `DeletionPolicy: Retain`; survives stack deletion |
-| Operator bastion | `t4g.small` in a private subnet, not registered as an NLB target; receives SSM sessions for operator access |
+| Operator bastion | `t3.medium` in a private subnet, not registered as an NLB target; receives SSM sessions for operator access |
 | VPC interface endpoints | `ssm`, `ssmmessages`, `ec2messages`, `logs`, `secretsmanager`, `ec2`, `cloudformation`, `autoscaling`, and `acm` with `PrivateDnsEnabled: true`. Each endpoint policy limits callers to principals in the stack account. AWS service calls need no NAT |
 | Security groups | NLB SG (AllowedCIDR on 7473/7687 to the NLB); External SG (NLB SG as source on 7473/7687 to instances); Internal SG (cluster ports 5000/6000/7000/7688 between members only); Endpoint SG (gating access to the VPC endpoints) |
 | SSM parameters | `/neo4j-ee/<stack>/` prefix; publishes VPC ID, NLB DNS, security group IDs, and secret ARN for downstream consumers |
@@ -70,7 +70,7 @@ Every routing table entry points back to the NLB. A driver connecting with `neo4
 
 > **Why a dedicated bastion?** To prevent NLB hairpin failures where a cluster node tunneling SSM through itself sees its own IP as the source and silently drops the reply. One connection in three fails.
 
-The bastion is `t4g.small`, sits in the same private subnet as the cluster, and is not registered as an NLB target.
+The bastion is `t3.medium`, sits in the same private subnet as the cluster, and is not registered as an NLB target.
 
 **The failure.** When SSM tunnels ran through a Neo4j cluster member instead of a dedicated bastion, every third connection timed out. NLB target health was fine; VPC endpoints, security groups, and routing all checked out.
 

@@ -54,7 +54,7 @@
   <text x="396.0" y="367.0" class="h" text-anchor="middle">VPC interface endpoint ENIs</text>
   <text x="396.0" y="383.0" class="s" text-anchor="middle">CreateVpcEndpoints=true, default</text>
   <rect x="282" y="420" width="228" height="86" rx="6" class="bastion"/>
-  <text x="396.0" y="443.0" class="h" text-anchor="middle">Operator bastion, t4g.small</text>
+  <text x="396.0" y="443.0" class="h" text-anchor="middle">Operator bastion, t3.medium</text>
   <text x="396.0" y="459.0" class="b" text-anchor="middle">SSM entry point, no ingress</text>
   <text x="396.0" y="475.0" class="b" text-anchor="middle">port-forward to NLB 7473, 7687</text>
   <text x="396.0" y="491.0" class="b" text-anchor="middle">not an NLB target</text>

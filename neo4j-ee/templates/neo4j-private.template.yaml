@@ -1,7 +1,7 @@
 # GENERATED FILE — do not edit directly.
 # Edit source partials in templates/src/ and run templates/build.py to regenerate.
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Neo4j Enterprise Edition, Private. Deploys a cluster of 1 or 3 Neo4j nodes into private subnets of a new VPC, each node in its own Auto Scaling group behind an internal Network Load Balancer. A t4g.small operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. The stack creates VPC endpoints for the AWS services the nodes call. Set EnableInternetEgress to true to add NAT gateways. Nothing is downloaded on deployment. The AMI carries Neo4j and its plugins. The boot script calls the EC2 instance metadata service at the link-local address 169.254.169.254. It also calls AWS APIs in the stack's own Region. The nodes reach the internet only when OidcIssuerUri is set. Neo4j then fetches the identity provider's signing keys over HTTPS. It also sends a usage report to udc.neo4j.com. No graph data leaves the buyer's account. The ExternalConnectivityDisclosure metadata lists every connection.
+Description: Neo4j Enterprise Edition, Private. Deploys a cluster of 1 or 3 Neo4j nodes into private subnets of a new VPC, each node in its own Auto Scaling group behind an internal Network Load Balancer. A t3.medium operator bastion is reachable only through AWS Systems Manager Session Manager, with no SSH key and no inbound rules. The stack creates VPC endpoints for the AWS services the nodes call. Set EnableInternetEgress to true to add NAT gateways. Nothing is downloaded on deployment. The AMI carries Neo4j and its plugins. The boot script calls the EC2 instance metadata service at the link-local address 169.254.169.254. It also calls AWS APIs in the stack's own Region. The nodes reach the internet only when OidcIssuerUri is set. Neo4j then fetches the identity provider's signing keys over HTTPS. It also sends a usage report to udc.neo4j.com. No graph data leaves the buyer's account. The ExternalConnectivityDisclosure metadata lists every connection.
 Metadata:
   ExternalConnectivityDisclosure:
     Description: >-
@@ -988,7 +988,7 @@ Resources:
 
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
-  # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point
+  # A non-Neo4j-target t3.medium used as the SSM Session Manager entry point
   # for operator port-forwarding to the internal NLB. It is deliberately NOT
   # registered in any NLB target group — that topology makes NAT-loopback
   # (hairpin) failures impossible for flows originating from the bastion, so
@@ -2782,8 +2782,8 @@ Resources:
         Count: 1
         Timeout: PT10M
     Properties:
-      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
-      InstanceType: t4g.small
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: t3.medium
       SubnetId: !Ref Neo4jPrivateSubnet1
       SecurityGroupIds:
         - !Ref Neo4jBastionSecurityGroup

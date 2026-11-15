@@ -184,7 +184,7 @@
 
   # ---------------------------------------------------------------------------
   # Operator bastion (Private mode only)
-  # A non-Neo4j-target t4g.small used as the SSM Session Manager entry point
+  # A non-Neo4j-target t3.medium used as the SSM Session Manager entry point
   # for operator port-forwarding to the internal NLB. It is deliberately NOT
   # registered in any NLB target group — that topology makes NAT-loopback
   # (hairpin) failures impossible for flows originating from the bastion, so

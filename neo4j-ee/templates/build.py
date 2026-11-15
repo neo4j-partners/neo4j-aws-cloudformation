@@ -349,7 +349,7 @@ _PRIVATE_SPEC = TemplateSpec(
     description=(
         "Neo4j Enterprise Edition, Private. Deploys a cluster of 1 or 3 Neo4j"
         " nodes into private subnets of a new VPC, each node in its own Auto"
-        " Scaling group behind an internal Network Load Balancer. A t4g.small"
+        " Scaling group behind an internal Network Load Balancer. A t3.medium"
         " operator bastion is reachable only through AWS Systems Manager"
         " Session Manager, with no SSH key and no inbound rules. The stack"
         " creates VPC endpoints for the AWS services the nodes call. Set"
@@ -441,7 +441,7 @@ _EXISTING_VPC_SPEC = TemplateSpec(
         "Neo4j Enterprise Edition, Private, Existing VPC. Deploys a cluster of"
         " 1 or 3 Neo4j nodes into private subnets of an existing VPC, each node"
         " in its own Auto Scaling group behind an internal Network Load"
-        " Balancer. A t4g.small operator bastion is reachable only through AWS"
+        " Balancer. A t3.medium operator bastion is reachable only through AWS"
         " Systems Manager Session Manager, with no SSH key and no inbound rules."
         " By default the stack creates VPC interface endpoints for the AWS"
         " services the nodes call. Set CreateVpcEndpoints to false if your VPC"

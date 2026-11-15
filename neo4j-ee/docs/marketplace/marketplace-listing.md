@@ -80,7 +80,7 @@ The version title must be exactly `2026.10.1`. AWS Marketplace builds the SSM al
     2. Private stack `test-ee-1794711119` passed preflight 12 of 12 and the release suite 28 of 28.
     3. Private Existing VPC stack `test-ee-1794711126` passed preflight 12 of 12 and the release suite 28 of 28.
 11. **Availability Zone fix:** The Marketplace test scan rejected the Public and Private templates with "Availability zones must not be hardcoded." The finding named the subnets, which took their zones from the `AvailabilityZones` parameter. PR #146 removed that parameter. The subnets now pick their zones with `Fn::Select` over `Fn::GetAZs`. In Private Existing VPC, only the three `PrivateSubnetNId` parameter descriptions changed.
-12. **Release gates after PR #146:** On 2026-11-15, fresh stacks from the fixed templates passed. These runs validate the uploaded Public and Private templates. Private Existing VPC was not run again, because only its parameter descriptions changed.
+12. **Release gates after PR #146:** On 2026-11-15, fresh stacks from the fixed templates passed. These runs used the Public and Private templates before commit 175e187. That commit changed only the template Description and Metadata, so the resources these runs tested are the ones uploaded. Private Existing VPC was not run again, because only its parameter descriptions changed.
     1. Public passed `test-neo4j` 38 of 38.
     2. Private passed preflight 12 of 12 and the release suite 28 of 28.
 
@@ -142,15 +142,15 @@ An instance type offering check ran on 2026-11-14 from the seller account.
 What the check means:
 
 1. **Osaka fails by default:** The default `r8i.xlarge` does not exist in ap-northeast-3. A buyer there must pick `t3.medium`. The 9-Region decision removes Osaka from the listing.
-2. **Bastion type:** The Private and Private Existing VPC templates add a `t4g.small` bastion. That type is offered in every checked Region.
+2. **Bastion type:** The Private and Private Existing VPC templates add a `t3.medium` bastion. That type is offered in every checked Region.
 3. **Opt-in Regions are untested:** The seller account cannot launch a test stack in a Region it has not enabled.
 4. **Narrowing restricts 28 live Regions:** The Region list is a product-level setting, not part of the version. Narrowing it needs a separate Restrict Region request. Subscribed buyers keep using the product in a restricted Region. AWS blocks new instances there, which could stop Auto Scaling replacements for existing stacks. The decision of 2026-11-14 is to restrict them anyway.
 
 ## Connection Disclosure
 
-The AWS Marketplace product usage policy requires disclosure of external dependencies and ongoing connections. The Seller Portal has no separate field for it. Each delivery option file holds the disclosure inside its usage instructions.
+The AWS Marketplace product usage policy requires disclosure of external dependencies and ongoing connections. The Seller Portal has no separate field for it. The disclosure appears in three places. Each delivery option file holds it inside the usage instructions. Each template's Description summarizes it. Each template's `ExternalConnectivityDisclosure` metadata lists every connection, with its caller, purpose, route and data sent.
 
-Brief deploy steps come first, then a link to the topology's operator guide. A section titled "Connections this product makes" follows, with one labelled paragraph per source of traffic. If the AMI scan reports that the UserData script connects to external endpoints, reply by pointing to the usage instructions.
+Brief deploy steps come first, then a link to the topology's operator guide. A section titled "Connections this product makes" follows, with one labelled paragraph per source of traffic. If the AMI scan reports that the UserData script connects to external endpoints, reply by pointing to the usage instructions and the `ExternalConnectivityDisclosure` metadata.
 
 The facts behind the paragraphs:
 
@@ -186,7 +186,7 @@ It then confirms the caller is in account `385155106615` and asks before it chan
 3. **Uploads:** It uploads the three templates and three diagrams under the `2026.10.1/` prefix. It fetches each URL without credentials and stops unless it returns 200.
 4. **Output:** It prints the version title, the role ARN and, for each delivery option, the template link and diagram link.
 
-The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-marketplace-assets-385155106615` and uploaded the six assets under `2026.10.1/`. The release owner ran it again on 2026-11-15, after PR #146 removed the `AvailabilityZones` parameter. That run replaced the six assets with the files from `main` at 287411b. Each URL returned 200 without credentials. Each delivery option file holds its template link and diagram link. The script printed these version values:
+The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-marketplace-assets-385155106615` and uploaded the six assets under `2026.10.1/`. The release owner ran it again on 2026-11-15, after PR #146 removed the `AvailabilityZones` parameter. That run replaced the six assets with the files from `main` at 287411b. The third run on 2026-11-15 followed commit 175e187, which added the connection disclosure to the templates. It replaced the six assets with the files from `main` at 175e187. Each URL returned 200 without credentials. Each delivery option file holds its template link and diagram link. The script printed these version values:
 
 | Field | Value |
 |---|---|
@@ -198,7 +198,7 @@ The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-
 
 1. Run `./marketplace/test-ami.sh` against `ami-07c29b53e376c4184` and confirm every check passes. This step passed on 2026-11-14.
 2. Run the release gate for each template. See [validate-private/README.md](../../validate-private/README.md) for the Private gate. All three passed after the output fix on 2026-11-14. Public and Private passed again after PR #146 on 2026-11-15. Private Existing VPC was not run again.
-3. The release owner runs `publish-assets.py` and keeps its output. This step ran on 2026-11-14 and again on 2026-11-15.
+3. The release owner runs `publish-assets.py` and keeps its output. This step ran on 2026-11-14 and twice on 2026-11-15. The last run uploaded the files from `main` at 175e187.
 4. This step is optional. In the Seller Portal, open the product and choose **Request changes**, then **Test "Add version"**. Enter the version and AMI fields from this document. Wait for the scan result. The real request in step 5 runs the same scan.
 5. Fix any scan finding, then choose **Request changes**, then **Add new version** with the version and AMI fields from this document.
 6. Add the three delivery options in that same request. Copy each field from its delivery option file and the script output.
