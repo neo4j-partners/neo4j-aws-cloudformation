@@ -15,11 +15,3 @@
     AllowedValues:
       - 'true'
       - 'false'
-  AvailabilityZones:
-    Description: >-
-      Optional. Comma-separated Availability Zones for the subnets, in node
-      order. Every deployment, including a single node, needs exactly three
-      zones. A shorter list fails stack creation with an Fn::Select template
-      error. Leave blank to use the first three zones that Fn::GetAZs returns.
-    Type: CommaDelimitedList
-    Default: ''

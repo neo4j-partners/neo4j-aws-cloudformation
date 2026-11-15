@@ -95,7 +95,7 @@ Single-node deployments must still use an Auto Scaling group (MinSize: 1, MaxSiz
 
 ### Multi-AZ using dynamic selection
 
-Subnets must reference AZs dynamically using `Fn::GetAZs` and `Fn::Select`. Never hardcode AZ names (`us-east-1a`, `us-west-2b`). By default, Public and Private three-node deployments place one node in each of the first three AZs for the region. The optional `AvailabilityZones` parameter overrides that choice for the subnets. Private Existing VPC places each node in the subnet the caller supplies:
+Subnets must reference AZs dynamically using `Fn::GetAZs` and `Fn::Select`. Never hardcode AZ names (`us-east-1a`, `us-west-2b`). Public and Private three-node deployments place one node in each of the first three AZs for the region. The Marketplace scan rejects a subnet whose zone comes from a `String` or `CommaDelimitedList` parameter. It accepts only `Fn::GetAZs` or a parameter of type `AWS::EC2::AvailabilityZone::Name` or `List<AWS::EC2::AvailabilityZone::Name>`. Private Existing VPC places each node in the subnet the caller supplies, and those subnets must sit in the same first three AZs because the data volumes are created there:
 
 ```yaml
 AvailabilityZone:
@@ -179,7 +179,6 @@ Metadata:
       - Label:
           default: "Network"
         Parameters:
-          - AvailabilityZones
           - NlbDeletionProtection
           - EnableInternetEgress
       - Label:

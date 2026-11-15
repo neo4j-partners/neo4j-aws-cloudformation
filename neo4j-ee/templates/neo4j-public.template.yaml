@@ -28,7 +28,6 @@ Metadata:
       - Label:
           default: "Network"
         Parameters:
-          - AvailabilityZones
           - NlbDeletionProtection
       - Label:
           default: "Optional Public TLS"
@@ -101,8 +100,6 @@ Metadata:
         default: OIDC Group Role Mapping
       Node1SnapshotId:
         default: Node 1 Snapshot ID
-      AvailabilityZones:
-        default: Availability Zones
       NlbDeletionProtection:
         default: NLB Deletion Protection
 
@@ -276,14 +273,6 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
-  AvailabilityZones:
-    Description: >-
-      Optional. Comma-separated Availability Zones for the subnets, in node
-      order. Every deployment, including a single node, needs exactly three
-      zones. A shorter list fails stack creation with an Fn::Select template
-      error. Leave blank to use the first three zones that Fn::GetAZs returns.
-    Type: CommaDelimitedList
-    Default: ''
 
   OidcIssuerUri:
     Description: >-
@@ -454,7 +443,6 @@ Conditions:
   GdsEnabledAndLicensed: !And
     - !Equals [!Ref InstallGDS, 'true']
     - !Not [!Equals [!Ref GdsLicenseSecretArn, '']]
-  HasAvailabilityZones: !Not [!Equals [!Join ['', !Ref AvailabilityZones], '']]
 
 Resources:
   Neo4jInstanceProfile:
@@ -1789,10 +1777,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [0, !Ref AvailabilityZones]
-        - !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -1808,10 +1793,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.2.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [1, !Ref AvailabilityZones]
-        - !Select [1, !GetAZs '']
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -1827,10 +1809,7 @@ Resources:
     Properties:
       CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [2, !Ref AvailabilityZones]
-        - !Select [2, !GetAZs '']
+      AvailabilityZone: !Select [2, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'

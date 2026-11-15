@@ -32,14 +32,6 @@
       Existing Route 53 private hosted zone ID to receive the AdvertisedDNS
       alias record. Leave blank to let this stack create a private hosted zone
       named PrivateDnsZoneName.
-  AvailabilityZones:
-    Description: >-
-      Optional. Comma-separated Availability Zones for the subnets, in node
-      order. Every deployment, including a single node, needs exactly three
-      zones. A shorter list fails stack creation with an Fn::Select template
-      error. Leave blank to use the first three zones that Fn::GetAZs returns.
-    Type: CommaDelimitedList
-    Default: ''
   EnableInternetEgress:
     Type: String
     AllowedValues:

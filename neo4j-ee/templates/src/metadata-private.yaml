@@ -23,7 +23,6 @@
       - Label:
           default: "Network"
         Parameters:
-          - AvailabilityZones
           - NlbDeletionProtection
           - EnableInternetEgress
       - Label:
@@ -109,8 +108,6 @@
         default: Node 1 Snapshot ID
       BoltTlsScheme:
         default: Bolt TLS Scheme
-      AvailabilityZones:
-        default: Availability Zones
       NlbDeletionProtection:
         default: NLB Deletion Protection
       EnableInternetEgress:

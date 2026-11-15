@@ -21,10 +21,7 @@
     Properties:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [0, !Ref AvailabilityZones]
-        - !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -40,10 +37,7 @@
     Properties:
       CidrBlock: 10.0.2.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [1, !Ref AvailabilityZones]
-        - !Select [1, !GetAZs '']
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
@@ -59,10 +53,7 @@
     Properties:
       CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !If
-        - HasAvailabilityZones
-        - !Select [2, !Ref AvailabilityZones]
-        - !Select [2, !GetAZs '']
+      AvailabilityZone: !Select [2, Fn::GetAZs: !Ref 'AWS::Region']
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
