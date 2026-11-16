@@ -47,7 +47,7 @@ An `InvalidAMIID.NotFound` error, an empty `Images` list, or a state other than 
 
 You also need the sign-in settings for your identity provider:
 
-- **Cognito from the Hume repository:** Follow the **Write the OIDC settings** step in the Hume run book, `docs/run-book.md#write-the-oidc-settings` in the `hume-aws-cloudformation` repository. It writes `stack/.deploy/.env.neo4jee`.
+- **Cognito from the Hume repository:** Follow the **Write the OIDC settings** step in the Hume run book, `docs/guides/run-book.md#write-the-oidc-settings` in the `hume-aws-cloudformation` repository. It writes `stack/.deploy/.env.neo4jee`.
 - **Another identity provider:** Write the same keys by hand. The keys are listed in [Sign-in settings](../reference/oidc-sign-in.md#sign-in-settings). The provider must also allow the three redirect addresses in [Redirect addresses](../reference/oidc-sign-in.md#redirect-addresses).
 
 Run every command below from `neo4j-ee/` unless the step says otherwise.
@@ -193,7 +193,7 @@ The Spine demo load also reads `password-secret-arn`, the admin password secret.
 
 The stack publishes other parameters, such as `nlb-dns`. Hume does not read them.
 
-**Back to Hume.** Go to the **Read the Neo4j values** step in the Hume run book, `docs/run-book.md#read-the-neo4j-values`. It sets the stack name in `$NEO4J_STACK`. Come back to [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser) if you want to test sign-in from your laptop.
+**Back to Hume.** Go to the **Read the Neo4j values** step in the Hume run book, `docs/guides/run-book.md#read-the-neo4j-values`. It sets the stack name in `$NEO4J_STACK`. Come back to [Sign in to Neo4j Browser](#sign-in-to-neo4j-browser) if you want to test sign-in from your laptop.
 
 ## Sign in to Neo4j Browser
 
@@ -250,7 +250,7 @@ If sign-in fails, see [Troubleshooting sign-in](../reference/oidc-sign-in.md#tro
 
 ## Tear down
 
-When the stack serves Hume, delete the Hume stack first. The Neo4j teardown deletes the VPC, load balancer and NAT gateways that Hume uses. Hume requires `EnableInternetEgress` set to `true` on the Neo4j stack, so those NAT gateways exist. The **Tear down** step in the Hume run book, `docs/run-book.md#tear-down`, gives the order.
+When the stack serves Hume, delete the Hume stack first. The Neo4j teardown deletes the VPC, load balancer and NAT gateways that Hume uses. Hume requires `EnableInternetEgress` set to `true` on the Neo4j stack, so those NAT gateways exist. The **Tear down** step in the Hume run book, `docs/guides/run-book.md#tear-down`, gives the order.
 
 Delete the stack and its data volumes:
 

@@ -660,7 +660,7 @@ node:
   version as the server. `test-ami.sh` CHECK 7 and CHECK 12 assert it, and
   `verify_neo4j_installed` fails the boot without it.
 
-Hume's `stack/seed_nodes.py` is a known consumer of both paths. Moving either
+Hume's `demo/spine/seed_nodes.py` is a known consumer of both paths. Moving either
 path is a breaking change. It needs a notice to consumers before the AMI
 ships. No other path on the node is part of the contract.
 
