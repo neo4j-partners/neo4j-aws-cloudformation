@@ -236,24 +236,45 @@ def run_ee_cluster_resilience_tests(
         return
 
     # HTTP up doesn't mean the replacement has rejoined the Raft quorum yet.
-    # Poll until all expected members are Enabled/Available (up to 120s).
-    log.info("  Waiting for cluster to reach %d Enabled members...\n", config.number_of_servers)
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
+    # Poll until every member is Enabled/Available and every neo4j replica is
+    # online, the two conditions check_cluster_topology asserts (up to 300s).
+    rejoin_timeout = 300
+    log.info(
+        "  Waiting for %d Enabled members and %d online neo4j replicas...\n",
+        config.number_of_servers, config.number_of_servers,
+    )
+    deadline = time.monotonic() + rejoin_timeout
+    last_state = "no successful query"
+    while True:
         try:
             with config.driver() as driver:
-                records, _, _ = driver.execute_query(
+                server_records, _, _ = driver.execute_query(
                     "SHOW SERVERS YIELD state, health",
                     routing_=RoutingControl.READ,
                 )
-                enabled = [
-                    r for r in records
-                    if r["state"] == "Enabled" and r["health"] == "Available"
-                ]
-                if len(enabled) >= config.number_of_servers:
-                    break
-        except Exception:
-            pass
+                db_records, _, _ = driver.execute_query(
+                    "SHOW DATABASES YIELD name, currentStatus WHERE name = 'neo4j'",
+                    routing_=RoutingControl.READ,
+                )
+            enabled = sum(
+                1 for r in server_records
+                if r["state"] == "Enabled" and r["health"] == "Available"
+            )
+            online = sum(1 for r in db_records if r["currentStatus"] == "online")
+            last_state = f"{enabled} Enabled, {online} online"
+            if (
+                enabled >= config.number_of_servers
+                and online >= config.number_of_servers
+            ):
+                break
+        except Exception as exc:
+            last_state = f"query failed: {exc}"
+        if time.monotonic() >= deadline:
+            log.warning(
+                "  Cluster did not fully rejoin within %ds (last: %s)\n",
+                rejoin_timeout, last_state,
+            )
+            break
         time.sleep(10)
 
     check_cluster_topology(config, reporter)

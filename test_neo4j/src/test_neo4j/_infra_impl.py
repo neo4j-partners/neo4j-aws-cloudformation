@@ -980,10 +980,10 @@ def check_ami_build_mode_tag(
     the source region's AMI via the SSM parameter or the deploy outputs.
     """
     with reporter.test("AMI build-mode tag") as ctx:
+        if config.ami_source == "marketplace":
+            ctx.pass_("AmiSource=marketplace — tag check not applicable")
+            return
         if not config.ami_id:
-            if config.ami_source == "marketplace":
-                ctx.pass_("AmiSource=marketplace — tag check not applicable")
-                return
             ctx.fail("AmiId missing from deploy outputs")
             return
 
