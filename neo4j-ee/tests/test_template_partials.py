@@ -1691,6 +1691,27 @@ class RenderedTemplateContractTests(unittest.TestCase):
                 with self.subTest(template=name, resource=logical_id):
                     self.assertEqual(r["Properties"]["HealthCheckType"], "EC2")
 
+    # Name properties whose AWS limit is shorter than the 128-character stack
+    # name limit. A name built from AWS::StackName fails at create time for a
+    # long stack name, so these must be left for CloudFormation to generate.
+    SHORT_NAME_PROPERTIES = {
+        "AWS::ElasticLoadBalancingV2::LoadBalancer": "Name",
+        "AWS::ElasticLoadBalancingV2::TargetGroup": "Name",
+        "AWS::IAM::Role": "RoleName",
+        "AWS::Lambda::Function": "FunctionName",
+        "AWS::S3::Bucket": "BucketName",
+    }
+
+    def test_short_limit_names_are_not_built_from_stack_name(self) -> None:
+        for name, doc in self.docs.items():
+            for logical_id, r in doc["Resources"].items():
+                prop = self.SHORT_NAME_PROPERTIES.get(r.get("Type"))
+                if prop is None:
+                    continue
+                value = r.get("Properties", {}).get(prop)
+                with self.subTest(template=name, resource=logical_id):
+                    self.assertNotIn("AWS::StackName", json.dumps(value))
+
     @staticmethod
     def _launch_template(doc: dict) -> dict:
         return next(

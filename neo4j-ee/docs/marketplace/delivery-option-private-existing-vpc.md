@@ -1,6 +1,8 @@
 # Neo4j EE: Delivery Option for the Private Existing VPC Template
 
-This file holds the Seller Portal values for the Private Existing VPC delivery option in version `2026.10.1`. The version fields and the AMI fields are in [marketplace-listing.md](marketplace-listing.md).
+**Not listed:** The decision of 2026-11-16 is to leave this delivery option off the Marketplace listing. Versions 2026.10.1 and 2026.10.1-2 do not include it. The template stays in the repo for direct CloudFormation deployment.
+
+This file keeps the Seller Portal values drafted for version `2026.10.1`, in case the option is listed later. The links point at the `2026.10.1/` assets. The version fields and the AMI fields are in [marketplace-listing.md](marketplace-listing.md).
 
 ## Fields
 

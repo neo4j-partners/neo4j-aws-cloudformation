@@ -344,10 +344,6 @@
             - W1030
     Properties:
       IpAddressType: ipv4
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'nlb'
       Scheme: internal
       SecurityGroups:
         - !Ref Neo4jNLBSecurityGroup
@@ -439,11 +435,6 @@
   Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'https'
-          - 'tg'
       Port: 7473
       Protocol: TLS
       # TCP health check (not HTTPS): the NLB health checker opens the TLS
@@ -476,11 +467,6 @@
   Neo4jBoltTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'bolt'
-          - 'tg'
       Port: 7687
       Protocol: TLS
       # Bolt is a binary protocol, not HTTP, so no L7 health check exists; a

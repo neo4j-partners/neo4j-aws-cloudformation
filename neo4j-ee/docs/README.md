@@ -42,10 +42,10 @@ Ordered procedures with a rollback or teardown.
 
 ## Marketplace
 
-Seller Portal values for the next listing version.
+Seller Portal values for the next listing version, 2026.10.1-2.
 
-- [Marketplace Listing](marketplace/marketplace-listing.md): the version, AMI, Region and submission plan for 2026.10.1.
-- Delivery options: [Public](marketplace/delivery-option-public.md), [Private](marketplace/delivery-option-private.md) and [Private Existing VPC](marketplace/delivery-option-private-existing-vpc.md). Each file holds the portal fields and the usage instructions.
+- [Marketplace Listing](marketplace/marketplace-listing.md): the version, AMI, Region and submission plan for 2026.10.1-2.
+- Delivery options: [Public](marketplace/delivery-option-public.md) and [Private](marketplace/delivery-option-private.md). Each file holds the portal fields and the usage instructions. [Private Existing VPC](marketplace/delivery-option-private-existing-vpc.md) is not listed. Its file keeps the drafted values.
 
 ## Architecture
 

@@ -131,10 +131,6 @@
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       IpAddressType: ipv4
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'nlb'
       Scheme: internet-facing
       SecurityGroups:
         - !Ref Neo4jNLBSecurityGroup
@@ -203,11 +199,6 @@
   Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - !If [UsePublicTLS, 'https', 'http']
-          - 'tg'
       Port: !If [UsePublicTLS, 7473, 7474]
       Protocol: !If [UsePublicTLS, TLS, TCP]
       # No TLS: L7 HTTP GET / so a target is healthy only when Neo4j actually
@@ -241,11 +232,6 @@
   Neo4jBoltTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'bolt'
-          - 'tg'
       Port: 7687
       Protocol: !If [UsePublicTLS, TLS, TCP]
       # Bolt is a binary protocol, not HTTP, so no L7 health check exists; a

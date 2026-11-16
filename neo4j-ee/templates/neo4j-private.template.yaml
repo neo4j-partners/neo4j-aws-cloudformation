@@ -251,7 +251,7 @@ Metadata:
 Parameters:
   ImageId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1
+    Default: /aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1-2
   Password:
     Description: >
       Password for the neo4j admin user. Must be at least 12 characters
@@ -2620,10 +2620,6 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       IpAddressType: ipv4
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'nlb'
       Scheme: internal
       SecurityGroups:
         - !Ref Neo4jNLBSecurityGroup
@@ -2715,11 +2711,6 @@ Resources:
   Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'https'
-          - 'tg'
       Port: 7473
       Protocol: TLS
       # TCP health check (not HTTPS): the NLB health checker opens the TLS
@@ -2752,11 +2743,6 @@ Resources:
   Neo4jBoltTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Join
-        - '-'
-        - - !Ref 'AWS::StackName'
-          - 'bolt'
-          - 'tg'
       Port: 7687
       Protocol: TLS
       # Bolt is a binary protocol, not HTTP, so no L7 health check exists; a

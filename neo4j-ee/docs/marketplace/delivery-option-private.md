@@ -1,6 +1,6 @@
 # Neo4j EE: Delivery Option for the Private Template
 
-This file holds the Seller Portal values for the Private delivery option in version `2026.10.1`. The version fields and the AMI fields are in [marketplace-listing.md](marketplace-listing.md).
+This file holds the Seller Portal values for the Private delivery option in version `2026.10.1-2`. The version fields and the AMI fields are in [marketplace-listing.md](marketplace-listing.md).
 
 ## Fields
 
@@ -8,9 +8,9 @@ This file holds the Seller Portal values for the Private delivery option in vers
 |---|---|
 | Delivery option title | Neo4j Enterprise Edition, Private |
 | Recommended instance type | `r8i.xlarge` |
-| CloudFormation template link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-private.template.yaml` |
+| CloudFormation template link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1-2/neo4j-private.template.yaml` |
 | AMI parameter name | `ImageId` |
-| Architecture diagram link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1/neo4j-private-architecture.png` |
+| Architecture diagram link | `https://neo4j-ee-marketplace-assets-385155106615.s3.us-east-1.amazonaws.com/2026.10.1-2/neo4j-private-architecture.png` |
 | Source template | `templates/neo4j-private.template.yaml` |
 | Source diagram | `marketplace/neo4j-private-architecture.png`, 1100x700 |
 

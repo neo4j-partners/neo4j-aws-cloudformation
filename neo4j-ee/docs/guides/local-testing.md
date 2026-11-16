@@ -86,7 +86,7 @@ AWS_PROFILE=marketplace NEO4J_VERSION=2026.10.1 ./marketplace/create-ami.sh
 - **SSM parameter:** The script writes the AMI id to `/neo4j-ee/test/<stack-name>/ami-id` and passes that path as the stack's `ImageId`. `teardown.sh` deletes the parameter.
 - **Subscription:** The account must be subscribed to the Neo4j Marketplace listing. A successful lookup does not prove the subscription. The instance launch is the real check.
 - **AMI contents:** The repo's templates expect an AMI built by the current `marketplace/create-ami.sh`. That AMI supplies the `neo4j` system user, the Neo4j yum repo and GPG key, `python3.11`, and `amazon-cloudwatch-agent`. A listing AMI built before that change fails at bootstrap, so `deploy.py --marketplace` exits before creating anything when the newest listing AMI was created before 2026-05-15. `--allow-old-marketplace-ami` overrides the check. The date is `MIN_BOOTSTRAP_AMI_DATE` in `src/neo4j_ee/amis.py`, and it needs a bump if `create-ami.sh` changes what the AMI must carry.
-- **Template default:** The `ImageId` default in `templates/src/parameters-common.yaml` is the pinned path `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1`. That path exists only after version 2026.10.1 is published to the listing with that SSM alias. Until then, a deploy that relies on the default fails at parameter resolution.
+- **Template default:** The `ImageId` default in `templates/src/parameters-common.yaml` is the pinned path `/aws/service/marketplace/prod-vwigx4rbvvb5s/2026.10.1-2`. That path exists only after version 2026.10.1-2 is published to the listing with that SSM alias. Until then, a deploy that relies on the default fails at parameter resolution.
 
 ## Deploy
 
