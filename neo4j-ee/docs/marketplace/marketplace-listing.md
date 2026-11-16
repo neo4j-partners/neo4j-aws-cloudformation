@@ -224,7 +224,7 @@ The release owner ran the script on 2026-11-14. It created the bucket `neo4j-ee-
 | IAM access role ARN | `arn:aws:iam::385155106615:role/aws_marketplace_ami_ingestion` |
 | AMI parameter name | `ImageId` |
 
-The script has not run for 2026.10.1-2. Until it runs, the `2026.10.1-2/` links in the delivery option files do not resolve.
+The script ran for 2026.10.1-2 on 2026-11-16 from commit `ee417a1`. The uploaded Public and Private templates are byte-identical to the committed templates. The templates and diagrams open without credentials.
 
 ## Submission Steps
 
@@ -234,7 +234,7 @@ Version 2026.10.1 completed steps 1 through 8 of the earlier plan. Step 8 found 
 2. Run the release gate for Public and Private from the fixed templates. Give each stack a name longer than 29 characters, so the gate proves the fix. See [validate-private/README.md](../../validate-private/README.md) for the Private gate. This step passed on 2026-11-16 in us-east-1, with 3 `t3.medium` nodes and the Marketplace defaults. Each stack launched the fixed template from the working tree with `ImageId` set to the 2026.10.1 alias, because the 2026.10.1-2 alias does not exist yet. That alias resolves to the same AMI. The test stacks were deleted afterwards.
     1. Private stack `neo4j-ee-gate-private-longname-1794844204` has a 41-character name. It passed preflight 12 of 12 and the release suite 28 of 28.
     2. Public stack `neo4j-ee-gate-public-longname-1794844204` has a 40-character name. It passed `test-neo4j` 37 of 38. Check 36, the cluster topology after the follower replacement, saw 2 of 3 servers Enabled. A query a few minutes later showed 3 Enabled servers and 3 online `neo4j` replicas. The wait before check 36 lasted 120 seconds and checked only server state. It now lasts up to 300 seconds, waits for the online replicas too, and logs a warning when it times out.
-3. The release owner runs `publish-assets.py --version 2026.10.1-2` from the commit that holds the fix and keeps its output. This step has not run.
+3. The release owner runs `publish-assets.py --version 2026.10.1-2` from the commit that holds the fix and keeps its output. This step ran on 2026-11-16 from commit `ee417a1`. The uploaded Public and Private templates match the committed templates, and every link opens without credentials.
 4. In the Seller Portal, open the product and choose **Request changes**, then **Test "Add version"**. Enter the version and AMI fields from this document. Wait for the scan result. This dry run also shows whether Marketplace accepts the reused AMI. The real request in step 5 runs the same scan.
 5. Fix any scan finding, then choose **Request changes**, then **Add new version** with the version and AMI fields from this document.
 6. Add the Public and Private delivery options in that same request. Copy each field from its delivery option file and the script output.
