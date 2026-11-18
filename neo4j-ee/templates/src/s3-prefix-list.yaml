@@ -17,8 +17,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   S3PrefixListFunctionRole:
     Type: AWS::IAM::Role
@@ -50,8 +49,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   S3PrefixListFunction:
     Type: AWS::Lambda::Function
@@ -108,8 +106,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   S3PrefixList:
     Type: Custom::S3PrefixList

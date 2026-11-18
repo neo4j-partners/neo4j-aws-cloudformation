@@ -120,6 +120,12 @@
                 Action:
                   - kms:Decrypt
                 Resource: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-node-role'
+        # __PRM_TAGS__
 
   Neo4jBastionRole:
     Type: AWS::IAM::Role
@@ -155,6 +161,12 @@
               - Effect: Allow
                 Action: logs:DescribeLogGroups
                 Resource: '*'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bastion-role'
+        # __PRM_TAGS__
 
   Neo4jBastionInstanceProfile:
     Type: AWS::IAM::InstanceProfile

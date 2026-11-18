@@ -25,6 +25,12 @@
           FromPort: 7687
           ToPort: 7687
           CidrIp: !Ref AllowedCIDR
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nlb-sg'
+        # __PRM_TAGS__
 
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -57,6 +63,12 @@
           FromPort: 7687
           ToPort: 7687
           SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-external-sg'
+        # __PRM_TAGS__
 
   Neo4jNLBEgressToBrowser:
     Type: AWS::EC2::SecurityGroupEgress
@@ -92,6 +104,12 @@
           ToPort: 443
           CidrIp: 0.0.0.0/0
           Description: HTTPS to AWS APIs and the OIDC identity provider
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-internal-sg'
+        # __PRM_TAGS__
 
   Neo4jInternalSGIngress5000:
     Type: AWS::EC2::SecurityGroupIngress

@@ -35,13 +35,13 @@
             --stack ${AWS::StackName} \
             --resource Neo4jOperatorBastion \
             --region ${AWS::Region}
+      PropagateTagsToVolumeOnCreation: true
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Sub '${AWS::StackName}-bastion'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   # Session Manager preferences for interactive shells on the bastion and
   # the nodes. Operators pass this document with --document-name. Session
@@ -57,8 +57,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jSessionPreferences:
     Type: AWS::SSM::Document
@@ -76,8 +75,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   # Interface endpoints for every AWS API the nodes call (security review H2).
   # Node SG egress reaches AWS only through them. Each endpoint policy allows
@@ -111,6 +109,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ssm-vpce'
+        # __PRM_TAGS__
 
   SsmMessagesVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -138,6 +142,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ssmmessages-vpce'
+        # __PRM_TAGS__
 
   Ec2MessagesVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -165,6 +175,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2messages-vpce'
+        # __PRM_TAGS__
 
   LogsVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -192,6 +208,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-logs-vpce'
+        # __PRM_TAGS__
 
   SecretsManagerVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -219,6 +241,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-secretsmanager-vpce'
+        # __PRM_TAGS__
 
   Ec2VpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -246,6 +274,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2-vpce'
+        # __PRM_TAGS__
 
   CloudFormationVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -273,6 +307,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-cloudformation-vpce'
+        # __PRM_TAGS__
 
   AutoScalingVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -300,6 +340,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-autoscaling-vpce'
+        # __PRM_TAGS__
 
   AcmVpcEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -327,6 +373,12 @@
             Condition:
               StringEquals:
                 aws:PrincipalAccount: !Ref AWS::AccountId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-acm-vpce'
+        # __PRM_TAGS__
 
   Neo4jNetworkLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -369,8 +421,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       Type: network
 
   Neo4jBrowserListener:
@@ -385,6 +436,12 @@
       Certificates:
         - CertificateArn: !Ref CertificateArn
       SslPolicy: ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-browser-listener'
+        # __PRM_TAGS__
 
   Neo4jBoltListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -398,6 +455,12 @@
       Certificates:
         - CertificateArn: !Ref CertificateArn
       SslPolicy: ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bolt-listener'
+        # __PRM_TAGS__
 
   Neo4jPrivateDnsHostedZone:
     Type: AWS::Route53::HostedZone
@@ -414,8 +477,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jAdvertisedDnsRecord:
     Type: AWS::Route53::RecordSet
@@ -460,8 +522,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref VpcId
 
   Neo4jBoltTargetGroup:
@@ -481,6 +542,5 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref VpcId

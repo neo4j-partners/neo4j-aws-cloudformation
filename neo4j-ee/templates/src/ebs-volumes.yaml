@@ -37,8 +37,7 @@
           Value: neo4j-cluster-data
         - Key: NodeIndex
           Value: "1"
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jNode2DataVolume:
     Type: AWS::EC2::Volume
@@ -62,8 +61,7 @@
           Value: neo4j-cluster-data
         - Key: NodeIndex
           Value: "2"
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jNode3DataVolume:
     Type: AWS::EC2::Volume
@@ -87,5 +85,4 @@
           Value: neo4j-cluster-data
         - Key: NodeIndex
           Value: "3"
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__

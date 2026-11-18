@@ -627,6 +627,15 @@ Resources:
                 Action:
                   - kms:Decrypt
                 Resource: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-node-role'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jNLBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -655,6 +664,15 @@ Resources:
           FromPort: 7687
           ToPort: 7687
           CidrIp: !Ref AllowedCIDR
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nlb-sg'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -687,6 +705,15 @@ Resources:
           FromPort: 7687
           ToPort: 7687
           SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-external-sg'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jNLBEgressToBrowser:
     Type: AWS::EC2::SecurityGroupEgress
@@ -722,6 +749,15 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
           Description: HTTPS to AWS APIs and the OIDC identity provider
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-internal-sg'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jInternalSGIngress5000:
     Type: AWS::EC2::SecurityGroupIngress
@@ -840,6 +876,8 @@ Resources:
           Value: "1"
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jNode2DataVolume:
     Type: AWS::EC2::Volume
@@ -865,6 +903,8 @@ Resources:
           Value: "2"
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jNode3DataVolume:
     Type: AWS::EC2::Volume
@@ -889,6 +929,8 @@ Resources:
         - Key: NodeIndex
           Value: "3"
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
 
@@ -943,6 +985,9 @@ Resources:
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
           PropagateAtLaunch: true
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          PropagateAtLaunch: true
 
   Neo4jNode2ASG:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -983,6 +1028,9 @@ Resources:
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
           PropagateAtLaunch: true
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          PropagateAtLaunch: true
 
   Neo4jNode3ASG:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -1021,6 +1069,9 @@ Resources:
           Value: "3"
           PropagateAtLaunch: true
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          PropagateAtLaunch: true
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
           PropagateAtLaunch: true
 
@@ -1727,6 +1778,27 @@ Resources:
           HttpTokens: required
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 1
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - Key: StackID
+                Value: !Ref 'AWS::StackId'
+              - Key: Name
+                Value: !Sub '${AWS::StackName}-node-root'
+              - Key: "aws-apn-id"
+                Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+              - Key: "aws-apn-id-385155106615"
+                Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+          - ResourceType: network-interface
+            Tags:
+              - Key: StackID
+                Value: !Ref 'AWS::StackId'
+              - Key: Name
+                Value: !Sub '${AWS::StackName}-node-eni'
+              - Key: "aws-apn-id"
+                Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+              - Key: "aws-apn-id-385155106615"
+                Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
         UserData:
           Fn::Base64:
             !Join
@@ -1859,6 +1931,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   # ---------------------------------------------------------------------------
   # Public subnets — instances and internet-facing NLB
@@ -1877,6 +1951,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
   Neo4jSubnet2:
@@ -1892,6 +1968,8 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
@@ -1909,6 +1987,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
   Neo4jInternetGateway:
@@ -1920,6 +2000,8 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jInternetGatewayAttachment:
@@ -1937,6 +2019,8 @@ Resources:
         - Key: Name
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
@@ -2006,6 +2090,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       Type: network
 
   Neo4jBrowserListener:
@@ -2025,6 +2111,15 @@ Resources:
         - UsePublicTLS
         - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
         - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-browser-listener'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jBoltListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -2043,6 +2138,15 @@ Resources:
         - UsePublicTLS
         - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
         - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bolt-listener'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -2075,6 +2179,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
   Neo4jBoltTargetGroup:
@@ -2096,6 +2202,8 @@ Resources:
           Value: !Ref 'AWS::StackName'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
       VpcId: !Ref Neo4jVPC
 
   Neo4jPasswordSecret:
@@ -2111,6 +2219,8 @@ Resources:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAppPasswordSecret:
@@ -2130,6 +2240,8 @@ Resources:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jConfigNlbDnsParameter:
@@ -2323,6 +2435,8 @@ Resources:
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jFlowLogsGroup:
     Type: AWS::Logs::LogGroup
@@ -2334,6 +2448,8 @@ Resources:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jFlowLogsIAMRole:
@@ -2361,6 +2477,15 @@ Resources:
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
                 Resource: '*'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-flow-logs-role'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jVPCFlowLog:
     Type: AWS::EC2::FlowLog
@@ -2371,6 +2496,15 @@ Resources:
       LogDestinationType: cloud-watch-logs
       LogGroupName: !Ref Neo4jFlowLogsGroup
       DeliverLogsPermissionArn: !GetAtt Neo4jFlowLogsIAMRole.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-flow-log'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAppLogGroup:
     Type: AWS::Logs::LogGroup
@@ -2383,12 +2517,23 @@ Resources:
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
       KmsMasterKeyId: !Ref Neo4jStackKey
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alerts'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jAlertEmailSubscription:
     Type: AWS::SNS::Subscription
@@ -2424,6 +2569,15 @@ Resources:
       AlarmActions:
         - !Ref Neo4jAlertTopic
       TreatMissingData: notBreaching
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-failed-auth-alarm'
+        - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   # ---------------------------------------------------------------------------
   # NLB access logs. The NLB writes a log entry for each TLS connection.
@@ -2456,6 +2610,8 @@ Resources:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
         - Key: "aws-apn-id"
+          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        - Key: "aws-apn-id-385155106615"
           Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
 
   Neo4jNlbAccessLogsBucketPolicy:

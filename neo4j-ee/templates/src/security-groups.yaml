@@ -19,6 +19,12 @@
           FromPort: 7687
           ToPort: 7687
           CidrIp: !Ref AllowedCIDR
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nlb-sg'
+        # __PRM_TAGS__
 
   Neo4jExternalSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -44,6 +50,12 @@
           FromPort: 7687
           ToPort: 7687
           SourceSecurityGroupId: !GetAtt Neo4jNLBSecurityGroup.GroupId
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-external-sg'
+        # __PRM_TAGS__
 
   Neo4jNLBEgressToBrowser:
     Type: AWS::EC2::SecurityGroupEgress
@@ -78,6 +90,12 @@
           ToPort: 443
           DestinationSecurityGroupId: !GetAtt VpcEndpointSecurityGroup.GroupId
           Description: HTTPS to the VPC interface endpoints
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-internal-sg'
+        # __PRM_TAGS__
 
   Neo4jInternalSGIngress5000:
     Type: AWS::EC2::SecurityGroupIngress
@@ -228,8 +246,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Sub '${AWS::StackName}-bastion-sg'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   # ---------------------------------------------------------------------------
   # VPC interface endpoints (Private mode)
@@ -254,6 +271,12 @@
         - IpProtocol: '-1'
           CidrIp: 127.0.0.1/32
           Description: Placeholder that removes the default allow-all egress rule
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpce-sg'
+        # __PRM_TAGS__
 
   VpcEndpointSGIngressFromNodes:
     Type: AWS::EC2::SecurityGroupIngress

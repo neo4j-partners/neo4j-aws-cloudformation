@@ -9,8 +9,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   # ---------------------------------------------------------------------------
   # Public subnets — instances and internet-facing NLB
@@ -27,8 +26,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC
 
   Neo4jSubnet2:
@@ -43,8 +41,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC
 
   Neo4jSubnet3:
@@ -59,8 +56,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC
 
   Neo4jInternetGateway:
@@ -71,8 +67,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jInternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -88,8 +83,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC
 
   Neo4jRoute:
@@ -156,8 +150,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       Type: network
 
   Neo4jBrowserListener:
@@ -177,6 +170,12 @@
         - UsePublicTLS
         - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
         - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-browser-listener'
+        # __PRM_TAGS__
 
   Neo4jBoltListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -195,6 +194,12 @@
         - UsePublicTLS
         - ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
         - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bolt-listener'
+        # __PRM_TAGS__
 
   Neo4jBrowserTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -225,8 +230,7 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC
 
   Neo4jBoltTargetGroup:
@@ -246,6 +250,5 @@
           Value: !Ref 'AWS::StackId'
         - Key: Name
           Value: !Ref 'AWS::StackName'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
       VpcId: !Ref Neo4jVPC

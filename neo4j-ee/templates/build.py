@@ -32,6 +32,32 @@ GENERATED_HEADER = """\
 """
 
 # ---------------------------------------------------------------------------
+# AWS Partner Revenue Measurement (PRM) tags
+#
+# The single source for the PRM tag pairs. Resource partials never carry the
+# tags as literals. Each tag list ends with a placeholder comment that
+# _expand_prm_tags replaces at the comment's indentation:
+#   # __PRM_TAGS__            Key/Value list entries
+#   # __PRM_TAGS_PROPAGATE__  entries with PropagateAtLaunch: true (ASGs)
+# Both the legacy aws-apn-id key and the Partner Central account-suffixed key
+# are carried until AWS confirms the suffixed key attributes on its own.
+# ---------------------------------------------------------------------------
+PRM_PRODUCT_CODE = "4t4a9h39qkq4tbo3n9zd51p25"
+PRM_PARTNER_CENTRAL_ACCOUNT_ID = "385155106615"
+PRM_TAG_KEY_PREFIX = "aws-apn-id"
+PRM_TAGS: tuple[tuple[str, str], ...] = (
+    (PRM_TAG_KEY_PREFIX, f"pc:{PRM_PRODUCT_CODE}"),
+    (
+        f"{PRM_TAG_KEY_PREFIX}-{PRM_PARTNER_CENTRAL_ACCOUNT_ID}",
+        f"pc:{PRM_PRODUCT_CODE}",
+    ),
+)
+PRM_PLACEHOLDER_RE = re.compile(
+    r"^( *)# __PRM_TAGS(_PROPAGATE)?__\n",
+    re.MULTILINE,
+)
+
+# ---------------------------------------------------------------------------
 # UserData preamble
 #
 # Each entry is the YAML scalar text for one item in the Fn::Join list.
@@ -178,6 +204,33 @@ def _inline_partials(content: str, source_name: str) -> str:
     return rendered
 
 
+def _prm_tag_lines(indent: str, propagate: bool) -> str:
+    lines: list[str] = []
+    for key, value in PRM_TAGS:
+        lines.append(f'{indent}- Key: "{key}"\n')
+        lines.append(f'{indent}  Value: "{value}"\n')
+        if propagate:
+            lines.append(f"{indent}  PropagateAtLaunch: true\n")
+    return "".join(lines)
+
+
+def _expand_prm_tags(content: str, source_name: str) -> str:
+    """Replace PRM tag placeholders in a resource partial with PRM_TAGS."""
+    if PRM_TAG_KEY_PREFIX in content:
+        raise BuildError(
+            f"src/{source_name} carries a literal {PRM_TAG_KEY_PREFIX} tag;"
+            " use a # __PRM_TAGS__ placeholder so PRM_TAGS stays the single"
+            " source"
+        )
+    rendered = PRM_PLACEHOLDER_RE.sub(
+        lambda match: _prm_tag_lines(match.group(1), bool(match.group(2))),
+        content,
+    )
+    if "__PRM_" in rendered:
+        raise BuildError(f"malformed PRM tag placeholder remains in src/{source_name}")
+    return rendered
+
+
 def _literal_block_lines(content: str, indent: int) -> list[str]:
     """Render content as YAML block-literal lines at the given indent.
 
@@ -276,7 +329,7 @@ def _userdata_block(spec: TemplateSpec, base_indent: int = 8) -> str:
 
 
 def _asg_with_userdata(filename: str, spec: TemplateSpec) -> str:
-    asg_content = _read(filename)
+    asg_content = _expand_prm_tags(_read(filename), filename)
     userdata_placeholder = "        # __USERDATA__\n"
     metadata_placeholder = "    # __INIT_METADATA__\n"
     if userdata_placeholder not in asg_content:
@@ -304,7 +357,7 @@ def _append_partials(
 def _resource_partial(filename: str, spec: TemplateSpec) -> str:
     if filename == spec.userdata_resource_partial:
         return _asg_with_userdata(filename, spec)
-    return _read(filename)
+    return _expand_prm_tags(_read(filename), filename)
 
 
 def _append_resource_partials(parts: list[str], spec: TemplateSpec) -> None:

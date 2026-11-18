@@ -55,3 +55,5 @@ sample-licenses/
 neo4j-ee/sample-private-app/lambda/neo4j-ca.crt
 
 neo4j-ee/.licenses/
+# PRM customer notice draft, held until legal review
+neo4j-ee/prm-notice-draft.md

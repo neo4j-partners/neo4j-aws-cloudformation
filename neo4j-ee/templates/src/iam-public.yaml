@@ -88,3 +88,9 @@
                 Action:
                   - kms:Decrypt
                 Resource: !GetAtt Neo4jStackKey.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-node-role'
+        # __PRM_TAGS__

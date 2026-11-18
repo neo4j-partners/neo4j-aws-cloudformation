@@ -10,8 +10,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jAppPasswordSecret:
     Type: AWS::SecretsManager::Secret
@@ -29,8 +28,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jConfigVpcIdParameter:
     Type: AWS::SSM::Parameter

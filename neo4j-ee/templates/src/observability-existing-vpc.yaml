@@ -83,8 +83,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jFlowLogsGroup:
     Type: AWS::Logs::LogGroup
@@ -95,8 +94,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jFlowLogsIAMRole:
     Type: AWS::IAM::Role
@@ -123,6 +121,12 @@
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
                 Resource: '*'
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-flow-logs-role'
+        # __PRM_TAGS__
 
   Neo4jVPCFlowLog:
     Type: AWS::EC2::FlowLog
@@ -133,6 +137,12 @@
       LogDestinationType: cloud-watch-logs
       LogGroupName: !Ref Neo4jFlowLogsGroup
       DeliverLogsPermissionArn: !GetAtt Neo4jFlowLogsIAMRole.Arn
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-flow-log'
+        # __PRM_TAGS__
 
   Neo4jAppLogGroup:
     Type: AWS::Logs::LogGroup
@@ -143,14 +153,19 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jAlertTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub 'neo4j-alerts-${AWS::StackName}'
       KmsMasterKeyId: !Ref Neo4jStackKey
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alerts'
+        # __PRM_TAGS__
 
   Neo4jAlertEmailSubscription:
     Type: AWS::SNS::Subscription
@@ -186,6 +201,12 @@
       AlarmActions:
         - !Ref Neo4jAlertTopic
       TreatMissingData: notBreaching
+      Tags:
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-failed-auth-alarm'
+        # __PRM_TAGS__
 
   # ---------------------------------------------------------------------------
   # NLB access logs. The NLB writes a log entry for each TLS connection.
@@ -217,8 +238,7 @@
       Tags:
         - Key: StackID
           Value: !Ref 'AWS::StackId'
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
+        # __PRM_TAGS__
 
   Neo4jNlbAccessLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy

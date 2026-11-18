@@ -3765,5 +3765,157 @@ class SecurityReviewBatchETests(unittest.TestCase):
                 self.assertLess(call.start(), template.index("cfn-signal --success true"))
 
 
+try:
+    from cfnlint.schema import PROVIDER_SCHEMA_MANAGER as _CFN_SCHEMAS
+except ImportError:  # pragma: no cover - cfn-lint is installed in CI
+    _CFN_SCHEMAS = None
+
+
+class PrmTaggingTests(unittest.TestCase):
+    """Locks AWS Partner Revenue Measurement (PRM) tag coverage.
+
+    build.py owns the tag pairs (PRM_TAGS). Every resource whose
+    CloudFormation type accepts Tags must carry all of them, except the
+    exclusions below.
+    """
+
+    EXPECTED_PRM_TAGS = (
+        ("aws-apn-id", "pc:4t4a9h39qkq4tbo3n9zd51p25"),
+        ("aws-apn-id-385155106615", "pc:4t4a9h39qkq4tbo3n9zd51p25"),
+    )
+
+    # Resources that accept Tags but stay untagged, with the reason.
+    EXCLUDED_TYPES = {
+        # Any property change resets ca-pem to "pending", and the other
+        # parameters are Standard tier and free.
+        "AWS::SSM::Parameter": "config parameters are free; ca-pem must never change",
+    }
+
+    LAUNCH_TEMPLATE_TAGGED_RESOURCE_TYPES = {"volume", "network-interface"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_build_module()
+        cls.text = _assemble_all_templates()
+        cls.docs = (
+            {name: load_cfn(body) for name, body in cls.text.items()}
+            if yaml is not None
+            else {}
+        )
+
+    def _assert_prm_tags(self, tags: object, label: str) -> None:
+        self.assertIsInstance(tags, list, label)
+        pairs = [(t.get("Key"), t.get("Value")) for t in tags]
+        for pair in self.EXPECTED_PRM_TAGS:
+            self.assertIn(pair, pairs, label)
+
+    def test_prm_tags_constant_carries_both_keys(self) -> None:
+        self.assertEqual(self.module.PRM_TAGS, self.EXPECTED_PRM_TAGS)
+
+    def test_source_partials_carry_no_literal_prm_tags(self) -> None:
+        for path in sorted(SRC.glob("*.yaml")):
+            with self.subTest(partial=path.name):
+                self.assertNotIn("aws-apn-id", path.read_text())
+
+    def test_expand_prm_tags_uses_placeholder_indentation(self) -> None:
+        rendered = self.module._expand_prm_tags(
+            "      Tags:\n        # __PRM_TAGS_PROPAGATE__\n",
+            "demo.yaml",
+        )
+        expected = "      Tags:\n" + "".join(
+            f'        - Key: "{key}"\n'
+            f'          Value: "{value}"\n'
+            "          PropagateAtLaunch: true\n"
+            for key, value in self.EXPECTED_PRM_TAGS
+        )
+        self.assertEqual(rendered, expected)
+
+    def test_expand_prm_tags_rejects_literal_tag(self) -> None:
+        with self.assertRaisesRegex(self.module.BuildError, "literal aws-apn-id"):
+            self.module._expand_prm_tags('        - Key: "aws-apn-id"\n', "demo.yaml")
+
+    def test_expand_prm_tags_rejects_malformed_placeholder(self) -> None:
+        with self.assertRaisesRegex(self.module.BuildError, "malformed PRM tag"):
+            self.module._expand_prm_tags("        # __PRM_TAG__\n", "demo.yaml")
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    @unittest.skipUnless(
+        _CFN_SCHEMAS is not None,
+        "cfn-lint is required: its resource schemas say which types accept Tags",
+    )
+    def test_every_taggable_resource_carries_prm_tags(self) -> None:
+        for name, doc in self.docs.items():
+            for logical_id, resource in doc["Resources"].items():
+                rtype = resource["Type"]
+                if not rtype.startswith("AWS::") or rtype in self.EXCLUDED_TYPES:
+                    continue
+                schema = _CFN_SCHEMAS.get_resource_schema("us-east-1", rtype).schema
+                if "Tags" not in schema.get("properties", {}):
+                    continue
+                with self.subTest(template=name, resource=logical_id):
+                    self._assert_prm_tags(
+                        resource["Properties"].get("Tags"),
+                        f"{name}:{logical_id}",
+                    )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_asg_prm_tags_propagate_to_instances(self) -> None:
+        for name, doc in self.docs.items():
+            for logical_id, resource in doc["Resources"].items():
+                if resource["Type"] != "AWS::AutoScaling::AutoScalingGroup":
+                    continue
+                with self.subTest(template=name, resource=logical_id):
+                    tags = resource["Properties"]["Tags"]
+                    for key, value in self.EXPECTED_PRM_TAGS:
+                        self.assertIn(
+                            {"Key": key, "Value": value, "PropagateAtLaunch": True},
+                            tags,
+                        )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_launch_template_tags_node_volumes_and_enis(self) -> None:
+        # ASG tags never reach EBS volumes or ENIs; only launch template
+        # TagSpecifications do.
+        for name, doc in self.docs.items():
+            with self.subTest(template=name):
+                data = doc["Resources"]["Neo4jLaunchTemplate"]["Properties"][
+                    "LaunchTemplateData"
+                ]
+                specs = {
+                    spec["ResourceType"]: spec["Tags"]
+                    for spec in data["TagSpecifications"]
+                }
+                self.assertEqual(
+                    set(specs), self.LAUNCH_TEMPLATE_TAGGED_RESOURCE_TYPES
+                )
+                for rtype, tags in specs.items():
+                    self._assert_prm_tags(tags, f"{name}:{rtype}")
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_private_hosted_zone_carries_prm_tags(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                zone = self.docs[name]["Resources"]["Neo4jPrivateDnsHostedZone"]
+                self._assert_prm_tags(
+                    zone["Properties"]["HostedZoneTags"], f"{name}:hosted-zone"
+                )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_bastion_propagates_tags_to_its_volume(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                bastion = self.docs[name]["Resources"]["Neo4jOperatorBastion"]
+                self.assertIs(
+                    bastion["Properties"]["PropagateTagsToVolumeOnCreation"], True
+                )
+
+    @unittest.skipUnless(yaml is not None, "pyyaml is required")
+    def test_ca_pem_parameter_is_never_tagged(self) -> None:
+        for name in ("private", "existing_vpc"):
+            with self.subTest(template=name):
+                param = self.docs[name]["Resources"]["Neo4jConfigCaPemParameter"]
+                self.assertNotIn("Tags", param["Properties"])
+
+
 if __name__ == "__main__":
     unittest.main()

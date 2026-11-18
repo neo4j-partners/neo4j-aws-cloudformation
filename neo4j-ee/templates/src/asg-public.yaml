@@ -47,9 +47,7 @@
         - Key: NodeIndex
           Value: "1"
           PropagateAtLaunch: true
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
-          PropagateAtLaunch: true
+        # __PRM_TAGS_PROPAGATE__
 
   Neo4jNode2ASG:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -87,9 +85,7 @@
         - Key: NodeIndex
           Value: "2"
           PropagateAtLaunch: true
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
-          PropagateAtLaunch: true
+        # __PRM_TAGS_PROPAGATE__
 
   Neo4jNode3ASG:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -127,9 +123,7 @@
         - Key: NodeIndex
           Value: "3"
           PropagateAtLaunch: true
-        - Key: "aws-apn-id"
-          Value: "pc:4t4a9h39qkq4tbo3n9zd51p25"
-          PropagateAtLaunch: true
+        # __PRM_TAGS_PROPAGATE__
 
   Neo4jLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -158,4 +152,19 @@
           HttpTokens: required
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 1
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - Key: StackID
+                Value: !Ref 'AWS::StackId'
+              - Key: Name
+                Value: !Sub '${AWS::StackName}-node-root'
+              # __PRM_TAGS__
+          - ResourceType: network-interface
+            Tags:
+              - Key: StackID
+                Value: !Ref 'AWS::StackId'
+              - Key: Name
+                Value: !Sub '${AWS::StackName}-node-eni'
+              # __PRM_TAGS__
         # __USERDATA__
